@@ -4,6 +4,28 @@ Postgres + Apache AGE Vector & Graph Database with prompt context injection and 
 
 Drop-in memory provider for [Hermes Agent](https://github.com/nousresearch/hermes-agent) that persists conversations and user memory to Postgres, embeds them with Ollama, and enriches recall with an Apache AGE knowledge graph.
 
+## Quick Start
+
+```bash
+# 1. Clone
+git clone https://github.com/rubyrayjuntos/hermes-memory.git
+cd hermes-memory
+
+# 2. Start Postgres + AGE + pgvector
+docker compose up -d
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Configure Hermes
+cp .env.example .env
+# Edit .env with your Postgres credentials
+
+# 5. Add to ~/.hermes/config.yaml
+# memory:
+#   provider: hybrid-age
+```
+
 ## Architecture
 
 ```text
@@ -36,79 +58,19 @@ hybrid-age memory provider
 | Graph | Apache AGE | Entity/relationship graph for cross-referencing |
 | Embeddings | Ollama | Local embedding model (`nomic-embed-text`) |
 | Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertices |
-| Cron | `graph-extractor.py` | Pattern-based entity extraction from conversations |
+| Cron | `graph_extractor.py` | Pattern-based entity extraction from conversations |
 
 ## Prerequisites
 
 - Postgres 14+ with `pgvector` and `apache/age` extensions
-- Ollama running locally
+- Ollama running locally with `nomic-embed-text` model
 - Hermes Agent installed
 
 ### Postgres Setup
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT age;
-LOAD 'age';
-SELECT create_graph('hermes_knowledge');
-
--- Conversation storage with vector support
-CREATE TABLE IF NOT EXISTS conversations (
-    id SERIAL PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    agent_identity TEXT DEFAULT 'default',
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    ts TIMESTAMPTZ DEFAULT now(),
-    embedding vector(768),
-    metadata JSONB DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_conversations_embedding
-    ON conversations USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-
--- Memory entries with vector support
-CREATE TABLE IF NOT EXISTS memory_entries (
-    id SERIAL PRIMARY KEY,
-    agent_identity TEXT DEFAULT 'default',
-    target TEXT NOT NULL,
-    content TEXT NOT NULL,
-    embedding vector(768),
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(agent_identity, target, content)
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_entries_embedding
-    ON memory_entries USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-
--- Bridge table: vector chunks ↔ AGE graph vertices
-CREATE TABLE IF NOT EXISTS memory_chunk_nodes (
-    chunk_id TEXT NOT NULL,
-    source TEXT NOT NULL,
-    vertex_id BIGINT NOT NULL,
-    graph_name TEXT NOT NULL DEFAULT 'hermes_knowledge',
-    PRIMARY KEY (chunk_id, source, vertex_id)
-);
-
--- Pre-declare graph labels
-SELECT create_vlabel('hermes_knowledge', 'Person');
-SELECT create_vlabel('hermes_knowledge', 'Project');
-SELECT create_vlabel('hermes_knowledge', 'Technology');
-SELECT create_vlabel('hermes_knowledge', 'Organization');
-SELECT create_vlabel('hermes_knowledge', 'Concept');
-SELECT create_vlabel('hermes_knowledge', 'Domain');
-SELECT create_vlabel('hermes_knowledge', 'Skill');
-SELECT create_vlabel('hermes_knowledge', 'Tool');
-SELECT create_elabel('hermes_knowledge', 'RELATED_TO');
-SELECT create_elabel('hermes_knowledge', 'USES');
-SELECT create_elabel('hermes_knowledge', 'BUILT_WITH');
-SELECT create_elabel('hermes_knowledge', 'DEPENDS_ON');
-SELECT create_elabel('hermes_knowledge', 'WORKS_ON');
-SELECT create_elabel('hermes_knowledge', 'CO_MENTIONED');
+-- Run example/init.sql after creating the database
+\i example/init.sql
 ```
 
 ## Installation
@@ -150,10 +112,12 @@ memory:
 Set in `~/.hermes/.env` or system environment:
 
 ```bash
-HYBRID_AGE_DSN=postgres://hermes:hermesdev@localhost:5440/hermes
+HERMES_MEMORY_DSN=postgres://hermes:hermesdev@localhost:5432/hermes
+HERMES_MEMORY_GRAPH=hermes_knowledge
+
+# Optional overrides
 HYBRID_AGE_EMBED_URL=http://localhost:11434/v1
 HYBRID_AGE_EMBED_MODEL=nomic-embed-text
-HYBRID_AGE_GRAPH=hermes_knowledge
 ```
 
 ## Graph Extraction
@@ -167,8 +131,12 @@ python3 scripts/graph_extractor.py --hours 24 --dry-run
 # Live run
 python3 scripts/graph_extractor.py --hours 24
 
-# Via cron — every 30 minutes
-cronjob(action='create', schedule='*/30 * * * *', script='~/.hermes/scripts/graph_extractor.py', no_agent=True, deliver='local')
+# Via Hermes cron — every 30 minutes
+hermes cron add \
+  --schedule "*/30 * * * *" \
+  --script ~/.hermes/scripts/graph_extractor.py \
+  --no-agent \
+  --deliver local
 ```
 
 Extraction strategy:
@@ -201,16 +169,24 @@ SELECT * FROM memory_chunk_nodes LIMIT 10;
 ## File Layout
 
 ```
-hybrid-age/
-├── provider.py              # MemoryProvider implementation
+hermes-memory/
+├── provider.py                  # MemoryProvider implementation
+├── requirements.txt             # Python dependencies
+├── pyproject.toml               # Package metadata
+├── Dockerfile                   # Postgres + AGE + pgvector image
+├── docker-compose.yml           # One-command DB startup
+├── .env.example                 # Environment variable template
+├── .gitignore
+├── LICENSE
+├── README.md
 ├── docs/
-│   ├── architecture.md      # Deep dive into hybrid-age design
-│   └── age-quirks.md        # AGE gotchas and workarounds
+│   ├── architecture.md          # Write/recall path diagrams
+│   └── age-quirks.md            # AGE gotchas and workarounds
 ├── example/
-│   ├── config.yaml          # Example Hermes config
-│   └── init.sql             # Postgres schema
+│   └── init.sql                 # Postgres schema
 └── scripts/
-    └── graph_extractor.py   # Entity extraction from conversations
+    ├── graph_extractor.py       # Entity extraction from conversations
+    └── graph_taxonomy.py        # Extraction helper utilities
 ```
 
 ## How It Works

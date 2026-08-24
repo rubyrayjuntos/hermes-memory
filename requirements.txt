@@ -1,0 +1,11 @@
+# Core dependencies
+asyncpg>=0.29
+openai>=1.0
+psycopg[binary]>=3.2
+
+# Optional: local embedding server
+# ollama>=0.4  # only needed if using Ollama as embedder
+
+# Development
+pytest>=8.0
+pytest-asyncio>=0.23

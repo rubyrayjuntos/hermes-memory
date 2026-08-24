@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "hermes-memory"
+version = "0.1.0"
+description = "Postgres + Apache AGE Vector & Graph Database with prompt context injection for Hermes Agent"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Ray Swan", email = "rswan@rswan.org"},
+]
+keywords = ["hermes", "memory", "pgvector", "apache-age", "graph", "ai-agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "psycopg>=3.0",
+    "asyncpg>=0.29",
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["provider.py", "scripts/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

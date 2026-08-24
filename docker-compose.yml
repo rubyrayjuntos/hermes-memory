@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: ghcr.io/skb50bd/hermes-memory/hermes-postgres:latest
+    container_name: hermes-memory-postgres
+    environment:
+      POSTGRES_USER: hermes
+      POSTGRES_PASSWORD: hermesdev
+      POSTGRES_DB: hermes
+    ports:
+      - "5440:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./example/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hermes -d hermes"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: hermes-memory-adminer
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
