@@ -36,6 +36,9 @@ dev = [
     "testcontainers[postgres]>=4.0",
 ]
 
+[project.scripts]
+hermes-memory-ingest = "hermes_memory.ingest:main"
+
 [project.entry-points."hermes_agent.memory_providers"]
 hybrid-age = "hermes_memory:register"
 

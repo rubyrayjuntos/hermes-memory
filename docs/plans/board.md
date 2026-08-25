@@ -20,6 +20,7 @@ _(empty — all cards spec'd)_
 
 ## Done
 
+- [x] **C3 — Provider port** — spec PASS (every §3.1 row runtime-verified; warm prefetch 88ms), quality APPROVED after fix cycle (`6e8da18`: idempotent init, drain-task strong ref, Cypher key validation, shutdown ordering, fire-and-forget enqueue, LIKE escaping, batch padding). Live smoke: rows land both tables, DB-down degrades to "".
 - [x] **C2 — Docker + schema + indexes** — spec PASS (live end-to-end verified), quality fixes applied & verified (`be7c82d`). Image pinned `apache/age:release_PG17_1.6.0` (1.7.0-for-PG17 does not exist; Appendix A). GIN containment index proven with Bitmap Index Scan on 5k rows.
 - [x] **C1 — Scaffold & consolidation** — MERGED (62844ac). Spec PASS, quality APPROVED after fix cycle.
 

@@ -1,0 +1,5 @@
+{
+  "name": "sample-repo",
+  "version": "1.0.0",
+  "dependencies": { "express": "^4", "axios": "^1", "redis": "^5" }
+}
