@@ -18,17 +18,10 @@ _(empty — all cards spec'd)_
 - [ ] **C1 — Scaffold & consolidation** *(ready — no deps)*
 - [ ] **C2 — Docker + schema + indexes** *(ready — no deps, parallel with C1)*
 
-## In Review
-
-- [x] **C2 — Docker + schema + indexes** — spec + quality reviews running (deleg_d010f3e8 / deleg_ff2427d5). Note: main carries 247d2c5 (early-merged via shared-tree race); branch 9ac8fd9 verified content-identical for C2 files, branch deleted. Reviews gate whether it stays; failures → revert on main.
-
-## Verified
-
-- [x] **C1 — Scaffold & consolidation** — MERGED (62844ac). Spec PASS, quality APPROVED after fix cycle.
-
 ## Done
 
-_(none)_
+- [x] **C2 — Docker + schema + indexes** — spec PASS (live end-to-end verified), quality fixes applied & verified (`be7c82d`). Image pinned `apache/age:release_PG17_1.6.0` (1.7.0-for-PG17 does not exist; Appendix A). GIN containment index proven with Bitmap Index Scan on 5k rows.
+- [x] **C1 — Scaffold & consolidation** — MERGED (62844ac). Spec PASS, quality APPROVED after fix cycle.
 
 ---
 

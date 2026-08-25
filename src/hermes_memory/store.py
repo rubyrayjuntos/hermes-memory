@@ -1,0 +1,348 @@
+"""hermes_memory.store — SQL/Cypher data access layer.
+
+Rules (plan §3.3):
+- Every Cypher statement runs inside a SAVEPOINT; a failed statement rolls back
+  to its savepoint and never poisons the surrounding transaction.
+- MERGE on the minimal unique key ({name} for entities, {path} for files);
+  non-key properties set via ON CREATE SET / ON MATCH SET.
+- MERGEs are batched (>=50 statements per transaction) per apache/age#2177.
+- Vertex IDs crossing into JS/UI are stringified at this boundary.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+import asyncpg
+
+logger = logging.getLogger("hybrid_age.store")
+
+# ---------------------------------------------------------------------------
+# Cypher escaping helpers (property-test surface P1/P2)
+# ---------------------------------------------------------------------------
+
+def age_str(value: Any) -> str:
+    """Escape a Python value as a Cypher string literal.
+
+    Guarantees no unescaped ``'`` or ``\\`` survives from the input.
+    Non-string values are str()-ed first; None becomes 'null' (unquoted).
+    """
+    if value is None:
+        return "null"
+    s = str(value)
+    s = s.replace("\\", "\\\\").replace("'", "\\'")
+    # neutralize any other backslash-sensitive control chars
+    s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    return f"'{s}'"
+
+
+def age_props(properties: Dict[str, Any]) -> str:
+    """Render a dict as a Cypher property map.
+
+    - None values are dropped entirely.
+    - Keys are preserved exactly once, insertion order kept.
+    """
+    parts = []
+    for key, val in properties.items():
+        if val is None:
+            continue
+        parts.append(f"{key}: {age_str(val)}")
+    return "{" + ", ".join(parts) + "}"
+
+
+_SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_label(label: str) -> str:
+    if not _SAFE_IDENT.match(label or ""):
+        raise ValueError(f"invalid AGE label: {label!r}")
+    return label
+
+
+def _savepoint_name(prefix: str, idx: int) -> str:
+    return f"sp_{prefix}_{idx}"
+
+
+class Store:
+    """Async data access over the pgvector + AGE schema."""
+
+    def __init__(self, pool: asyncpg.Pool, graph_name: str = "hermes_knowledge"):
+        self.pool = pool
+        self.graph_name = graph_name
+
+    async def load_age(self, conn) -> None:
+        await conn.execute("LOAD 'age';")
+        await conn.execute("SET search_path = ag_catalog, public;")
+
+    # -- Turn / memory writes -------------------------------------------------
+
+    async def insert_turn(
+        self,
+        session_id: str,
+        agent_identity: str,
+        role: str,
+        content: str,
+        vec_literal: Optional[str],
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO conversations
+                    (session_id, agent_identity, role, content, embedding, metadata)
+                VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb)
+                """,
+                session_id,
+                agent_identity,
+                role,
+                content,
+                vec_literal,
+                json.dumps(metadata or {}),
+            )
+
+    async def upsert_memory_entry(
+        self,
+        agent_identity: str,
+        target: str,
+        content: str,
+        vec_literal: Optional[str],
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO memory_entries
+                    (agent_identity, target, content, embedding, metadata)
+                VALUES ($1, $2, $3, $4::vector, $5::jsonb)
+                ON CONFLICT (agent_identity, target, content) DO NOTHING
+                """,
+                agent_identity,
+                target,
+                content,
+                vec_literal,
+                json.dumps(metadata or {}),
+            )
+
+    async def replace_memory_entries(
+        self,
+        agent_identity: str,
+        target: str,
+        old_text: str,
+        content: str,
+        vec_literal: Optional[str],
+        metadata: Dict[str, Any] | None = None,
+    ) -> int:
+        """Replace entries whose content contains ``old_text``; insert if none matched."""
+        async with self.pool.acquire() as conn:
+            n = await conn.execute(
+                """
+                UPDATE memory_entries
+                   SET content = $1, embedding = $2::vector, updated_at = now()
+                 WHERE agent_identity = $3 AND target = $4 AND content LIKE $5
+                """,
+                content,
+                vec_literal,
+                agent_identity,
+                target,
+                f"%{old_text}%",
+            )
+            if n == "UPDATE 0":
+                await conn.execute(
+                    """
+                    INSERT INTO memory_entries
+                        (agent_identity, target, content, embedding, metadata)
+                    VALUES ($1, $2, $3, $4::vector, $5::jsonb)
+                    """,
+                    agent_identity,
+                    target,
+                    content,
+                    vec_literal,
+                    json.dumps(metadata or {}),
+                )
+                return 1
+            return int(n.split()[1])
+
+    async def remove_memory_entries(
+        self, agent_identity: str, target: str, content_substr: str
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                DELETE FROM memory_entries
+                 WHERE agent_identity = $1 AND target = $2 AND content LIKE $3
+                """,
+                agent_identity,
+                target,
+                f"%{content_substr}%",
+            )
+
+    # -- Vector search ----------------------------------------------------------
+
+    async def vector_search(self, vec_literal: str, k: int) -> List[Dict[str, Any]]:
+        sql_entries = """
+            SELECT id::text AS id, content,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM memory_entries
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> $1::vector
+            LIMIT $2
+        """
+        sql_conversations = """
+            SELECT id::text AS id, content,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM conversations
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> $1::vector
+            LIMIT $2
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql_entries, vec_literal, k)
+            if not rows:
+                rows = await conn.fetch(sql_conversations, vec_literal, k)
+        return [dict(r) for r in rows]
+
+    async def bridge_vertex_ids(self, chunk_ids: Sequence[str]) -> List[str]:
+        """Bridge-table lookup. Returns vertex ids STRINGIFIED (bigint precision)."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT vertex_id::text AS vid
+                FROM memory_chunk_nodes
+                WHERE chunk_id = ANY($1::text[])
+                """,
+                list(chunk_ids),
+            )
+        return [r["vid"] for r in rows]
+
+    # -- Graph expansion (SAVEPOINT-wrapped Cypher) -----------------------------
+
+    async def expand_graph(
+        self, seed_vertex_ids: Sequence[int], rel_types: Sequence[str], limit: int = 40
+    ) -> List[Tuple[Any, Optional[str], Any]]:
+        """1-hop expand from seed vertices. Cypher inside SAVEPOINT."""
+        if not seed_vertex_ids:
+            return []
+        ids_literal = "[" + ", ".join(str(int(i)) for i in seed_vertex_ids) + "]"
+        rels = ", ".join(age_str(r) for r in rel_types)
+        graph = self.graph_name.replace("'", "")
+        cypher = f"""
+            SELECT * FROM cypher('{graph}', $$
+                MATCH (n)
+                WHERE id(n) IN {ids_literal}
+                OPTIONAL MATCH (n)-[r]->(m)
+                WHERE type(r) IN [{rels}]
+                RETURN n, type(r) AS rel, m
+                LIMIT {int(limit)}
+            $$) AS (n agtype, rel agtype, m agtype)
+        """
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            sp = _savepoint_name("expand", 0)
+            try:
+                async with conn.transaction():
+                    await conn.execute(f"SAVEPOINT {sp}")
+                    try:
+                        rows = await conn.fetch(cypher)
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        logger.warning("cypher expand failed; rolled to savepoint", exc_info=True)
+                        return []
+                return [(r["n"], r["rel"], r["m"]) for r in rows]
+            except Exception:
+                logger.debug("expand_graph transaction error", exc_info=True)
+                return []
+
+    # -- Batched MERGE (>=50 statements per transaction) ------------------------
+
+    async def merge_vertices_batched(
+        self, items: Iterable[Tuple[str, Dict[str, Any]]], batch_size: int = 50
+    ) -> List[Optional[str]]:
+        """MERGE vertices on minimal unique key {name}; batch >=50 per txn.
+
+        Each statement is SAVEPOINT-guarded so one failure never poisons the
+        batch's transaction. Returns STRINGIFIED vertex ids (None on failure).
+        """
+        results: List[Optional[str]] = []
+        items = list(items)
+        graph = self.graph_name.replace("'", "")
+
+        for start in range(0, len(items), batch_size):
+            chunk_items = items[start : start + batch_size]
+            async with self.pool.acquire() as conn:
+                await self.load_age(conn)
+                try:
+                    async with conn.transaction():
+                        for idx, (label, props) in enumerate(chunk_items):
+                            sp = _savepoint_name("merge_v", idx)
+                            await conn.execute(f"SAVEPOINT {sp}")
+                            try:
+                                name = props.get("name") or props.get("path")
+                                if not name:
+                                    results.append(None)
+                                    continue
+                                key_prop = "path" if "path" in props else "name"
+                                non_key = {k: v for k, v in props.items() if k != key_prop}
+                                cypher = (
+                                    f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}})\n"
+                                    f"ON CREATE SET v += {age_props(non_key)}\n"
+                                    f"ON MATCH SET v += {age_props(non_key)}\n"
+                                    f"RETURN id(v)"
+                                )
+                                row = await conn.fetchrow(
+                                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)"
+                                )
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                                if row is not None:
+                                    raw = row["id"]
+                                    vid = str(raw).strip('"')
+                                    try:
+                                        results.append(str(int(vid)))  # stringify at boundary
+                                    except ValueError:
+                                        results.append(None)
+                                else:
+                                    results.append(None)
+                            except Exception:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                                logger.debug("vertex MERGE failed %s", props, exc_info=True)
+                                results.append(None)
+                except Exception:
+                    logger.warning("batch txn failed wholesale", exc_info=True)
+                    results.extend([None] * (batch_size - len(results)))
+        return results
+
+    async def merge_edges_batched(
+        self, edges: Iterable[Tuple[str, int, int]], batch_size: int = 50
+    ) -> int:
+        """MERGE edges on (start, end, label); SAVEPOINT-guarded, batched."""
+        done = 0
+        edges = list(edges)
+        graph = self.graph_name.replace("'", "")
+        for start in range(0, len(edges), batch_size):
+            chunk_edges = edges[start : start + batch_size]
+            async with self.pool.acquire() as conn:
+                await self.load_age(conn)
+                try:
+                    async with conn.transaction():
+                        for idx, (label, src, dst) in enumerate(chunk_edges):
+                            sp = _savepoint_name("merge_e", idx)
+                            await conn.execute(f"SAVEPOINT {sp}")
+                            try:
+                                cypher = (
+                                    f"MATCH (a), (b) WHERE id(a) = {int(src)} AND id(b) = {int(dst)} "
+                                    f"MERGE (a)-[e:{_check_label(label)}]->(b) RETURN id(e)"
+                                )
+                                row = await conn.fetchrow(
+                                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)"
+                                )
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                                if row is not None:
+                                    done += 1
+                            except Exception:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                                logger.debug("edge MERGE failed", exc_info=True)
+                except Exception:
+                    logger.warning("edge batch txn failed", exc_info=True)
+        return done
