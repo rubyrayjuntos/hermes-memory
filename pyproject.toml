@@ -37,7 +37,7 @@ dev = [
 ]
 
 [project.entry-points."hermes_agent.memory_providers"]
-hybrid-age = "hermes_memory"
+hybrid-age = "hermes_memory:register"
 
 [tool.setuptools.packages.find]
 where = ["src"]

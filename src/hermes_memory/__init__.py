@@ -21,6 +21,8 @@ def register(ctx):
     )
 
 
-# Discovery heuristic markers (Hermes scans this file's text):
+# Discovery heuristic markers (Hermes scans this file's text). The literal
+# strings register_memory_provider / MemoryProvider below are intentional
+# Hermes plugin-discovery markers — do not remove.
 # register_memory_provider
 # MemoryProvider

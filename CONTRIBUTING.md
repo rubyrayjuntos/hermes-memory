@@ -24,8 +24,8 @@ pytest
 | `hermes_memory/provider.py` | Main MemoryProvider implementation |
 | `hermes_memory/embed.py` | Embedding backend abstraction (Ollama, OpenAI, etc.) |
 | `hermes_memory/graph.py` | AGE graph client for vertices/edges/bridge table |
-| `scripts/graph_extractor.py` | Entity extraction from conversations |
-| `scripts/graph_taxonomy.py` | Extraction helpers (label resolution, typed relations) |
+| `legacy/scripts/graph_extractor.py` | Entity extraction from conversations (v0.2 scope) |
+| `legacy/scripts/graph_taxonomy.py` | Extraction helpers (label resolution, typed relations; v0.2 scope) |
 | `example/init.sql` | Postgres schema |
 | `docs/` | Architecture deep dive, AGE quirks |
 
