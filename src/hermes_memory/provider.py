@@ -23,7 +23,10 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-from agent.memory_provider import MemoryProvider
+try:
+    from agent.memory_provider import MemoryProvider
+except ImportError:  # running outside the Hermes runtime (tests, CI)
+    MemoryProvider = object  # type: ignore[assignment,misc]
 
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config
 from .embed import Embedder, vec_to_literal
