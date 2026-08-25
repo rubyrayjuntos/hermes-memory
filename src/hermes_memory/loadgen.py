@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -38,6 +39,13 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 logger = logging.getLogger("hybrid_age.loadgen")
 
 AGENT_IDENTITY = "loadgen"
+
+
+def _stable_hash(name: str) -> int:
+    """Deterministic hash for savepoint names (PYTHONHASHSEED-proof)."""
+    return int(hashlib.sha1(name.encode()).hexdigest()[:8], 16)
+
+
 SOURCE = "loadgen"
 GRAPH_NAME = "hermes_knowledge"
 DEFAULT_DSN = (
@@ -131,7 +139,7 @@ class LoadGen:
 
     async def _merge_entity(self, conn, name: str) -> Optional[int]:
         """MERGE (:Entity {name}) minimal-key, SET += props. Returns bigint id."""
-        sp = savepoint_name("lg_v", abs(hash(name)) % 100000)
+        sp = savepoint_name("lg_v", _stable_hash(name))
         await conn.execute(f"SAVEPOINT {sp}")
         try:
             cypher = (
@@ -275,7 +283,8 @@ class LoadGen:
                     f"""SELECT * FROM cypher('{self.graph_name}', $$
                         MATCH (v:Entity) WHERE v.name STARTS WITH 'lg_'
                         OPTIONAL MATCH (v)-[r]-()
-                        WITH count(DISTINCT v) AS ents, count(r) AS deg
+                        WITH count(DISTINCT v) AS ents,
+                             count(DISTINCT r) AS deg
                         RETURN ents, deg
                     $$) AS (ents agtype, deg agtype)""")
                 ents = int(str(row["ents"])) if row else 0
@@ -288,6 +297,8 @@ class LoadGen:
             "chunks_with_bridge": int(n_bridges or 0),
             "bridge_rows": int(n_bridge_rows or 0),
             "lg_entities": ents,
+            # count(DISTINCT r): each undirected edge touches v from both
+            # sides, so a plain count(r) would double every edge.
             "avg_degree_per_entity": round(deg / ents, 2) if ents else 0.0,
         }
 

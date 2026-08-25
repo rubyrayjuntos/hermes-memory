@@ -1,5 +1,17 @@
 # C7 Benchmark Evidence
 
+> ## AMENDMENT (C8)
+>
+> **The ablation numbers below were measured with graph expansion silently
+> dead.** A bug in the agtype parser (splitting on `'","'` where AGE emits
+> `', "'`) caused every query to drop all graph rows, so "Hybrid" and
+> "Vector-only" compared identical pipelines. The parser was fixed in C8
+> (commit e5b921e); expansion is now verified firing via `--debug-graph`.
+>
+> The original numbers are retained below for history. The ablation must be
+> re-run on a populated corpus before any architectural conclusions are
+> drawn from it.
+
 **Corpus:** fixture `sample_repo` + 10 golden memories.
 **Caveat:** the bridge table is empty (extractors v0.2), so graph expansion contributed nothing yet — the ablation must be re-run after C8 synthetic load and C10 real data.
 
