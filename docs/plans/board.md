@@ -20,7 +20,9 @@ _(empty — all cards spec'd)_
 
 ## Done
 
-- [x] **C4 — Ingest port** — spec PASS, quality APPROVED after fix cycle (`318f74b`: state-excludes-failures, bridge-ID alignment, per-codebase state files, public store API). Dedup proof passed live (re-run = 0 new entities). AGE 1.6 MERGE-then-SET documented; plan §3.3 amended (f1d9fc9).
+- [x] **C7 — Benchmark harness** — spec PASS, quality fixes applied (`df4e077` evidence doc + cleanup). First real numbers: Injection-Hit 0.90, throughput 16 turns/sec. Honest finding: bridge table empty → graph expansion contributed nothing yet (extractors v0.2); ablation re-run planned post-C8/C10. Report: docs/reports/c7-bench.md.
+- [x] **C6 — Docs truth-pass** — spec PASS (cold-walk verified), nit fixed (94d0a8f).
+- [x] **C5 — Verify harness & tests** — spec PASS, security regression check PASS, quality APPROVED after fix cycle.
 - [x] **C3 — Provider port** — spec PASS (every §3.1 row runtime-verified; warm prefetch 88ms), quality APPROVED after fix cycle (`6e8da18`: idempotent init, drain-task strong ref, Cypher key validation, shutdown ordering, fire-and-forget enqueue, LIKE escaping, batch padding). Live smoke: rows land both tables, DB-down degrades to "".
 - [x] **C2 — Docker + schema + indexes** — spec PASS (live end-to-end verified), quality fixes applied & verified (`be7c82d`). Image pinned `apache/age:release_PG17_1.6.0` (1.7.0-for-PG17 does not exist; Appendix A). GIN containment index proven with Bitmap Index Scan on 5k rows.
 - [x] **C1 — Scaffold & consolidation** — MERGED (62844ac). Spec PASS, quality APPROVED after fix cycle.
