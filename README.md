@@ -1,8 +1,13 @@
-# hermes-memory
+# The Hermes Librarian
 
-Hybrid memory provider for [Hermes Agent](https://github.com/nousresearch/hermes-agent):
+**Persistent memory & context injection for [Hermes Agent](https://github.com/nousresearch/hermes-agent)** —
 pgvector for semantic recall + Apache AGE knowledge graph for entity expansion,
 in one Postgres database.
+
+> *A librarian doesn't just store books — she knows where everything is, retrieves
+> the right volume at the right moment, and quietly discards what's stale.*
+
+Package: `hermes-memory` · Product: **The Hermes Librarian**
 
 - **Provider name:** `hybrid-age` (plugin dir or pip entry point)
 - **Stack:** `apache/age:release_PG17_1.6.0` + pgvector, exposed on `127.0.0.1:5450`
