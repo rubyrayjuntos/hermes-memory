@@ -196,8 +196,8 @@ in committed yaml — they resolve from the env vars named by `dsn_env`/`embed_u
 | `HYBRID_AGE_EMBED_URL` | no | Embeddings endpoint (default `http://localhost:11434/v1`) |
 | `HYBRID_AGE_EMBED_MODEL` | no | Overrides `embed_model` when yaml doesn't set it |
 | `HYBRID_AGE_GRAPH` | no | Overrides `graph` when yaml doesn't set it |
-| `HERMES_MEMORY_DSN` | no | Legacy alias honored by `.env.example` tooling |
-| `HERMES_MEMORY_GRAPH` | no | Legacy alias for the graph name |
+| `HERMES_MEMORY_DSN` | no | Convenience alias defined in `.env.example` only — prefer `HYBRID_AGE_DSN` (nothing in src reads this) |
+| `HERMES_MEMORY_GRAPH` | no | Convenience alias only — prefer `HYBRID_AGE_GRAPH` |
 
 ## Troubleshooting
 
