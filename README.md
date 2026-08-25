@@ -1,3 +1,4 @@
+<img width="2048" height="1152" alt="hermes_librarian_banner" src="https://github.com/user-attachments/assets/109ea41f-2787-443f-a815-18139f80da4c" />
 # The Hermes Librarian
 
 **Persistent memory & context injection for [Hermes Agent](https://github.com/nousresearch/hermes-agent)** —
@@ -21,7 +22,8 @@ Follow the steps in order — each depends on the previous one.
 
 ```bash
 # 1. Clone
-git clone https://github.com/rubyrayjuntos/hermes-memory.git
+git 
+clone https://github.com/rubyrayjuntos/hermes-memory.git
 cd hermes-memory
 
 # 2. Configure environment — docker compose REQUIRES HERMES_PG_PASSWORD
