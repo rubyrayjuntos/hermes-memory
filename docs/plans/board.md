@@ -20,7 +20,7 @@ _(empty — all cards spec'd)_
 
 ## Done
 
-- [x] **C8 — Synthetic load generator** — spec PASS (incl. confirming + fixing C7's silent agtype parser bug), quality APPROVED after fix cycle (`1a8a99f`: batch isolation, streaming corpus ~10× RAM reduction, stable savepoint hashes). 1000 rows in 5.7s; expansion proven firing via --debug-graph. C7 report amended with correction notice.
+- [x] **C8 — Synthetic load generator** — spec PASS (incl. confirming + fixing C7's silent agtype parser bug), quality APPROVED after fix cycle (`1a8a99f`: batch isolation, streaming corpus ~10× RAM reduction, stable savepoint hashes). 1000 rows in 5.7s; expansion proven firing via --debug-graph. C7 report amended with correction notice. Brand Style Guide PDF uploaded by Ray; rebased cleanly.
 - [x] **C7 — Benchmark harness** — spec PASS, quality fixes applied (`df4e077` evidence doc + cleanup). First real numbers: Injection-Hit 0.90, throughput 16 turns/sec. Honest finding: bridge table empty → graph expansion contributed nothing yet (extractors v0.2); ablation re-run planned post-C8/C10. Report: docs/reports/c7-bench.md.
 - [x] **C6 — Docs truth-pass** — spec PASS (cold-walk verified), nit fixed (94d0a8f).
 - [x] **C5 — Verify harness & tests** — spec PASS, security regression check PASS, quality APPROVED after fix cycle.
