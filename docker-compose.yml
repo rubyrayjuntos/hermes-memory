@@ -1,29 +1,27 @@
 services:
   postgres:
-    image: ghcr.io/skb50bd/hermes-memory/hermes-postgres:latest
+    build:
+      context: ./docker
+      dockerfile: Dockerfile
+    image: hermes-memory-postgres:local
     container_name: hermes-memory-postgres
     environment:
       POSTGRES_USER: hermes
-      POSTGRES_PASSWORD: hermesdev
-      POSTGRES_DB: hermes
+      POSTGRES_PASSWORD: ${HERMES_PG_PASSWORD:?set HERMES_PG_PASSWORD in .env}
+      POSTGRES_DB: hermes_memory
     ports:
-      - "5440:5432"
+      # Host 5432 is commonly taken (other Postgres containers on this host);
+      # expose on 5450 instead. DSNs must use port 5450.
+      - "127.0.0.1:5450:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./example/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hermes -d hermes"]
+      test: ["CMD-SHELL", "pg_isready -U hermes -d hermes_memory"]
       interval: 5s
       timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  adminer:
-    image: adminer:latest
-    container_name: hermes-memory-adminer
-    ports:
-      - "8081:8080"
+      retries: 12
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  pgdata:
