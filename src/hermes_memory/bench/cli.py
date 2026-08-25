@@ -45,6 +45,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 logger = logging.getLogger("hybrid_age.bench")
 
 SENTINEL = "DELIBERATE_MISS_EXPECTING_EMPTY"
+DEBUG_GRAPH = False  # set by --debug-graph: print graph-expansion diagnostics
 DEFAULT_DSN = (
     f"postgres://hermes:{os.environ.get('HERMES_PG_PASSWORD', 'hermes')}"
     "@localhost:5450/hermes_memory"
@@ -319,6 +320,9 @@ class BenchHarness:
                 logger.debug("graph expansion timed out at 200ms guard")
                 expanded = []
             _dt = (time.perf_counter() - t0) * 1000
+            if DEBUG_GRAPH:
+                print(f"    [debug-graph] seeds={len(seeds)} "
+                      f"expansion_rows={len(expanded)} ({_dt:.1f} ms)")
             for text, graph_score in expanded:
                 pool_texts.append(text)
                 graph_items.append((text, graph_score))
@@ -387,13 +391,12 @@ class BenchHarness:
             def props(v: Any) -> Dict[str, str]:
                 if v is None:
                     return {}
-                s = str(v).strip("{}")
-                d: Dict[str, str] = {}
-                for part in s.split('","'):
-                    if '":"' in part:
-                        k, _, val = part.partition('":"')
-                        d[k.strip('"')] = val.rstrip('"')
-                return d
+                # agtype renders vertex maps as
+                # {"id": N, "label": "L", "properties": {"k": "v", ...}}
+                # with ', ' separators; a regex handles both key styles.
+                import re
+                pairs = re.findall(r'"(\w+)":\s*"?([^,"{}]+)"?', str(v))
+                return {k: val for k, val in pairs}
 
             np_, mp = props(n), props(m)
             rel_s = str(rel).strip('"') if rel else ""
@@ -629,6 +632,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--turns", type=int, default=256,
                    help="turn count for --throughput")
     p.add_argument("--quiet", action="store_true", help="suppress per-query lines")
+    p.add_argument("--debug-graph", action="store_true",
+                   help="print per-query graph-expansion row counts")
     sub = p.add_subparsers(dest="cmd")
     seed_p = sub.add_parser("seed", help="seed golden memories + ingest sample_repo")
     seed_p.add_argument("--dsn", default=None)
@@ -637,7 +642,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    global DEBUG_GRAPH
     args = build_parser().parse_args(argv)
+    DEBUG_GRAPH = args.debug_graph
     try:
         if args.cmd == "seed":
             asyncio.run(cmd_seed(args))
