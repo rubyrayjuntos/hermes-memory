@@ -38,6 +38,7 @@ dev = [
 
 [project.scripts]
 hermes-memory-ingest = "hermes_memory.ingest:main"
+hermes-memory-verify = "hermes_memory.verify:main"
 
 [project.entry-points."hermes_agent.memory_providers"]
 hybrid-age = "hermes_memory:register"
@@ -48,3 +49,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+    "property: pure-function Hypothesis property tests (P1-P8)",
+    "integration: DB-backed tests requiring docker / a live compose stack",
+]

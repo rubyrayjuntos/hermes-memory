@@ -25,7 +25,7 @@ DEFAULT_DSN_ENV = "HYBRID_AGE_DSN"
 DEFAULT_EMBED_URL_ENV = "HYBRID_AGE_EMBED_URL"
 
 # Local development default only — production sets HYBRID_AGE_DSN.
-_DEFAULT_DSN = "postgres://hermes:hermes@localhost:5450/hermes_memory"
+_DEFAULT_DSN = "postgres://hermes:{pg_password}@localhost:5450/hermes_memory"
 
 
 @dataclass

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -178,7 +179,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
     async def _ainit(self) -> None:
         import asyncpg
 
-        pool = await asyncpg.create_pool(self.config.dsn, min_size=1, max_size=4)
+        # Resolve the masked default DSN ({pg_password} / legacy ***) from
+        # the environment so a bare default config still connects locally.
+        dsn = self.config.dsn
+        if '{pg_password}' in dsn or '***' in dsn:
+            dsn = dsn.replace('{pg_password}', os.environ.get('HERMES_PG_PASSWORD', ''))
+            dsn = dsn.replace('***', os.environ.get('HERMES_PG_PASSWORD', ''))
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
         self.pool = pool  # assign before await points so failure paths can close it
         self.store = Store(pool, graph_name=self.config.graph)
         async with pool.acquire() as conn:

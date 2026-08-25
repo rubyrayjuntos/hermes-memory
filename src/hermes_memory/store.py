@@ -4,7 +4,8 @@ Rules (plan §3.3):
 - Every Cypher statement runs inside a SAVEPOINT; a failed statement rolls back
   to its savepoint and never poisons the surrounding transaction.
 - MERGE on the minimal unique key ({name} for entities, {path} for files);
-  non-key properties set via ON CREATE SET / ON MATCH SET.
+  non-key properties set via post-MERGE ``SET v += {props}`` (AGE 1.6 lacks
+  ``ON CREATE SET``/``ON MATCH SET``; see plan §3.3).
 - MERGEs are batched (>=50 statements per transaction) per apache/age#2177.
 - Vertex IDs crossing into JS/UI are stringified at this boundary.
 """
@@ -312,10 +313,13 @@ class Store:
                                     continue
                                 key_prop = "path" if "path" in props else "name"
                                 non_key = {k: v for k, v in props.items() if k != key_prop}
+                                # AGE 1.6 has no ON CREATE SET / ON MATCH SET;
+                                # MERGE on the minimal key, then plain
+                                # SET v += props for mutable properties
+                                # (plan §3.3, same pattern as ingest.py).
                                 cypher = (
                                     f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}})\n"
-                                    f"ON CREATE SET v += {age_props(non_key)}\n"
-                                    f"ON MATCH SET v += {age_props(non_key)}\n"
+                                    f"SET v += {age_props(non_key)}\n"
                                     f"RETURN id(v)"
                                 )
                                 row = await conn.fetchrow(
