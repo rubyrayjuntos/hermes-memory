@@ -209,6 +209,7 @@ def chunk_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
 def walk_codebase(codebase: Path) -> List[Tuple[Path, str, str]]:
     """Yield (abs_path, rel_path, language) for indexable files."""
     out: List[Tuple[Path, str, str]] = []
+    root_resolved = codebase.resolve()
     for root, dirs, files in os.walk(codebase):
         dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
         for fn in files:
@@ -218,6 +219,10 @@ def walk_codebase(codebase: Path) -> List[Tuple[Path, str, str]]:
             p = Path(root) / fn
             try:
                 if p.stat().st_size > MAX_FILE_BYTES:
+                    continue
+                # Symlink escape guard: skip files resolving outside the root.
+                if os.path.islink(p) and not p.resolve().is_relative_to(root_resolved):
+                    logger.debug("skipping symlink escape %s", p)
                     continue
             except OSError:
                 continue
@@ -274,25 +279,45 @@ class IngestStats:
     errors: int = 0
 
 
+def default_state_file(codebase: Optional[Path] = None) -> Path:
+    """Per-codebase state file keyed by hash of the resolved absolute path.
+
+    Multiple repos get distinct files (doc_ingest_state_{hash8}.json) so they
+    never churn each other's saved hashes.
+    """
+    base = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser() / "cache"
+    if codebase is None:
+        return base / "doc_ingest_state.json"
+    key = hashlib.sha256(str(codebase.expanduser().resolve()).encode()).hexdigest()[:8]
+    return base / f"doc_ingest_state_{key}.json"
+
+
 class Ingestor:
     def __init__(self, config: Optional[HybridAgeConfig] = None,
                  state_file: Optional[Path] = None,
                  embedder: Optional[Any] = None):
         self.config = config or load_config()
-        default_dir = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser() / "cache"
-        self.state_file = state_file or default_dir / "doc_ingest_state.json"
+        # Exact state_file wins (back-compat); otherwise per-codebase file is
+        # resolved once the target codebase is known in run().
+        self._state_override = (
+            Path(state_file).expanduser() if state_file else None)
+        self.state_file = self._state_override or default_state_file()
         self.embedder = embedder or Embedder(self.config.embed_url, self.config.embed_model,
                                              self.config.embed_dim)
         self.stats = IngestStats()
 
     async def run(self, codebase: Path) -> IngestStats:
         codebase = codebase.expanduser().resolve()
+        if self._state_override is None:
+            self.state_file = default_state_file(codebase)
         prev = load_state(self.state_file)
         diff = diff_state(codebase, prev)
         self.stats.skipped = len(diff.skipped)
         self.stats.deleted = len(diff.deleted)
-        # A file whose hash changed vs saved state is drifted (re-embedded).
-        self.stats.drifted = len(diff.changed) if prev else 0
+        # Drifted = modified vs saved state; brand-new files (no prev entry)
+        # are not drift.
+        self.stats.drifted = sum(1 for _, rel, _, _ in diff.changed
+                                 if prev.get(rel) is not None)
 
         conn = await asyncpg.connect(self.config.dsn)
         try:
@@ -300,9 +325,21 @@ class Ingestor:
             await conn.execute("SET search_path = ag_catalog, public;")
             if diff.deleted:
                 await self._prune_deleted(conn, str(codebase), diff.deleted)
+            # State must contain only successfully-indexed files so that a
+            # failed file is retried on the next run: start from the skipped
+            # (unchanged) files and add each file only after it indexes clean.
+            current: Dict[str, str] = {rel: diff.current[rel]
+                                       for rel in diff.skipped}
             for path, rel, lang, digest in diff.changed:
-                await self._index_file(conn, codebase, path, rel, lang, digest)
-            save_state(self.state_file, diff.current)
+                try:
+                    await self._index_file(conn, codebase, path, rel,
+                                           lang, digest)
+                    current[rel] = digest
+                except Exception:
+                    # Failed files stay out of saved state so the next run
+                    # retries them; other files are still indexed & saved.
+                    logger.warning("indexing failed for %s", rel, exc_info=True)
+            save_state(self.state_file, current)
         finally:
             await conn.close()
         return self.stats
@@ -351,11 +388,13 @@ class Ingestor:
 
     async def _index_file(self, conn, codebase: Path, path: Path,
                           rel: str, lang: str, digest: str) -> None:
+        """Index one file. Raises on fatal failure so run() excludes it from
+        saved state (the file is retried on the next run)."""
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
+        except Exception as exc:
             self.stats.errors += 1
-            return
+            raise RuntimeError(f"unreadable file {rel}") from exc
         if not content.strip():
             return
 
@@ -378,6 +417,7 @@ class Ingestor:
         }
 
         # -- L2a: doc_chunks (all chunks; replace prior rows for this file) ----
+        written_ids: List[str] = []   # enumerated chunk ids actually written
         try:
             async with conn.transaction():
                 await conn.execute(
@@ -402,6 +442,7 @@ class Ingestor:
                         cid, digest, codebase_s, rel, i, ch,
                         vec_to_literal(vec), json.dumps(meta_common),
                     )
+                    written_ids.append(cid)
                     self.stats.chunks += 1
         except Exception:
             self.stats.errors += 1
@@ -471,15 +512,19 @@ class Ingestor:
             self.stats.edges += await self._merge_edges(conn, edges)
 
         # -- Bridges ------------------------------------------------------------
+        # Bridge the same enumerated chunk ids actually written to doc_chunks
+        # so indices never shift when an embedding fails.
         if mem_id and file_vid:
-            self.stats.bridges += await self._bridge(conn, f"mem_{mem_id}", file_vid)
+            self.stats.bridges += await self._bridge(
+                conn, f"mem_{mem_id}", file_vid, source="memory_entry")
         if mem_id and mod_vid:
-            self.stats.bridges += await self._bridge(conn, f"mem_{mem_id}", mod_vid)
-        # chunk-id bridges for doc_chunks
-        if file_vid:
-            for i in range(len(embedded)):
-                self.stats.bridges += await self._bridge(
-                    conn, f"{digest[:16]}:{i}", file_vid)
+            self.stats.bridges += await self._bridge(
+                conn, f"mem_{mem_id}", mod_vid, source="memory_entry")
+        for cid in written_ids:
+            if not file_vid:
+                break
+            self.stats.bridges += await self._bridge(
+                conn, cid, file_vid, source="doc_chunk")
 
         self.stats.indexed += 1
         if n_failed:
@@ -489,14 +534,14 @@ class Ingestor:
         """SAVEPOINT-guarded, batched (>=50/txn when large) vertex MERGEs."""
         results: List[Optional[str]] = []
         graph = self._graph()
-        from .store import _check_label, age_props, age_str, _savepoint_name
+        from .store import age_props, age_str, check_label, savepoint_name
         items = list(items)
         for start in range(0, len(items), 50):
             batch = items[start:start + 50]
             try:
                 async with conn.transaction():
                     for idx, (label, props) in enumerate(batch):
-                        sp = _savepoint_name("ing_v", idx)
+                        sp = savepoint_name("ing_v", idx)
                         await conn.execute(f"SAVEPOINT {sp}")
                         try:
                             key_prop = "path" if "path" in props else "name"
@@ -505,7 +550,7 @@ class Ingestor:
                             # minimal key, then plain SET for mutable properties.
                             sets = age_props(non_key)
                             cy = (
-                                f"MERGE (v:{_check_label(label)} "
+                                f"MERGE (v:{check_label(label)} "
                                 f"{{{key_prop}: {age_str(props[key_prop])}}})\n"
                                 + (f"SET v += {sets}\n" if sets != "{}" else "")
                                 + f"RETURN id(v)"
@@ -530,20 +575,20 @@ class Ingestor:
     async def _merge_edges(self, conn, edges) -> int:
         done = 0
         graph = self._graph()
-        from .store import _check_label, _savepoint_name
+        from .store import check_label, savepoint_name
         edges = list(edges)
         for start in range(0, len(edges), 50):
             batch = edges[start:start + 50]
             try:
                 async with conn.transaction():
                     for idx, (label, src, dst) in enumerate(batch):
-                        sp = _savepoint_name("ing_e", idx)
+                        sp = savepoint_name("ing_e", idx)
                         await conn.execute(f"SAVEPOINT {sp}")
                         try:
                             cy = (
                                 f"MATCH (a), (b) WHERE id(a) = {int(src)} "
                                 f"AND id(b) = {int(dst)} "
-                                f"MERGE (a)-[e:{_check_label(label)}]->(b) RETURN id(e)"
+                                f"MERGE (a)-[e:{check_label(label)}]->(b) RETURN id(e)"
                             )
                             row = await conn.fetchrow(
                                 f"SELECT * FROM cypher('{graph}', $$ {cy} $$) AS (id agtype)")
@@ -557,15 +602,16 @@ class Ingestor:
                 self.stats.errors += 1
         return done
 
-    async def _bridge(self, conn, chunk_id: str, vertex_id: int) -> int:
+    async def _bridge(self, conn, chunk_id: str, vertex_id: int,
+                      source: str = "memory_entry") -> int:
         try:
             await conn.execute(
                 """
                 INSERT INTO memory_chunk_nodes (chunk_id, source, vertex_id, graph_name)
-                VALUES ($1, 'memory_entry', $2, $3)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (chunk_id, source, vertex_id) DO NOTHING
                 """,
-                chunk_id, vertex_id, self.config.graph,
+                chunk_id, source, vertex_id, self.config.graph,
             )
             return 1
         except Exception:
@@ -611,7 +657,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     state_file = Path(args.state_file).expanduser() if args.state_file else None
     ingestor = Ingestor(state_file=state_file)
-    stats = asyncio.run(ingestor.run(codebase))
+    try:
+        stats = asyncio.run(ingestor.run(codebase))
+    except (OSError, asyncpg.PostgresError) as exc:
+        print(f"error: ingest failed: {exc}", file=sys.stderr)
+        return 1
     _print_summary(stats)
     return 1 if stats.errors else 0
 

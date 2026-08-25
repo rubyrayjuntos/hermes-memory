@@ -60,10 +60,18 @@ def age_props(properties: Dict[str, Any]) -> str:
 _SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _check_label(label: str) -> str:
+def check_label(label: str) -> str:
+    """Validate a Cypher label against the safe-identifier pattern.
+
+    Public API: raises ValueError on invalid labels. ``_check_label`` is kept
+    as a backwards-compatible alias.
+    """
     if not _SAFE_IDENT.match(label or ""):
         raise ValueError(f"invalid AGE label: {label!r}")
     return label
+
+
+_check_label = check_label  # backwards-compatible alias
 
 
 def _escape_like(text: str) -> str:
@@ -73,8 +81,15 @@ def _escape_like(text: str) -> str:
     )
 
 
-def _savepoint_name(prefix: str, idx: int) -> str:
+def savepoint_name(prefix: str, idx: int) -> str:
+    """Build a SQL savepoint identifier (public API).
+
+    ``_savepoint_name`` is kept as a backwards-compatible alias.
+    """
     return f"sp_{prefix}_{idx}"
+
+
+_savepoint_name = savepoint_name  # backwards-compatible alias
 
 
 class Store:
