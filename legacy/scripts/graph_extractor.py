@@ -37,7 +37,10 @@ from psycopg.rows import dict_row
 
 # ─── Configuration ───────────────────────────────────────────────────────
 
-DB_DSN = os.environ.get("HERMES_MEMORY_DSN", "host=localhost port=5432 dbname=hermes user=hermes password=hermesdev")
+DB_DSN = os.environ.get(
+    "HERMES_MEMORY_DSN",
+    "host=localhost port=5432 dbname=hermes user=hermes password=CHANGE-ME-via-HERMES_MEMORY_DSN",
+)
 GRAPH_NAME = os.environ.get("HERMES_MEMORY_GRAPH", "hermes_knowledge")
 
 # Known technology terms to recognize
