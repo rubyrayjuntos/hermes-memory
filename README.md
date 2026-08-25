@@ -24,15 +24,15 @@ Data persists in the `pgdata` volume across `docker compose down/up`.
 git clone https://github.com/rubyrayjuntos/hermes-memory.git
 cd hermes-memory
 
-# 2. Start Postgres + AGE + pgvector
-docker compose up -d
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Configure Hermes
+# 2. Configure environment (compose requires HERMES_PG_PASSWORD)
 cp .env.example .env
 # Edit .env with your Postgres credentials
+
+# 3. Start Postgres + AGE + pgvector
+docker compose up -d
+
+# 4. Install dependencies
+pip install -r requirements.txt
 
 # 5. Add to ~/.hermes/config.yaml
 # memory:
@@ -125,7 +125,7 @@ memory:
 Set in `~/.hermes/.env` or system environment:
 
 ```bash
-HERMES_MEMORY_DSN=postgres://hermes:hermesdev@localhost:5432/hermes
+HERMES_MEMORY_DSN=postgres://hermes:***@localhost:5450/hermes_memory
 HERMES_MEMORY_GRAPH=hermes_knowledge
 
 # Optional overrides

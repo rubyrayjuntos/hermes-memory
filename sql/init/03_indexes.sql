@@ -1,5 +1,5 @@
 -- 03_indexes.sql — authoritative index DDL from plan §4. Idempotent via IF NOT EXISTS.
-SET search_path = public, ag_catalog;
+-- All objects fully qualified; no search_path needed.
 
 -- Relational
 CREATE INDEX IF NOT EXISTS idx_memory_entries_embedding
@@ -21,8 +21,8 @@ CREATE INDEX IF NOT EXISTS idx_conversations_relations_queue
     ON conversations (relations_processed_at) WHERE relations_processed_at IS NULL;
 
 -- librarian file-path expression index
-CREATE INDEX IF NOT EXISTS idx_librarian_runs_file_path
-    ON librarian_runs (agent_identity, ((metadata->>'file_path')))
+CREATE INDEX IF NOT EXISTS idx_librarian_file_path
+    ON memory_entries (agent_identity, ((metadata->>'file_path')))
     WHERE agent_identity = 'librarian';
 
 -- AGE label indexes. Per-label BTREE(id) + GIN(properties ag_catalog.gin_agtype_ops);

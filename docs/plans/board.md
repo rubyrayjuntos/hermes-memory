@@ -20,11 +20,11 @@ _(empty — all cards spec'd)_
 
 ## In Review
 
-_(none)_
+- [x] **C2 — Docker + schema + indexes** — spec + quality reviews running (deleg_d010f3e8 / deleg_ff2427d5). Note: main carries 247d2c5 (early-merged via shared-tree race); branch 9ac8fd9 verified content-identical for C2 files, branch deleted. Reviews gate whether it stays; failures → revert on main.
 
 ## Verified
 
-_(none)_
+- [x] **C1 — Scaffold & consolidation** — MERGED (62844ac). Spec PASS, quality APPROVED after fix cycle.
 
 ## Done
 
