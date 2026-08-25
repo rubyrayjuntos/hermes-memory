@@ -1,0 +1,52 @@
+[
+  {
+    "id": "q1_auth_fix",
+    "query": "How did we fix the verify run auth failure?",
+    "expected_memory": "update the repo .env to the new password and re-initialize the stack volume"
+  },
+  {
+    "id": "q2_db_port",
+    "query": "Which database port does production memory use?",
+    "expected_memory": "Main hermes-postgres (host port 5440, db hermes)"
+  },
+  {
+    "id": "q3_embed_model",
+    "query": "What is our primary embedding model for Phase 2?",
+    "expected_memory": "OpenAI text-embedding-3-small @ 768 dims"
+  },
+  {
+    "id": "q4_embed_reason",
+    "query": "Why did we drop the Ollama dependency?",
+    "expected_memory": "Removes always-on Ollama dependency; negligible cost at personal scale"
+  },
+  {
+    "id": "q5_rollback",
+    "query": "How do I rollback the memory provider to SQLite?",
+    "expected_memory": "Set memory.provider: '' in config.yaml"
+  },
+  {
+    "id": "q6_plugin_discovery",
+    "query": "What marker is required for Hermes plugin discovery?",
+    "expected_memory": "init.py must literally contain register_memory_provider/MemoryProvider"
+  },
+  {
+    "id": "q7_age_quirk",
+    "query": "What is the workaround for AGE 1.6 missing ON CREATE SET?",
+    "expected_memory": "MERGE-then-SET pattern"
+  },
+  {
+    "id": "q8_gauntlet_defects",
+    "query": "How many bugs did the gauntlet catch before the v0.1 release?",
+    "expected_memory": "~14 defects caught before release across the gauntlet"
+  },
+  {
+    "id": "q9_schema_dims",
+    "query": "Do we need to migrate the schema for the new embeddings?",
+    "expected_memory": "native dim truncation to 768 keeps schema unchanged"
+  },
+  {
+    "id": "q10_deliberate_miss",
+    "query": "What is the recipe for chocolate chip cookies?",
+    "expected_memory": "DELIBERATE_MISS_EXPECTING_EMPTY"
+  }
+]
