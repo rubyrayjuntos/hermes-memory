@@ -42,11 +42,16 @@ def age_props(properties: Dict[str, Any]) -> str:
     """Render a dict as a Cypher property map.
 
     - None values are dropped entirely.
+    - Keys must match the safe-identifier pattern (same as labels); invalid
+      keys are skipped with a warning rather than interpolated into Cypher.
     - Keys are preserved exactly once, insertion order kept.
     """
     parts = []
     for key, val in properties.items():
         if val is None:
+            continue
+        if not _SAFE_IDENT.match(key or ""):
+            logger.warning("age_props: skipping invalid property key %r", key)
             continue
         parts.append(f"{key}: {age_str(val)}")
     return "{" + ", ".join(parts) + "}"
@@ -59,6 +64,13 @@ def _check_label(label: str) -> str:
     if not _SAFE_IDENT.match(label or ""):
         raise ValueError(f"invalid AGE label: {label!r}")
     return label
+
+
+def _escape_like(text: str) -> str:
+    r"""Escape LIKE wildcards (\ % _) for use with ESCAPE '\'."""
+    return (
+        text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
 
 
 def _savepoint_name(prefix: str, idx: int) -> str:
@@ -140,13 +152,13 @@ class Store:
                 """
                 UPDATE memory_entries
                    SET content = $1, embedding = $2::vector, updated_at = now()
-                 WHERE agent_identity = $3 AND target = $4 AND content LIKE $5
+                 WHERE agent_identity = $3 AND target = $4 AND content LIKE $5 ESCAPE '\'
                 """,
                 content,
                 vec_literal,
                 agent_identity,
                 target,
-                f"%{old_text}%",
+                f"%{_escape_like(old_text)}%",
             )
             if n == "UPDATE 0":
                 await conn.execute(
@@ -171,11 +183,11 @@ class Store:
             await conn.execute(
                 """
                 DELETE FROM memory_entries
-                 WHERE agent_identity = $1 AND target = $2 AND content LIKE $3
+                 WHERE agent_identity = $1 AND target = $2 AND content LIKE $3 ESCAPE '\'
                 """,
                 agent_identity,
                 target,
-                f"%{content_substr}%",
+                f"%{_escape_like(content_substr)}%",
             )
 
     # -- Vector search ----------------------------------------------------------
@@ -310,7 +322,11 @@ class Store:
                                 results.append(None)
                 except Exception:
                     logger.warning("batch txn failed wholesale", exc_info=True)
-                    results.extend([None] * (batch_size - len(results)))
+                    # Pad only the remainder of THIS chunk (items before the txn's
+                    # first failure may already have appended results).
+                    expected = start + len(chunk_items)
+                    if len(results) < expected:
+                        results.extend([None] * (expected - len(results)))
         return results
 
     async def merge_edges_batched(

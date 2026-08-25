@@ -67,6 +67,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self.embedder: Optional[Embedder] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
+        self._drain_task: Optional[asyncio.Task] = None
+        self._initialized = False
         self._session_id = ""
         self._agent_identity = ""
         self._write_queue: Optional[asyncio.Queue] = None
@@ -125,38 +127,64 @@ class HybridAgeMemoryProvider(MemoryProvider):
             or "default"
         )
 
-        # Dedicated loop thread; methods are called synchronously from turn threads.
-        self._loop = asyncio.new_event_loop()
-        self._write_queue = asyncio.Queue(maxsize=self.config.queue_maxsize)
-        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
-        self._thread.start()
-        self.embedder = Embedder(
-            url=self.config.embed_url,
-            model=self.config.embed_model,
-            dim=self.config.embed_dim,
-        )
+        # Idempotent: if already initialized, just refresh session state.
+        if self._initialized:
+            logger.info(
+                "hybrid-age initialize called again; reusing existing loop/pool "
+                "(session=%s identity=%s primary=%s)",
+                self._session_id, self._agent_identity, self._primary_context,
+            )
+            return
 
+        self._initialized = True
         try:
-            self._run(self._ainit(), timeout=8.0)
-            # Warm up embeddings so the first prefetch is fast.
-            self._run(self.embedder.embed_text("warmup"), timeout=4.0)
-        except Exception:
-            logger.warning("hybrid-age init incomplete (DB or embedder unreachable)", exc_info=True)
+            # Dedicated loop thread; methods are called synchronously from turn threads.
+            self._loop = asyncio.new_event_loop()
+            self._write_queue = asyncio.Queue(maxsize=self.config.queue_maxsize)
+            self._drain_task = None
+            self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+            self._thread.start()
+            self.embedder = Embedder(
+                url=self.config.embed_url,
+                model=self.config.embed_model,
+                dim=self.config.embed_dim,
+            )
 
-        logger.info(
-            "hybrid-age initialized session=%s identity=%s primary=%s",
-            self._session_id, self._agent_identity, self._primary_context,
-        )
+            try:
+                self._run(self._ainit(), timeout=8.0)
+                # Warm up embeddings so the first prefetch is fast.
+                self._run(self.embedder.embed_text("warmup"), timeout=4.0)
+            except Exception:
+                logger.warning(
+                    "hybrid-age init incomplete (DB or embedder unreachable)", exc_info=True
+                )
+
+            logger.info(
+                "hybrid-age initialized session=%s identity=%s primary=%s",
+                self._session_id, self._agent_identity, self._primary_context,
+            )
+        except BaseException:
+            self._initialized = False
+            # If a pool was already created (e.g. _ainit timed out but is
+            # still completing on the loop), make sure it gets closed.
+            if self.pool is not None and self._loop is not None and self._loop.is_running():
+                try:
+                    asyncio.run_coroutine_threadsafe(self._pool_close(), self._loop)
+                except Exception:
+                    logger.debug("pool close after init failure failed", exc_info=True)
+                self.pool = None
+            raise
 
     async def _ainit(self) -> None:
         import asyncpg
 
         pool = await asyncpg.create_pool(self.config.dsn, min_size=1, max_size=4)
-        self.pool = pool
+        self.pool = pool  # assign before await points so failure paths can close it
         self.store = Store(pool, graph_name=self.config.graph)
         async with pool.acquire() as conn:
             await self.store.load_age(conn)
-        asyncio.create_task(self._awrite_drain())
+        # Strong reference so the drain loop is never garbage-collected mid-flight.
+        self._drain_task = asyncio.create_task(self._awrite_drain())
 
     # -- turn capture (non-blocking enqueue) --------------------------------------
 
@@ -209,7 +237,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
         try:
             fut = asyncio.run_coroutine_threadsafe(self._put_nowait(item), self._loop)
-            fut.result(timeout=0.5)
+            # Fire-and-forget: only wait long enough to catch an immediate
+            # QueueFull; never block the turn thread on the loop.
+            fut.result(0)
+        except asyncio.TimeoutError:
+            # Enqueue is still in flight — it will land unless the queue is
+            # full at that moment; count conservatively as a dropped write.
+            self._dropped_writes += 1
         except asyncio.QueueFull:
             self._dropped_writes += 1
             logger.warning("hybrid-age write queue full (dropped=%d)", self._dropped_writes)
@@ -311,6 +345,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
                           "score": s["similarity"], "kind": "fact"})
             kept += 1
         for line in graph_lines:
+            if SECRET_RE.search(line or ""):
+                continue
             items.append({"text": line, "score": 0.69, "kind": "graph"})
 
         items.sort(key=lambda x: x["score"], reverse=True)
@@ -335,7 +371,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         return " | ".join(parts)
 
     async def _expand_graph(self, seeds: List[dict]) -> List[str]:
-        from .provider_helpers import format_triple, parse_agtype_vertex  # noqa: F401
+        from .provider_helpers import format_triple  # noqa: F401
 
         if not seeds or self.store is None:
             return []
@@ -468,20 +504,34 @@ class HybridAgeMemoryProvider(MemoryProvider):
             except Exception:
                 logger.debug("drain on shutdown failed", exc_info=True)
 
-        if self.pool is not None and self._loop is not None and self._loop.is_running():
+        # Only close the pool if the drain completed cleanly; if writes are
+        # still in flight, closing here would yank connections out from under
+        # them. The loop teardown below handles cleanup in that case.
+        drained = self._write_queue is None or self._write_queue.empty()
+        if not drained:
+            logger.warning(
+                "hybrid-age shutdown: write queue still busy after %ss drain — "
+                "abandoning %d queued write(s); pool left for loop teardown",
+                SHUTDOWN_DRAIN_S, self._write_queue.qsize() if self._write_queue else 0,
+            )
+        elif (
+            self.pool is not None
+            and self._loop is not None
+            and self._loop.is_running()
+        ):
             try:
                 asyncio.run_coroutine_threadsafe(
                     self._pool_close(), self._loop
                 ).result(timeout=max(0.2, deadline - time.monotonic()))
             except Exception:
-                pass
+                logger.debug("pool close on shutdown failed", exc_info=True)
         self.pool = None
 
         if self._loop is not None:
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:
-                pass
+                logger.debug("loop stop failed on shutdown", exc_info=True)
 
     async def _pool_close(self) -> None:
         if self.pool is not None:
