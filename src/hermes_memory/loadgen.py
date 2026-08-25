@@ -29,7 +29,7 @@ import random
 import sys
 import time
 import uuid
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 import asyncpg
 
@@ -87,11 +87,13 @@ def _vector_literal(rng: random.Random, dim: int = 768) -> str:
     return "[" + ",".join(f"{x / mag:.6f}" for x in vec) + "]"
 
 
-def build_corpus(size: int, seed: int) -> List[dict]:
-    """Deterministic chunk specs: content, entities, action, vector literal."""
+def iter_corpus(size: int, seed: int) -> Iterator[dict]:
+    """Lazily yield deterministic chunk specs (streaming variant of
+    ``build_corpus``): same RNG draw order per row, so output is byte-for-byte
+    identical to materializing the whole corpus — without holding 100K dicts
+    (~1GB) in RAM."""
     rng = random.Random(seed)
     pool = _entity_pool(size)
-    chunks: List[dict] = []
     seen: set = set()
     for i in range(size):
         e1, e2 = rng.sample(pool, 2)
@@ -110,7 +112,7 @@ def build_corpus(size: int, seed: int) -> List[dict]:
                 e1=e1, action=action.lower().replace("_", " "), e2=e2))
         seen.add(content)
         vrng = random.Random(f"{seed}:{i}")
-        chunks.append({
+        yield {
             "key": f"{seed}:{i}",
             "chunk_id": "lg_" + str(uuid.uuid5(NAMESPACE, f"{seed}:{i}")),
             "content": content,
@@ -118,8 +120,13 @@ def build_corpus(size: int, seed: int) -> List[dict]:
             "entities": (e1, e2),
             "action": action,
             "vec": _vector_literal(vrng),
-        })
-    return chunks
+        }
+
+
+def build_corpus(size: int, seed: int) -> List[dict]:
+    """Materialized corpus (kept for callers/tests); ``generate`` streams via
+    :func:`iter_corpus` instead."""
+    return list(iter_corpus(size, seed))
 
 
 class LoadGen:
@@ -159,7 +166,7 @@ class LoadGen:
 
     async def _merge_edge(self, conn, src: int, dst: int, label: str,
                           source_chunk: str) -> bool:
-        sp = savepoint_name("lg_e", abs(source_chunk.__hash__()) % 100000)
+        sp = savepoint_name("lg_e", _stable_hash(source_chunk))
         await conn.execute(f"SAVEPOINT {sp}")
         try:
             cypher = (
@@ -183,7 +190,6 @@ class LoadGen:
     async def generate(self, size: int, seed: int) -> dict:
         assert self.pool is not None
         t0 = time.perf_counter()
-        chunks = build_corpus(size, seed)
 
         async with self.pool.acquire() as conn:
             await conn.execute("LOAD 'age';")
@@ -195,72 +201,94 @@ class LoadGen:
                     AGENT_IDENTITY,
                 )
             }
-        todo = [c for c in chunks if c["key"] not in existing]
-        skipped = len(chunks) - len(todo)
+        skipped = sum(
+            1 for c in iter_corpus(size, seed) if c["key"] in existing
+        )
+        todo = size - skipped
         logger.info("%d chunks already present (top-up mode); generating %d",
-                    skipped, len(todo))
+                    skipped, todo)
 
         vid_cache: Dict[str, Optional[int]] = {}
-        inserted = bridged = edges_done = 0
+        inserted = bridged = edges_done = failed_batches = 0
 
-        for start in range(0, len(todo), BATCH_SIZE):
-            batch = todo[start:start + BATCH_SIZE]
-            async with self.pool.acquire() as conn:
-                await conn.execute("LOAD 'age';")
-                await conn.execute("SET search_path = ag_catalog, public;")
-                async with conn.transaction():
-                    # 1. relational rows, one INSERT..RETURNING per batch
-                    rows = await conn.fetch(
-                        """
-                        INSERT INTO memory_entries
-                            (agent_identity, target, content, embedding, metadata)
-                        SELECT * FROM unnest($1::text[], $2::text[], $3::text[],
-                                             $4::vector[], $5::jsonb[])
-                             AS t(agent_identity, target, content, embedding, metadata)
-                        RETURNING id
-                        """,
-                        [AGENT_IDENTITY] * len(batch),
-                        [c["target"] for c in batch],
-                        [c["content"] for c in batch],
-                        [c["vec"] for c in batch],
-                        [json.dumps({"lg_key": c["key"], "lg_chunk_id": c["chunk_id"],
-                                     "source": SOURCE}) for c in batch],
-                    )
-                    inserted += len(rows)
-                    # 2. vertices (SAVEPOINT per MERGE) + bridge rows
-                    bridge_rows = []  # (chunk_id, vertex_id)
-                    for c, r in zip(batch, rows):
-                        row_key = str(r["id"])
-                        for ent in c["entities"]:
-                            if ent not in vid_cache:
-                                vid_cache[ent] = await self._merge_entity(conn, ent)
-                            vid = vid_cache[ent]
-                            if vid is None:
-                                continue
-                            bridge_rows.append((c["chunk_id"], vid))
-                            bridge_rows.append((row_key, vid))
-                        v1 = vid_cache.get(c["entities"][0])
-                        v2 = vid_cache.get(c["entities"][1])
-                        if v1 is not None and v2 is not None:
-                            ok = await self._merge_edge(
-                                conn, v1, v2, c["action"], c["chunk_id"])
-                            edges_done += int(ok)
-                    # 3. bridge rows (PK dedups on re-run)
-                    await conn.executemany(
-                        """
-                        INSERT INTO memory_chunk_nodes (chunk_id, source, vertex_id)
-                        VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
-                        """,
-                        [(cid, SOURCE, int(vid)) for cid, vid in bridge_rows],
-                    )
-                    bridged += len(bridge_rows)
-            logger.info("batch %d-%d done (%d entries)",
-                        start, start + len(batch), inserted)
+        def batches() -> Iterator[List[dict]]:
+            buf: List[dict] = []
+            for c in iter_corpus(size, seed):
+                if c["key"] in existing:
+                    continue
+                buf.append(c)
+                if len(buf) == BATCH_SIZE:
+                    yield buf
+                    buf = []
+            if buf:
+                yield buf
+
+        for bno, batch in enumerate(batches()):
+            try:
+                async with self.pool.acquire() as conn:
+                    await conn.execute("LOAD 'age';")
+                    await conn.execute("SET search_path = ag_catalog, public;")
+                    async with conn.transaction():
+                        # 1. relational rows, one INSERT..RETURNING per batch
+                        rows = await conn.fetch(
+                            """
+                            INSERT INTO memory_entries
+                                (agent_identity, target, content, embedding, metadata)
+                            SELECT * FROM unnest($1::text[], $2::text[], $3::text[],
+                                                 $4::vector[], $5::jsonb[])
+                                 AS t(agent_identity, target, content, embedding, metadata)
+                            RETURNING id
+                            """,
+                            [AGENT_IDENTITY] * len(batch),
+                            [c["target"] for c in batch],
+                            [c["content"] for c in batch],
+                            [c["vec"] for c in batch],
+                            [json.dumps({"lg_key": c["key"], "lg_chunk_id": c["chunk_id"],
+                                         "source": SOURCE}) for c in batch],
+                        )
+                        inserted += len(rows)
+                        # 2. vertices (SAVEPOINT per MERGE) + bridge rows
+                        bridge_rows = []  # (chunk_id, vertex_id)
+                        for c, r in zip(batch, rows):
+                            row_key = str(r["id"])
+                            for ent in c["entities"]:
+                                if ent not in vid_cache:
+                                    vid_cache[ent] = await self._merge_entity(conn, ent)
+                                vid = vid_cache[ent]
+                                if vid is None:
+                                    continue
+                                bridge_rows.append((c["chunk_id"], vid))
+                                bridge_rows.append((row_key, vid))
+                            v1 = vid_cache.get(c["entities"][0])
+                            v2 = vid_cache.get(c["entities"][1])
+                            if v1 is not None and v2 is not None:
+                                ok = await self._merge_edge(
+                                    conn, v1, v2, c["action"], c["chunk_id"])
+                                edges_done += int(ok)
+                        # 3. bridge rows (PK dedups on re-run)
+                        await conn.executemany(
+                            """
+                            INSERT INTO memory_chunk_nodes (chunk_id, source, vertex_id)
+                            VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
+                            """,
+                            [(cid, SOURCE, int(vid)) for cid, vid in bridge_rows],
+                        )
+                        bridged += len(bridge_rows)
+                logger.info("batch %d done (%d entries inserted so far)",
+                            bno, inserted)
+            except Exception:
+                # Batch-level isolation: one bad batch must not kill the run.
+                # The top-up key check makes re-running cheap — the failed
+                # keys are simply absent and get retried on the next pass.
+                failed_batches += 1
+                logger.error("batch %d failed; continuing (%d/%d batches failed)",
+                             bno, failed_batches, bno + 1, exc_info=True)
 
         stats = await self.coverage_stats()
         stats.update({
             "generated": inserted, "skipped_existing": skipped,
             "bridge_rows_written": bridged, "edges_merged": edges_done,
+            "failed_batches": failed_batches,
             "wall_seconds": round(time.perf_counter() - t0, 1),
         })
         return stats

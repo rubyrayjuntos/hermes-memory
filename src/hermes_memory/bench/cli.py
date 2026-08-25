@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import statistics
 import sys
 import time
@@ -321,8 +322,8 @@ class BenchHarness:
                 expanded = []
             _dt = (time.perf_counter() - t0) * 1000
             if DEBUG_GRAPH:
-                print(f"    [debug-graph] seeds={len(seeds)} "
-                      f"expansion_rows={len(expanded)} ({_dt:.1f} ms)")
+                logger.info("[debug-graph] seeds=%d expansion_rows=%d (%.1f ms)",
+                            len(seeds), len(expanded), _dt)
             for text, graph_score in expanded:
                 pool_texts.append(text)
                 graph_items.append((text, graph_score))
@@ -394,7 +395,6 @@ class BenchHarness:
                 # agtype renders vertex maps as
                 # {"id": N, "label": "L", "properties": {"k": "v", ...}}
                 # with ', ' separators; a regex handles both key styles.
-                import re
                 pairs = re.findall(r'"(\w+)":\s*"?([^,"{}]+)"?', str(v))
                 return {k: val for k, val in pairs}
 
