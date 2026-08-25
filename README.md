@@ -1,42 +1,84 @@
 # hermes-memory
 
-Postgres + Apache AGE Vector & Graph Database with prompt context injection and conversation storage and retrieval.
+Hybrid memory provider for [Hermes Agent](https://github.com/nousresearch/hermes-agent):
+pgvector for semantic recall + Apache AGE knowledge graph for entity expansion,
+in one Postgres database.
 
-Drop-in memory provider for [Hermes Agent](https://github.com/nousresearch/hermes-agent) that persists conversations and user memory to Postgres, embeds them with Ollama, and enriches recall with an Apache AGE knowledge graph.
+- **Provider name:** `hybrid-age` (plugin dir or pip entry point)
+- **Stack:** `apache/age:release_PG17_1.6.0` + pgvector, exposed on `127.0.0.1:5450`
+- **Embeddings:** Ollama (`nomic-embed-text`, 768-dim) via OpenAI-compatible API
+- **Tested against:** Hermes Agent v0.20.x
+- **License:** MIT
 
 ## Quick Start
 
-### Docker quick start
+Follow the steps in order — each depends on the previous one.
 
 ```bash
-cp .env.example .env          # set HERMES_PG_PASSWORD
-docker compose up -d          # builds ./docker, inits schema + graph automatically
-docker compose ps             # wait for "healthy"
-```
-
-The image is Apache AGE (PG17) + pgvector; `sql/init/*.sql` create extensions,
-the `hermes_knowledge` graph, all labels, tables and indexes on first boot.
-Data persists in the `pgdata` volume across `docker compose down/up`.
-
-```bash
-# General quick start
 # 1. Clone
 git clone https://github.com/rubyrayjuntos/hermes-memory.git
 cd hermes-memory
 
-# 2. Configure environment (compose requires HERMES_PG_PASSWORD)
+# 2. Configure environment — docker compose REQUIRES HERMES_PG_PASSWORD
 cp .env.example .env
-# Edit .env with your Postgres credentials
+# Edit .env and set HERMES_PG_PASSWORD (and optionally HYBRID_AGE_DSN)
 
-# 3. Start Postgres + AGE + pgvector
+# 3. Start Postgres 17 + Apache AGE 1.6 + pgvector on 127.0.0.1:5450
 docker compose up -d
+docker compose ps        # wait until "healthy"
+# sql/init/*.sql create extensions, the hermes_knowledge graph, all labels,
+# tables and indexes automatically on first boot.
+# Data persists in the pgdata volume across docker compose down/up.
 
-# 4. Install dependencies
-pip install -r requirements.txt
+# 4. (optional, but needed for tests / CLIs) editable install with dev extras
+pip install -e '.[dev]'
 
-# 5. Add to ~/.hermes/config.yaml
-# memory:
-#   provider: hybrid-age
+# 5a. Install as a Hermes plugin — copy the package into the plugins dir,
+#     keeping __init__.py at the top level (Hermes' discovery heuristic
+#     scans that file):
+mkdir -p ~/.hermes/plugins/hybrid-age
+cp src/hermes_memory/__init__.py src/hermes_memory/*.py \
+   ~/.hermes/plugins/hybrid-age/
+
+#    ...OR install via pip — Hermes also discovers providers through the
+#    `hermes_agent.memory_providers` entry point declared in pyproject.toml:
+pip install -e .
+
+# 5b. Configure ~/.hermes/config.yaml
+```
+
+```yaml
+# ~/.hermes/config.yaml
+memory:
+  provider: hybrid-age          # activation key
+
+hybrid_age:                     # optional overrides (defaults shown)
+  dsn_env: HYBRID_AGE_DSN       # DSN comes from this env var (secrets stay out of yaml)
+  embed_url_env: HYBRID_AGE_EMBED_URL
+  embed_model: nomic-embed-text # must produce 768-dim vectors
+  graph: hermes_knowledge
+  vector_k: 12
+  min_similarity: 0.55
+  max_tokens: 1200
+```
+
+**Alternative to step 5b:** because the package ships a `config_schema`,
+`hermes memory setup hybrid-age` walks through the same settings interactively
+(secret fields are written to env, behavior knobs to config.yaml).
+
+### Verify it works
+
+With the stack up and the plugin installed:
+
+```bash
+hermes-memory-verify            # synthetic turn → per-layer row-count assertions; exit 0 = PASS
+```
+
+Or index a codebase and check recall:
+
+```bash
+hermes-memory-ingest path/to/repo   # hash → chunk → embed → vector + AGE graph + bridge rows
+hermes-memory-ingest path/to/repo   # re-run: dedup means 0 new entities
 ```
 
 ## Architecture
@@ -45,168 +87,145 @@ pip install -r requirements.txt
 User message
     │
     ▼
-Hermes Agent
-    │
+Hermes Agent turn loop
+    │ sync_turn(user, assistant, session_id)      [non-blocking enqueue]
     ▼
-hybrid-age memory provider
-    │
-    ├─► Ollama embeddings (nomic-embed-text)
-    │       │
-    │       ▼
-    │   pgvector in Postgres
-    │       │
-    │       ▼
-    │   Vector search → top-k chunks
-    │       │
-    │       ▼
-    │   AGE graph expansion via memory_chunk_nodes bridge
-    │       │
-    │       ▼
-    └──► Injected into next prompt as "Relevant memory context"
+asyncio.Queue ── background drain ──► embed (Ollama nomic-embed-text, 768-dim)
+    │                                        │
+    │                                        ▼
+    │                        memory_entries (pgvector HNSW)
+    │                                        │
+    │                          memory_chunk_nodes (bridge table)
+    │                                        │
+    ▼                                        ▼
+conversations (queue table)         AGE hermes_knowledge graph
+
+prefetch(query): embed query → pgvector ANN top-k → bridge → 1–2 hop Cypher expand
+                 → rank(similarity) → ≤1200-token fenced block injected into prompt
+                 (target <2s warm; Hermes hard-caps prefetch at 8s)
 ```
+
+| Module | File | Purpose |
+|--------|------|---------|
+| Provider | `src/hermes_memory/provider.py` | `HybridAgeMemoryProvider` implementing the Hermes `MemoryProvider` ABC |
+| Config | `src/hermes_memory/config.py` | Resolution order: config.yaml > env vars > defaults |
+| Setup schema | `src/hermes_memory/config_schema.py` | Powers `hermes memory setup hybrid-age` |
+| Embeddings | `src/hermes_memory/embed.py` | OpenAI-compatible client (Ollama), 768-dim invariant |
+| Store | `src/hermes_memory/store.py` | SQL/Cypher data access; every Cypher statement inside a SAVEPOINT |
+| Ingest | `src/hermes_memory/ingest.py` | Codebase indexing: hash→chunk→embed→vector+graph+bridge |
+| Verify | `src/hermes_memory/verify.py` | End-to-end pipeline smoke-check CLI |
 
 | Layer | Tech | Purpose |
 |-------|------|---------|
-| Storage | Postgres + pgvector | Embeddings + raw conversation/memory rows |
-| Graph | Apache AGE | Entity/relationship graph for cross-referencing |
-| Embeddings | Ollama | Local embedding model (`nomic-embed-text`) |
-| Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertices |
-| Cron | `graph_extractor.py` | Pattern-based entity extraction from conversations |
+| Storage | Postgres 17 + pgvector | Embeddings (HNSW) + conversation/memory/doc-chunk rows |
+| Graph | Apache AGE 1.6 | Entity vertices + typed edges in the `hermes_knowledge` graph |
+| Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertex IDs |
 
-## Prerequisites
+## Scope: v0.1 vs v0.2
 
-- Postgres 14+ with `pgvector` and `apache/age` extensions
-- Ollama running locally with `nomic-embed-text` model
-- Hermes Agent installed
+| Capability | v0.1 | v0.2 roadmap |
+|------------|:----:|--------------|
+| Docker compose stack (AGE PG17 1.6 + pgvector) | ✅ | |
+| Memory provider (turn capture, budgeted prefetch injection) | ✅ | |
+| `hermes memory setup` support (config_schema) | ✅ | |
+| Doc/codebase ingest CLI (`hermes-memory-ingest`) | ✅ | |
+| Verify CLI (`hermes-memory-verify`) | ✅ | |
+| Property test suite P1–P8 (18 passed / 1 skipped*) | ✅ | |
+| CI (unit matrix + integration job + nightly stub) | ✅ | |
+| Conversation graph extractor | | ✅ (stubs live in `legacy/scripts/`) |
+| Relation extractor / semantic edges | | ✅ |
+| Watchdog & orphan sweeps | | ✅ |
+| Dashboard live mode (static demo only today) | | ✅ (`docs/dashboard/`) |
+| Multi-graph support, embedding-model swap tooling | | ✅ |
 
-### Postgres Setup
+\* P3/P4 (phrase-extraction properties) are deferred to v0.2 with the extractor port.
 
-```sql
--- Run example/init.sql after creating the database
-\i example/init.sql
-```
-
-## Installation
-
-### Option A: Plugin directory (recommended)
-
-```bash
-mkdir -p ~/.hermes/plugins/hybrid-age
-cp provider.py ~/.hermes/plugins/hybrid-age/
-```
-
-### Option B: Hermes skills directory
+## Testing
 
 ```bash
-cp -r . ~/.hermes/skills/autonomous-ai-agents/hermes-agent/plugins/hybrid-age/
+pip install -e '.[dev]'
+
+pytest tests/property -q        # pure-function Hypothesis property tests (no DB)
+pytest -q                       # default addopts exclude integration
+pytest tests/integration -q -m integration --override-ini="addopts="   # needs the compose stack up
 ```
 
-## Configuration
+What the property suite guards:
 
-Add to `~/.hermes/config.yaml`:
+| ID | Guards against |
+|----|----------------|
+| P1 | Unescaped `'`/`\` surviving `age_str` (Cypher injection) |
+| P2 | Malformed MERGE props (None dropped, keys preserved once) |
+| P3/P4 | Extractor noise / concept self-replication *(v0.2 — skipped)* |
+| P5 | Garbage module names from artifact paths (hex/uuid/digits/skip-dirs) |
+| P6 | Nondeterministic dependency-index output |
+| P7 | Silent file-hash state corruption (corrupt JSON → `{}`) |
+| P8 | Orphan bridge rows (dedup key + insert/delete symmetry) |
 
-```yaml
-memory:
-  memory_enabled: true
-  user_profile_enabled: true
-  provider: hybrid-age
-  memory_char_limit: 2200
-  user_char_limit: 1375
+The verify CLI exercises all three layers end-to-end (synthetic turn → row counts
+in conversations, memory_entries, and the AGE graph) and exits non-zero if the
+background drain stalls:
 
-# Optional: override embedding model/URL
-# hybrid_age:
-#   embed_url: http://localhost:11434/v1
-#   embed_model: nomic-embed-text
-#   graph: hermes_knowledge
+```bash
+hermes-memory-verify [--dsn postgres://...] [--drain-wait SECONDS]
 ```
+
+## Configuration reference
+
+### config.yaml — `hybrid_age:` block (behavior knobs)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `dsn_env` | `HYBRID_AGE_DSN` | Name of the env var holding the Postgres DSN |
+| `embed_url_env` | `HYBRID_AGE_EMBED_URL` | Name of the env var holding the embeddings endpoint |
+| `embed_model` | `nomic-embed-text` | Embedding model (must be 768-dim) |
+| `graph` | `hermes_knowledge` | AGE graph name |
+| `vector_k` | `12` | Vector-search top-k |
+| `min_similarity` | `0.55` | Minimum cosine similarity for recall candidates |
+| `max_tokens` | `1200` | Injection budget (tokens) |
+
+Resolution order: config.yaml > environment > defaults. Secrets/endpoints never go
+in committed yaml — they resolve from the env vars named by `dsn_env`/`embed_url_env`.
 
 ### Environment variables
 
-Set in `~/.hermes/.env` or system environment:
+| Variable | Required | Meaning |
+|----------|----------|---------|
+| `HERMES_PG_PASSWORD` | yes (compose) | Postgres password; compose refuses to start without it |
+| `HYBRID_AGE_DSN` | yes (provider) | e.g. `postgres://hermes:<pw>@localhost:5450/hermes_memory` |
+| `HYBRID_AGE_EMBED_URL` | no | Embeddings endpoint (default `http://localhost:11434/v1`) |
+| `HYBRID_AGE_EMBED_MODEL` | no | Overrides `embed_model` when yaml doesn't set it |
+| `HYBRID_AGE_GRAPH` | no | Overrides `graph` when yaml doesn't set it |
+| `HERMES_MEMORY_DSN` | no | Legacy alias honored by `.env.example` tooling |
+| `HERMES_MEMORY_GRAPH` | no | Legacy alias for the graph name |
 
-```bash
-HERMES_MEMORY_DSN=postgres://hermes:***@localhost:5450/hermes_memory
-HERMES_MEMORY_GRAPH=hermes_knowledge
+## Troubleshooting
 
-# Optional overrides
-HYBRID_AGE_EMBED_URL=http://localhost:11434/v1
-HYBRID_AGE_EMBED_MODEL=nomic-embed-text
-```
+- **"char limit raised but nothing more is stored."** `memory_char_limit` /
+  `user_char_limit` cap how much context is *injected per turn* — they do not
+  change what is stored or retrieved. The injection budget is governed by
+  `max_tokens` (default 1200); raising the char limits alone won't surface more memory.
+- **Prefetch silently returns empty after ~8s.** Hermes kills prefetch at 8 seconds.
+  Warm prefetch should run well under 2s. If you're hitting the cap, check that
+  Ollama is reachable (`HYBRID_AGE_EMBED_URL`) and that the HNSW indexes exist
+  (`sql/init/03_indexes.sql`). On any failure the provider returns `""` rather than raising.
+- **A failed Cypher statement poisons the whole transaction.** In AGE, an error
+  aborts the transaction, not just the statement. The store layer wraps every
+  Cypher call in a SAVEPOINT and rolls back to it; keep that pattern if you add SQL
+  (see [docs/age-quirks.md](docs/age-quirks.md)).
+- **`ON CREATE SET` / `ON MATCH SET` don't exist in AGE 1.6** ([plan §3.3](docs/plans/v0.1.md)):
+  use MERGE-then-SET — `MERGE (v:Label {key}) RETURN v;` then
+  `SET v += {props}` in a second statement, keeping the merge key out of the SET map.
+- **GIN index note.** Containment queries issued as raw SQL against the label's
+  underlying table hit the GIN `properties` index (verified with Bitmap Index Scan).
+  Cypher-internal `properties @>` predicates may bypass the index — prefer raw SQL
+  for hot containment lookups.
 
-## Graph Extraction
+## Version compatibility
 
-Run `legacy/scripts/graph_extractor.py` (v0.2 scope) to extract entities from recent conversations into the AGE graph:
-
-```bash
-# Dry run — see what would be extracted
-python3 legacy/scripts/graph_extractor.py --hours 24 --dry-run
-
-# Live run
-python3 legacy/scripts/graph_extractor.py --hours 24
-
-# Via Hermes cron — every 30 minutes
-hermes cron add \
-  --schedule "*/30 * * * *" \
-  --script ~/.hermes/legacy/scripts/graph_extractor.py \
-  --no-agent \
-  --deliver local
-```
-
-Extraction strategy:
-- Capitalized multi-word phrases → Person/Project/Technology/Concept
-- Known technology/project/organization terms
-- Email addresses, GitHub/LinkedIn handles
-- Typed relationships from explicit statements
-- Bounded co-mention edges
-
-## Verification Queries
-
-```sql
--- Total conversations stored
-SELECT COUNT(*) FROM conversations;
-
--- Memory entries
-SELECT COUNT(*) FROM memory_entries;
-
--- Graph vertex counts
-SELECT 'Person' AS label, COUNT(*) FROM hermes_knowledge."Person"
-UNION ALL SELECT 'Project', COUNT(*) FROM hermes_knowledge."Project"
-UNION ALL SELECT 'Technology', COUNT(*) FROM hermes_knowledge."Technology"
-UNION ALL SELECT 'Concept', COUNT(*) FROM hermes_knowledge."Concept"
-ORDER BY 2 DESC;
-
--- Recent graph extractions
-SELECT * FROM memory_chunk_nodes LIMIT 10;
-```
-
-## File Layout
-
-```
-hermes-memory/
-├── provider.py                  # MemoryProvider implementation
-├── requirements.txt             # Python dependencies
-├── pyproject.toml               # Package metadata
-├── Dockerfile                   # Postgres + AGE + pgvector image
-├── docker-compose.yml           # One-command DB startup
-├── .env.example                 # Environment variable template
-├── .gitignore
-├── LICENSE
-├── README.md
-├── docs/
-│   ├── architecture.md          # Write/recall path diagrams
-│   └── age-quirks.md            # AGE gotchas and workarounds
-├── example/
-│   └── init.sql                 # Postgres schema
-└── scripts/
-    ├── graph_extractor.py       # Entity extraction from conversations
-    └── graph_taxonomy.py        # Extraction helper utilities
-```
-
-## How It Works
-
-1. **Turn capture**: After every user/assistant turn, `sync_turn()` enqueues a write to Postgres with an Ollama-generated embedding
-2. **Prefetch**: Before each turn, the provider embeds the current query, searches `conversations` and `memory_entries` via cosine similarity, then expands through the AGE graph
-3. **Budgeted injection**: Selected facts are injected into the system prompt under `Relevant memory context (hybrid vector + graph):`, capped at ~1,200 tokens
+Tested against **Hermes Agent v0.20.x**. Newer Hermes versions regularly add kwargs
+to provider methods; the provider accepts `**kwargs` everywhere, but pin expectations
+until re-tested.
 
 ## License
 

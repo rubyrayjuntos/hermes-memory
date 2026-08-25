@@ -62,21 +62,50 @@ SELECT create_elabel('hermes_knowledge', 'USES');
 SELECT * FROM cypher('hermes_knowledge', $$ CREATE (p:Person {name: 'Ray'}) $$) AS (p agtype);
 ```
 
-## No `ON CREATE SET`
+## No `ON CREATE SET` / `ON MATCH SET` on AGE 1.6
 
-AGE does not support `ON CREATE SET` in `MERGE` or `CREATE`:
+AGE 1.6 (the pinned `apache/age:release_PG17_1.6.0`) does not support
+`ON CREATE SET` or `ON MATCH SET` in `MERGE` — either variant is a syntax error
+at "ON":
 
 ```sql
 -- ❌ Syntax error at "ON"
 MERGE (v:Technology {name: 'PostgreSQL'})
 ON CREATE SET v.created_at = now()
-RETURN v
+RETURN v;
+```
 
--- ✅ Workaround: read-modify-write in two statements
+**Workaround (used throughout `store.py`, per plan §3.3): MERGE-then-SET.**
+
+```sql
+-- ✅ Statement 1: merge on the minimal unique key only
 MERGE (v:Technology {name: 'PostgreSQL'})
 RETURN v;
--- Then SET properties in a second query
+
+-- ✅ Statement 2: set non-key properties afterwards
+SET v += {created_at: ..., version: ...};
 ```
+
+This is semantically equivalent **provided the merge key is never included in
+the SET map** (otherwise you'd overwrite your own unique key). When a PG17
+1.7.x image tag ships, prefer explicit `ON CREATE SET` / `ON MATCH SET`.
+
+## GIN containment: raw SQL hits it, Cypher-internal `@>` may bypass
+
+The per-label GIN index (`properties ag_catalog.gin_agtype_ops`, created in
+`sql/init/03_indexes.sql`) accelerates containment queries issued as **raw SQL**
+against the label's underlying table:
+
+```sql
+-- ✅ Uses the GIN index (verified via Bitmap Index Scan on a seeded 5k-row label)
+SELECT * FROM hermes_knowledge."Technology"
+WHERE properties @> '{"name": "PostgreSQL"}';
+```
+
+A containment predicate written *inside* Cypher (`MATCH (v) WHERE v.properties
+@> ...`) may not use the index. For hot property-containment lookups, prefer
+raw SQL against the label table; reserve Cypher for traversal.
+
 
 ## `coalesce()` Inside `MERGE` SET
 
