@@ -6,7 +6,20 @@ Drop-in memory provider for [Hermes Agent](https://github.com/nousresearch/herme
 
 ## Quick Start
 
+### Docker quick start
+
 ```bash
+cp .env.example .env          # set HERMES_PG_PASSWORD
+docker compose up -d          # builds ./docker, inits schema + graph automatically
+docker compose ps             # wait for "healthy"
+```
+
+The image is Apache AGE (PG17) + pgvector; `sql/init/*.sql` create extensions,
+the `hermes_knowledge` graph, all labels, tables and indexes on first boot.
+Data persists in the `pgdata` volume across `docker compose down/up`.
+
+```bash
+# General quick start
 # 1. Clone
 git clone https://github.com/rubyrayjuntos/hermes-memory.git
 cd hermes-memory
@@ -122,19 +135,19 @@ HYBRID_AGE_EMBED_MODEL=nomic-embed-text
 
 ## Graph Extraction
 
-Run `scripts/graph_extractor.py` to extract entities from recent conversations into the AGE graph:
+Run `legacy/scripts/graph_extractor.py` (v0.2 scope) to extract entities from recent conversations into the AGE graph:
 
 ```bash
 # Dry run — see what would be extracted
-python3 scripts/graph_extractor.py --hours 24 --dry-run
+python3 legacy/scripts/graph_extractor.py --hours 24 --dry-run
 
 # Live run
-python3 scripts/graph_extractor.py --hours 24
+python3 legacy/scripts/graph_extractor.py --hours 24
 
 # Via Hermes cron — every 30 minutes
 hermes cron add \
   --schedule "*/30 * * * *" \
-  --script ~/.hermes/scripts/graph_extractor.py \
+  --script ~/.hermes/legacy/scripts/graph_extractor.py \
   --no-agent \
   --deliver local
 ```

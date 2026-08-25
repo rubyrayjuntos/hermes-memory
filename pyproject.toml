@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-memory"
@@ -32,11 +32,15 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "hypothesis>=6.100",
+    "testcontainers[postgres]>=4.0",
 ]
 
+[project.entry-points."hermes_agent.memory_providers"]
+hybrid-age = "hermes_memory:register"
+
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["provider.py", "scripts/*"]
+where = ["src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

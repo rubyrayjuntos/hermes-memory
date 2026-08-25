@@ -10,7 +10,6 @@ dist/
 build/
 
 # Hermes
-~/.hermes/plugins/hybrid-age/
 *.db
 *.sqlite
 
