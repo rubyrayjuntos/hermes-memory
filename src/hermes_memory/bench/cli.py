@@ -206,7 +206,6 @@ class MetricsEvaluator:
 
 def summarize(config_name: str, results: List[QueryResult]) -> RunMetrics:
     n = max(1, len(results))
-    non_deliberate = [r for r in results if not r.expected_in_pool]  # unused placeholder
     lat = sorted(r.latency_ms for r in results)
 
     def pct(p: float) -> float:
@@ -226,7 +225,6 @@ def summarize(config_name: str, results: List[QueryResult]) -> RunMetrics:
     rm.avg_tokens = sum(r.tokens for r in results) / n
     budget_k = max(0.001, rm.avg_tokens / 1000.0)
     rm.context_efficiency = rm.injection_hit_rate / budget_k
-    del non_deliberate
     return rm
 
 
