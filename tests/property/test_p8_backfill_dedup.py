@@ -1,7 +1,9 @@
 """P8 — backfill dedup-key uniqueness + bridge insert/delete symmetry.
 
 Pure-function portion: the dedup key derivation ``(lower(name), label)`` used
-when backfilling graph vertices is unique per (name, label) pair.
+when backfilling graph vertices is unique per (name, label) pair. The
+derivation under test IS the production one — ``hermes_memory.store.dedup_key``
+— so the property suite cannot drift from src.
 
 Bridge insert/delete symmetry requires the DB — the integration-marked twin of
 this test lives in tests/integration/test_smoke.py and runs under the
@@ -9,29 +11,17 @@ this test lives in tests/integration/test_smoke.py and runs under the
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from strategies import real_module_names  # noqa: F401  (suite convention)
+
+from hermes_memory.store import dedup_key  # noqa: E402
 
 LABELS = st.sampled_from([
     "Person", "Project", "Technology", "Organization", "Concept", "Domain",
     "Skill", "Tool", "Repo", "File", "Module", "Dependency",
 ])
-
-
-def dedup_key(name: str, label: str):
-    """The canonical vertex identity used for MERGE/backfill dedup.
-
-    Mirrors the store's minimal-unique-key rule: entities merge on lowercased
-    name within their label. Extracted here as the property-test surface; the
-    production MERGE in store.py/ingest.py must agree with it.
-    """
-    return (name.strip().lower(), label)
 
 
 @settings(max_examples=300)

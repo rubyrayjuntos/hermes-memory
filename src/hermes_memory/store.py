@@ -93,6 +93,17 @@ def savepoint_name(prefix: str, idx: int) -> str:
 _savepoint_name = savepoint_name  # backwards-compatible alias
 
 
+def dedup_key(name: str, label: str) -> Tuple[str, str]:
+    """Canonical vertex identity for MERGE/backfill dedup (public API).
+
+    Entities merge on lowercased, whitespace-trimmed name within their label.
+    This is the single derivation used by backfill dedup; the property suite
+    in tests/property/test_p8_backfill_dedup.py pins it against this function
+    rather than a local copy.
+    """
+    return (name.strip().lower(), label)
+
+
 class Store:
     """Async data access over the pgvector + AGE schema."""
 

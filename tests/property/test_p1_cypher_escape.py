@@ -5,13 +5,9 @@ arbitrary text can never break out of a Cypher string literal.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
 from hypothesis import given, settings
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from strategies import adversarial_text  # noqa: E402
 

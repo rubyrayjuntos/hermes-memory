@@ -5,14 +5,11 @@ Also covers chunk_text losslessness (the P-surface C4 flagged).
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from strategies import any_text  # noqa: E402
 

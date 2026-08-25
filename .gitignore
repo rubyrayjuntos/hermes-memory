@@ -22,3 +22,10 @@ Thumbs.db
 .vscode/
 *.swp
 *.swoop
+
+# Tooling caches
+.hypothesis/
+.pytest_cache/
+
+# lockfile policy undecided — do not commit until decided
+uv.lock

@@ -5,16 +5,17 @@ unbounded and stores only capitalized phrases.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-
-from strategies import any_text, python_import_names  # noqa: E402
+# Artifact names drawn from the same classes the production heuristic targets;
+# shared with every other P-suite via tests/strategies.py.
+from strategies import (  # noqa: E402
+    any_text,
+    module_artifacts,
+    python_import_names,
+    real_module_names,
+)
 
 from hermes_memory.ingest import (  # noqa: E402
     _is_module_name,
@@ -24,22 +25,8 @@ from hermes_memory.ingest import (  # noqa: E402
 )
 from hermes_memory.provider import HybridAgeMemoryProvider  # noqa: E402
 
-# Artifact names drawn from the same classes the production heuristic targets.
-module_artifacts = st.sampled_from([
-    "deadbeef", "DEADBEEF01", "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
-    "550e8400-e29b-41d4-a716-446655440000",
-    "550E8400E29B41D4A716446655440000",
-    "123456", "17092345678901",
-    "src", "lib", "app", "__pycache__", "node_modules", "dist", "build",
-    "target", ".git", ".venv", "venv", "site-packages", "cache", "tmp",
-    "artifacts", "mlruns", "checkpoints", "logs", "output", "tests",
-    "fixtures", "..", ".", "",
-])
-
-real_module_names = st.from_regex(
-    r"[a-zA-Z][a-zA-Z0-9_-]{1,29}", fullmatch=True
-).filter(_is_module_name)
-
+# Tighten the shared regex-based strategy with the production heuristic.
+real_module_names = real_module_names.filter(_is_module_name)
 
 # -- P5 -----------------------------------------------------------------------
 
