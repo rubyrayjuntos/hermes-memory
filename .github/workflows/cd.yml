@@ -1,0 +1,31 @@
+name: CD Release
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive version from tags
+        id: ver
+        run: |
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "last=$LAST" >> "$GITHUB_OUTPUT"
+          # Release only when HEAD is exactly on a tag; otherwise skip (manual tag = manual release)
+          HEAD_TAG=$(git tag --points-at HEAD | head -1)
+          echo "head_tag=$HEAD_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release for tagged commit
+        if: steps.ver.outputs.head_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.head_tag }}
+          generate_release_notes: true

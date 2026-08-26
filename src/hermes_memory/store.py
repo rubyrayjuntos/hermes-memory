@@ -78,6 +78,17 @@ def check_label(label: str) -> str:
     return label
 
 
+def validate_graph_name(graph: str) -> str:
+    """Validate a graph name for safe interpolation into cypher('...', $$...$$).
+
+    Public API. Raises ValueError on names outside [_SAFE_IDENT]. Called once
+    at Store construction; from then on the stored value is trusted.
+    """
+    if not _SAFE_IDENT.match(graph or ""):
+        raise ValueError(f"invalid AGE graph name: {graph!r}")
+    return graph
+
+
 _check_label = check_label  # backwards-compatible alias
 
 
@@ -114,8 +125,10 @@ class Store:
     """Async data access over the pgvector + AGE schema."""
 
     def __init__(self, pool: asyncpg.Pool, graph_name: str = "hermes_knowledge"):
+        # Validated once here; the f-string cypher wrappers in this module
+        # interpolate ONLY this vetted value (issue #10).
+        self.graph_name = validate_graph_name(graph_name)
         self.pool = pool
-        self.graph_name = graph_name
 
     async def load_age(self, conn) -> None:
         await conn.execute("LOAD 'age';")
@@ -271,7 +284,7 @@ class Store:
             return []
         ids_literal = "[" + ", ".join(str(int(i)) for i in seed_vertex_ids) + "]"
         rels = ", ".join(age_str(r) for r in rel_types)
-        graph = self.graph_name.replace("'", "")
+        graph = self.graph_name
         cypher = f"""
             SELECT * FROM cypher('{graph}', $$
                 MATCH (n)
@@ -312,7 +325,7 @@ class Store:
         """
         results: List[Optional[str]] = []
         items = list(items)
-        graph = self.graph_name.replace("'", "")
+        graph = self.graph_name
 
         for start in range(0, len(items), batch_size):
             chunk_items = items[start : start + batch_size]
@@ -371,7 +384,7 @@ class Store:
         """MERGE edges on (start, end, label); SAVEPOINT-guarded, batched."""
         done = 0
         edges = list(edges)
-        graph = self.graph_name.replace("'", "")
+        graph = self.graph_name
         for start in range(0, len(edges), batch_size):
             chunk_edges = edges[start : start + batch_size]
             async with self.pool.acquire() as conn:
