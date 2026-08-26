@@ -1,0 +1,45 @@
+name: Meta GitHub Agent
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, synchronize]
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  meta-agent:
+    if: ${{ vars.META_AGENT_ENABLED == 'true' && secrets.MODEL_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenCode
+        run: |
+          curl -fsSL https://opencode.dev/install.sh | bash -s -- -y
+          echo "$HOME/.opencode/bin" >> $GITHUB_PATH
+
+      - name: Run agent
+        env:
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT: ${{ toJson(github.event) }}
+        run: |
+          case "${{ github.event_name }}" in
+            issue_comment)
+              opencode --agent triage --no-interactive
+              ;;
+            pull_request)
+              opencode --agent review --no-interactive
+              ;;
+            issues)
+              opencode --agent triage --no-interactive
+              ;;
+          esac
