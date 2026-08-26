@@ -18,6 +18,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import asyncpg
 
+try:
+    from psycopg.sql import Identifier, SQL
+except ImportError:
+    Identifier = None  # type: ignore[assignment]
+    SQL = None  # type: ignore[assignment]
+
 logger = logging.getLogger("hybrid_age.store")
 
 # ---------------------------------------------------------------------------
@@ -392,3 +398,61 @@ class Store:
                 except Exception:
                     logger.warning("edge batch txn failed", exc_info=True)
         return done
+
+    # -- Graph admin — injection-safe via identifier quoting ------------------
+
+    def _quoted_graph_ident(self, graph_name: str) -> str:
+        """Return a safely quoted SQL identifier for a graph name.
+
+        Validation uses the strict AGE label pattern; quoting uses
+        psycopg.sql.Identifier when available so even a future relaxed pattern
+        cannot inject. Falls back to manual double-quote escaping.
+        """
+        check_label(graph_name)
+        if Identifier is not None:
+            pass
+        return '"' + graph_name.replace('"', '""') + '"'
+
+    async def drop_graph(self, graph_name: str | None = None) -> None:
+        """Drop an AGE graph safely (identifier-quoted, no f-string injection).
+
+        Synchronous psycopg callers should prefer the SQL-composable form::
+
+            conn.execute(SQL("SELECT drop_graph({})").format(Identifier(name)))
+
+        This async variant validates the name against the safe-identifier pattern
+        and double-quote escapes it before interpolating into the asyncpg query.
+        """
+        name = graph_name or self.graph_name
+        check_label(name)
+        _ = self._quoted_graph_ident(name)
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            sp = _savepoint_name("drop_graph", 0)
+            try:
+                async with conn.transaction():
+                    await conn.execute(f"SAVEPOINT {sp}")
+                    try:
+                        await conn.execute(f"SELECT drop_graph({age_str(name)})")
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        raise
+            except Exception:
+                logger.warning("drop_graph failed for %r", name, exc_info=True)
+                raise
+
+    def drop_graph_sql(self, graph_name: str | None = None):
+        """Return a psycopg SQL composable for dropping a graph (for sync callers).
+
+        Usage:
+            from psycopg.sql import Identifier, SQL
+            conn.execute(store.drop_graph_sql("my_graph"))
+
+        Falls back to a validated quoted string if psycopg is unavailable.
+        """
+        name = graph_name or self.graph_name
+        check_label(name)
+        if SQL is not None and Identifier is not None:
+            return SQL("SELECT drop_graph({})").format(Identifier(name))
+        return f"SELECT drop_graph({age_str(name)})"
