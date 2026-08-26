@@ -1,0 +1,26 @@
+{
+  "description": "Branch protection for main — require PR, status checks, conversation resolution. Apply via gh api.",
+  "endpoint": "PUT /repos/{owner}/{repo}/branches/main/protection",
+  "gh_command": "gh api repos/rubyrayjuntos/hermes-memory/branches/main/protection -X PUT --input scripts/branch_protection.json",
+  "alternative_gh_command": "gh api repos/rubyrayjuntos/hermes-memory/branches/main/protection -X PUT -F required_status_checks[strict]=true -F required_status_checks[contexts][]='property tests (py3.11)' -F required_status_checks[contexts][]='property tests (py3.12)' -F required_status_checks[contexts][]='integration (pgvector service)' -F enforce_admins=true -F required_pull_request_reviews[required_approving_review_count]=1 -F required_pull_request_reviews[dismiss_stale_reviews]=true -F required_pull_request_reviews[require_code_owner_reviews]=false -F required_conversation_resolution=true --silent",
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "property tests (py3.11)",
+      "property tests (py3.12)",
+      "integration (pgvector service)"
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false,
+    "require_last_push_approval": false
+  },
+  "restrictions": null,
+  "required_conversation_resolution": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_linear_history": false
+}
