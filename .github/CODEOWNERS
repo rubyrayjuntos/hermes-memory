@@ -1,0 +1,11 @@
+# CODEOWNERS — required reviewers per path
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings/managing-teams-and-people/about-code-owners
+# All entries require at least one owner; @rubyrayjuntos is the default owner.
+
+* @rubyrayjuntos
+
+# Sensitive / infrastructure paths — PRs touching these require explicit owner review
+/scripts/migrate.py @rubyrayjuntos
+/scripts/architect.py @rubyrayjuntos
+/.github/workflows/ @rubyrayjuntos
+/sql/migrations/ @rubyrayjuntos
