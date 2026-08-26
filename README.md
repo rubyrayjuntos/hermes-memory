@@ -1,5 +1,5 @@
 <img width="2048" height="1152" alt="hermes_librarian_banner" src="https://github.com/user-attachments/assets/109ea41f-2787-443f-a815-18139f80da4c" />
-**📜The Hermes Librarian📜**
+# 📜 The Hermes Librarian 📜
 
 **Persistent memory & context injection for [Hermes Agent](https://github.com/nousresearch/hermes-agent)** —
 pgvector for semantic recall + Apache AGE knowledge graph for entity expansion,
