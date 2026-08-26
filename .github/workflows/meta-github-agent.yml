@@ -15,31 +15,56 @@ permissions:
 
 jobs:
   meta-agent:
-    if: ${{ vars.META_AGENT_ENABLED == 'true' && secrets.MODEL_API_KEY != '' }}
+    # Only run for trusted actors (org members, collaborators, or CODEOWNERS)
+    if: >
+      vars.META_AGENT_ENABLED == 'true' &&
+      secrets.MODEL_API_KEY != '' &&
+      (
+        github.event.sender.type == 'User' &&
+        (
+          github.event.sender.site_admin == true ||
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) ||
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) ||
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - name: Install OpenCode
+        env:
+          OPENCODE_VERSION: "0.1.116"
         run: |
-          curl -fsSL https://opencode.dev/install.sh | bash -s -- -y
-          echo "$HOME/.opencode/bin" >> $GITHUB_PATH
+          curl -fsSL "https://github.com/sst/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64" \
+            -o /tmp/opencode
+          curl -fsSL "https://github.com/sst/opencode/releases/download/v${OPENCODE_VERSION}/checksums.txt" \
+            -o /tmp/opencode-checksums.txt
+          grep "opencode-linux-x64" /tmp/opencode-checksums.txt | sha256sum -c -
+          chmod +x /tmp/opencode
+          sudo mv /tmp/opencode /usr/local/bin/opencode
 
-      - name: Run agent
+      - name: Run triage agent (issues only)
+        if: github.event_name == 'issues'
         env:
           MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT: ${{ toJson(github.event) }}
-        run: |
-          case "${{ github.event_name }}" in
-            issue_comment)
-              opencode --agent triage --no-interactive
-              ;;
-            pull_request)
-              opencode --agent review --no-interactive
-              ;;
-            issues)
-              opencode --agent triage --no-interactive
-              ;;
-          esac
+        run: opencode --agent triage --no-interactive
+
+      - name: Run triage agent (issue comments only, not PR comments)
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request == null
+        env:
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT: ${{ toJson(github.event) }}
+        run: opencode --agent triage --no-interactive
+
+      - name: Run review agent (pull requests)
+        if: github.event_name == 'pull_request'
+        env:
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT: ${{ toJson(github.event) }}
+        run: opencode --agent review --no-interactive

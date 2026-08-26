@@ -5,7 +5,6 @@ tools:
   - read
   - grep
   - glob
-  - bash
 allowlist:
   - "*.md"
   - "*.py"

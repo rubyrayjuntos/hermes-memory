@@ -5,7 +5,6 @@ tools:
   - read
   - grep
   - glob
-  - bash
 allowlist:
   - "*.md"
   - "*.py"
@@ -44,4 +43,8 @@ Also assign:
 
 ## Output
 
-Post a comment on the issue with the triage decision and reasoning.
+Post a single comment on the issue using exactly this format:
+```
+triage: <label>[, <label2>]
+```
+No additional text, reasoning, or prose outside the code block.
