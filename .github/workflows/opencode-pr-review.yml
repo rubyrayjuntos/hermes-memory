@@ -9,12 +9,11 @@ on:
 
 jobs:
   review:
-    # Skip gracefully when MODEL_API_KEY is not configured — prevents
-    # "APIError: Unauthorized: invalid_api_key" comment spam on every PR.
-    # Set the secret via: gh secret set MODEL_API_KEY --body "$KEY"
-    # (or Settings → Secrets → Actions → New repository secret).
-    if: ${{ secrets.MODEL_API_KEY != '' }}
     runs-on: ubuntu-latest
+    # `secrets` not available in `jobs.*.if` on pull_request events, so
+    # expose it as env and gate at the step level instead (Codex P1 on #26).
+    env:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
     permissions:
       id-token: write
       contents: read
@@ -26,9 +25,10 @@ jobs:
           fetch-depth: 0          # full history so the review agent can diff against base
           persist-credentials: true
       - uses: anomalyco/opencode/github@latest
+        if: ${{ env.MODEL_API_KEY != '' }}
         continue-on-error: true
         env:
-          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          MODEL_API_KEY: ${{ env.MODEL_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: model_api/muse-spark-1.1

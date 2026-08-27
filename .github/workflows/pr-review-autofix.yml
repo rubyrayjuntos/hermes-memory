@@ -1,0 +1,75 @@
+# Waits for Codex/Copilot/opencode reviews on a PR and auto-fixes when they land.
+# Two trigger paths:
+# 1) GitHub: `pr-review-autofix` reacts to review/comment events and opens a fixup push.
+# 2) Local: `scripts/pr-wait-and-fix.sh <pr>` polls `gh pr checks` + review threads
+#    for maintainers who prefer a local wait after `gh pr create`.
+#
+# Uses pull_request event (read-only token for forks) and gates on env at
+# step level — `secrets` is unavailable in `jobs.*.if` on pull_request (Codex P1).
+name: pr-review-autofix
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  autofix:
+    # Only for PR comments, not bare issues. `issue_comment` also fires for issues,
+    # so filter to pull requests via `issue.pull_request`.
+    if: >-
+      ${{
+        github.event.pull_request != null ||
+        github.event.issue.pull_request != null
+      }}
+    runs-on: ubuntu-latest
+    # Expose secret as job env so `if: env.*` is evaluable in steps.
+    env:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # For `issue_comment` the PR head is in `issue.number`; fetch the PR branch.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Resolve PR number
+        id: pr
+        run: |
+          if [ -n "${{ github.event.pull_request.number }}" ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate - skip if MODEL_API_KEY not set
+        if: ${{ env.MODEL_API_KEY == '' }}
+        run: echo "::notice::MODEL_API_KEY not set — skipping autofix (set via gh secret set MODEL_API_KEY)."
+
+      - uses: anomalyco/opencode/github@latest
+        if: ${{ env.MODEL_API_KEY != '' }}
+        env:
+          MODEL_API_KEY: ${{ env.MODEL_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: model_api/muse-spark-1.1
+          agent: bugfix
+          use_github_token: true
+          prompt: |
+            You are the autofix agent for PR #${{ steps.pr.outputs.number }}.
+            1) Fetch review threads: `gh pr view ${{ steps.pr.outputs.number }} --json reviews,comments --jq .` and `gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/comments`.
+            2) Identify actionable P1/P2 findings from Codex/Copilot/opencode that have a concrete file:line and fix suggestion. Ignore nits unless trivial.
+            3) Apply minimal patches (prefer `patch` tool, one file at a time). Keep the fix scoped to the comment. Do NOT reformat unrelated code.
+            4) Run `pytest -q -m "not integration"` and `python -m py_compile` on touched files. Iterate until green.
+            5) Commit as `fix(review): address P1 — <one-line>` and push to the PR branch with `git push`. Do NOT merge, approve, or close the PR. If no actionable P1/P2 remains, post a comment "No autofix needed — reviews are nits/docs only." and exit.
