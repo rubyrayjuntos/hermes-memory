@@ -98,7 +98,7 @@ git fetch --prune
 ```bash
 # once
 gh repo fork rubyrayjuntos/hermes-memory --clone
-git remote add upstream https://github.com/rubyrayjuntos/hermes-memory.git
+git remote add upstream https://github.com/rubyrayjuntos/hermes-memory.git 2>/dev/null || git remote set-url upstream https://github.com/rubyrayjuntos/hermes-memory.git
 
 # every time before you branch
 git fetch --all --prune
