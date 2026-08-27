@@ -39,8 +39,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # For `issue_comment` the PR head is in `issue.number`; fetch the PR branch.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: true
 
@@ -53,6 +51,15 @@ jobs:
             echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Checkout PR branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout "${{ steps.pr.outputs.number }}" --force
+
+      - name: Configure bot git identity (github-actions[bot])
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Gate - skip if MODEL_API_KEY not set
         if: ${{ env.MODEL_API_KEY == '' }}
         run: echo "::notice::MODEL_API_KEY not set — skipping autofix (set via gh secret set MODEL_API_KEY)."
