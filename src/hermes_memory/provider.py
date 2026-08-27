@@ -16,6 +16,8 @@ Contract highlights:
 from __future__ import annotations
 
 import asyncio
+import datetime
+import hashlib
 import json
 import logging
 import os
@@ -229,6 +231,23 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
         meta = dict(metadata or {})
         meta.setdefault("session_id", self._session_id)
+        # C: auto-enrich librarian taxonomy so direct memory() writes never
+        # violate the Data Taxonomy contract (doc_type/file_path/hash/
+        # language/indexed_at). See issue #17: direct writes via the memory
+        # tool previously persisted only {task_id, platform, ...} and left
+        # hash/doc_type NULL, creating false-positive drift and zero bridge
+        # rows. File-backed docs (via ingest) already carry file_path; user
+        # prefs lack it and should default to user_preference.
+        if not meta.get("hash"):
+            meta["hash"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if not meta.get("doc_type"):
+            meta["doc_type"] = (
+                "user_preference" if not meta.get("file_path") else "api_reference"
+            )
+        if not meta.get("language"):
+            meta["language"] = "Text"
+        if not meta.get("indexed_at"):
+            meta["indexed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self._enqueue_write({
             "type": "memory",
             "action": action,
