@@ -114,7 +114,7 @@ Branch protection requires `main` to be up to date before merge, so CI will warn
 ## Pull Requests
 
 1. Fork the repo (or claim a board card)
-2. Create a `wip/<card-id>` or feature branch — never push `stash`, `local-sync`, or snapshot branches
+2. Create a `wip/<card-id>` or feature branch — never push `stash/*`, `local-sync/*`, or snapshot branches
 3. Commit your changes (card prefix, e.g. `C4: ...`)
 4. Ensure the property suite passes (and integration tests if you touched store/ingest)
 5. Open a PR — fill out the template; when it squash-merges, delete the branch the same day (see above)
