@@ -33,7 +33,7 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 import asyncpg
 
-from .store import age_props, age_str, check_label, savepoint_name
+from .store import age_props, age_str, check_label, savepoint_name, validate_graph_name
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("hybrid_age.loadgen")
@@ -132,7 +132,7 @@ def build_corpus(size: int, seed: int) -> List[dict]:
 class LoadGen:
     def __init__(self, dsn: str, graph_name: str = GRAPH_NAME):
         self.dsn = dsn
-        self.graph_name = graph_name.replace("'", "")
+        self.graph_name = validate_graph_name(graph_name)
         self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:

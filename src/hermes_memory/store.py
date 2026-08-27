@@ -443,18 +443,6 @@ class Store:
 
     # -- Graph admin — injection-safe via identifier quoting ------------------
 
-    def _quoted_graph_ident(self, graph_name: str) -> str:
-        """Return a safely quoted SQL identifier for a graph name.
-
-        Validation uses the strict AGE label pattern; quoting uses
-        psycopg.sql.Identifier when available so even a future relaxed pattern
-        cannot inject. Falls back to manual double-quote escaping.
-        """
-        check_label(graph_name)
-        if Identifier is not None:
-            pass
-        return '"' + graph_name.replace('"', '""') + '"'
-
     async def drop_graph(self, graph_name: str | None = None) -> None:
         """Drop an AGE graph safely (identifier-quoted, no f-string injection).
 
@@ -467,7 +455,6 @@ class Store:
         """
         name = graph_name or self.graph_name
         check_label(name)
-        _ = self._quoted_graph_ident(name)
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
             sp = _savepoint_name("drop_graph", 0)

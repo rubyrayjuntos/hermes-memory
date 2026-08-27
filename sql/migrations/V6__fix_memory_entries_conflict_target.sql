@@ -31,6 +31,3 @@ END $$;
 -- 3. drop the now-redundant md5 expression index
 DROP INDEX IF EXISTS memory_entries_unique_hash;
 
-INSERT INTO schema_migrations (filename, applied_at)
-VALUES ('006_fix_memory_entries_conflict_target.sql', now())
-ON CONFLICT (filename) DO NOTHING;

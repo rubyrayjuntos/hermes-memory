@@ -263,16 +263,25 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
         try:
             fut = asyncio.run_coroutine_threadsafe(self._put_nowait(item), self._loop)
-            # Fire-and-forget: only wait long enough to catch an immediate
-            # QueueFull; never block the turn thread on the loop.
-            fut.result(0)
+
+            def _done(f) -> None:
+                try:
+                    f.result()
+                except asyncio.QueueFull:
+                    self._dropped_writes += 1
+                    logger.warning("hybrid-age write queue full (dropped=%d)", self._dropped_writes)
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.debug("enqueue failed (callback)", exc_info=True)
+
+            fut.add_done_callback(_done)
+            # wait briefly for immediate QueueFull; TimeoutError means still
+            # in flight — _done will handle a late QueueFull so we don't
+            # miscount or block the turn thread (Copilot 3868002159 + Codex P2).
+            fut.result(0.05)
         except asyncio.TimeoutError:
-            # Enqueue is still in flight — it will land unless the queue is
-            # full at that moment; count conservatively as a dropped write.
-            self._dropped_writes += 1
-        except asyncio.QueueFull:
-            self._dropped_writes += 1
-            logger.warning("hybrid-age write queue full (dropped=%d)", self._dropped_writes)
+            logger.debug("enqueue in flight (queue not full)")
         except Exception:
             logger.debug("enqueue failed", exc_info=True)
 
