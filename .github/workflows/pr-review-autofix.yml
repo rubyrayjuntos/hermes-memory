@@ -1,0 +1,113 @@
+# Waits for Codex/Copilot/opencode reviews on a PR and auto-fixes when they land.
+# Triggers: pull_request_review / pull_request_review_comment / issue_comment
+# (all delivered as PR contexts) + workflow_run of opencode-pr-review.
+# opencode reviews use GITHUB_TOKEN and do not re-trigger review events
+# (GitHub suppresses workflows from GITHUB_TOKEN), so workflow_run covers
+# that path. Copilot/Codex do trigger the review events.
+#
+# Two complementary paths:
+# 1) GitHub: `pr-review-autofix` reacts to review/comment events and pushes a fixup.
+# 2) Local: `scripts/pr-wait-and-fix.sh <pr>` polls `gh pr checks` + review threads
+#    after `gh pr create` for maintainers who prefer a local wait.
+#
+# Security: job only runs for same-repo PRs (fork PRs get no secrets) and
+# only when triggered by trusted actors/bots or maintainer association.
+# PR branch is checked out via `gh pr checkout` (branch, not detached SHA)
+# so `git push` updates the PR. `secrets` unavailable in `jobs.*.if` on
+# pull_request — expose as env and gate at step level (Codex P1 on #26).
+name: pr-review-autofix
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: ["opencode-pr-review"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  autofix:
+    # Gate: only PR contexts (issue_comment fires for bare issues too), and
+    # only same-repo PRs — forks have head.repo.fork == true and get no secrets.
+    # Also restrict to trusted initiators to avoid arming secrets on attacker reviews.
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+        (
+          (github.event.pull_request != null || github.event.issue.pull_request != null) &&
+          (
+            contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+              github.event.review.author_association || github.event.comment.author_association || '')
+            ||
+            contains(fromJSON('["copilot-pull-request-reviewer[bot]","chatgpt-codex-connector[bot]","github-actions[bot]"]'),
+              github.actor)
+          )
+        )
+      }}
+    runs-on: ubuntu-latest
+    env:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Resolve PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # workflow_run has no PR number directly — derive from head_branch
+            BR="${{ github.event.workflow_run.head_branch }}"
+            NUM=$(gh pr list --state open --json number,headRefName --jq ".[] | select(.headRefName==\"$BR\") | .number")
+            echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.pull_request.number }}" ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate PR and checkout branch
+        if: ${{ steps.pr.outputs.number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ steps.pr.outputs.number }}"
+          # Guard: skip forks (no secrets, untrusted code with write+MODEL_API_KEY)
+          IS_FORK=$(gh pr view "$PR" --json isCrossRepository --jq .isCrossRepository)
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::notice::Skipping fork PR #$PR (same-repo only for secrets+write)."
+            exit 0
+          fi
+          gh pr checkout "$PR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git status --short
+
+      - name: Gate — skip if MODEL_API_KEY not set
+        if: ${{ env.MODEL_API_KEY == '' }}
+        run: echo "::notice::MODEL_API_KEY not set — skipping autofix (set via gh secret set MODEL_API_KEY)."
+
+      - uses: anomalyco/opencode/github@latest
+        if: ${{ steps.pr.outputs.number != '' && env.MODEL_API_KEY != '' }}
+        env:
+          MODEL_API_KEY: ${{ env.MODEL_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: model_api/muse-spark-1.1
+          agent: bugfix
+          use_github_token: true
+          prompt: |
+            You are the autofix agent for PR #${{ steps.pr.outputs.number }}.
+            1) Fetch review threads: `gh pr view ${{ steps.pr.outputs.number }} --json reviews,comments --jq .` and `gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/comments`.
+            2) Identify actionable P1/P2 findings from Codex/Copilot/opencode that have a concrete file:line and fix suggestion. Ignore nits unless trivial.
+            3) Apply minimal patches (prefer `patch` tool, one file at a time). Keep the fix scoped to the comment. Do NOT reformat unrelated code.
+            4) Run `pytest -q -m "not integration"` and `python -m py_compile` on touched files. Iterate until green.
+            5) Commit as `fix(review): address P1 — <one-line>` and push to the PR branch with `git push`. Do NOT merge, approve, or close the PR. If no actionable P1/P2 remains, post a comment "No autofix needed — reviews are nits/docs only." and exit.
