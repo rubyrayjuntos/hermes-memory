@@ -4,7 +4,7 @@
 # 2) Local: `scripts/pr-wait-and-fix.sh <pr>` polls `gh pr checks` + review threads
 #    for maintainers who prefer a local wait after `gh pr create`.
 #
-# Uses pull_request event (read-only token for forks) and gates on env at
+# Uses review/comment events and gates on env at
 # step level — `secrets` is unavailable in `jobs.*.if` on pull_request (Codex P1).
 name: pr-review-autofix
 
