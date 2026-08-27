@@ -9,6 +9,11 @@ on:
 
 jobs:
   review:
+    # Skip gracefully when MODEL_API_KEY is not configured — prevents
+    # "APIError: Unauthorized: invalid_api_key" comment spam on every PR.
+    # Set the secret via: gh secret set MODEL_API_KEY --body "$KEY"
+    # (or Settings → Secrets → Actions → New repository secret).
+    if: ${{ secrets.MODEL_API_KEY != '' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
