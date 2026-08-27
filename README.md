@@ -33,6 +33,7 @@ cp .env.example .env
 # 3. Start Postgres 17 + Apache AGE 1.6 + pgvector on 127.0.0.1:5450
 docker compose up -d
 docker compose ps        # wait until "healthy"
+# Need connection pooling? `docker compose --profile pooled up -d` also starts PgBouncer on 127.0.0.1:6432
 # sql/init/*.sql create extensions, the hermes_knowledge graph, all labels,
 # tables and indexes automatically on first boot.
 # Data persists in the pgdata volume across docker compose down/up.
