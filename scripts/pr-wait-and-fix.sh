@@ -31,7 +31,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage; exit 0;;
     --wait)
-      [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "--wait requires an integer SECONDS argument" >&2; usage; exit 2; }
+      if [[ $# -lt 2 ]]; then echo "--wait requires a value (seconds)" >&2; exit 2; fi
+      if ! [[ "$2" =~ ^[0-9]+$ ]]; then echo "--wait requires an integer, got: $2" >&2; exit 2; fi
       WAIT="$2"; shift 2;;
     --autofix) AUTOFIX=1; shift;;
     [0-9]*) PR="$1"; shift;;
@@ -56,10 +57,28 @@ else
   gh pr checks "$PR" --watch 2>&1 | tail -20 || true
 fi
 
-sleep 10  # reviews often land 10-30s after checks
+# 2) Poll for reviews (gh pr checks does not wait for reviews — Codex/Copilot
+#    arrive 10-60s after checks). Poll until a review appears or WAIT expires.
+echo ""
+echo "== Polling for reviews (up to ${WAIT}s) =="
+DEADLINE=$(( $(date +%s) + WAIT ))
+FOUND=0
+while [[ $(date +%s) -lt $DEADLINE ]]; do
+  COUNT=$(gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo 0)
+  if [[ "$COUNT" -gt 0 ]]; then
+    echo "Found $COUNT review(s) — fetching threads..."
+    FOUND=1
+    break
+  fi
+  echo "No reviews yet — sleeping 15s..."
+  sleep 15
+done
+if [[ "$FOUND" -eq 0 ]]; then
+  echo "No reviews appeared within ${WAIT}s — fetching whatever threads exist..."
+fi
 
 echo ""
-echo "== Fetching review threads =="
+echo "== Review summaries =="
 gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/pulls/$PR/reviews" --jq '.[] | "\(.user.login) \(.state) \(.body[0:120])"' 2>&1 | head -20 || true
 echo "---"
 gh api graphql -f query='
@@ -78,7 +97,6 @@ if [[ "$AUTOFIX" -eq 1 ]]; then
   fi
   echo ""
   echo "== Triggering local opencode fix (agent: bugfix) =="
-  # Requires `opencode` CLI installed; falls back to printing guidance.
   if command -v opencode >/dev/null 2>&1; then
     opencode run --agent bugfix --prompt "Address P1/P2 review threads on PR #$PR — fetch threads, patch minimally, run pytest -q -m 'not integration', push fixup." || echo "opencode run failed — apply threads manually"
   else
