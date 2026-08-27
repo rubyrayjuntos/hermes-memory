@@ -86,7 +86,7 @@ git config --global branch.autoSetupMerge simple
 
 ```bash
 # after any PR merges — yours or anyone else's — fast-forward local trunk
-git checkout main && git pull origin main
+git checkout main && git pull --ff-only origin main
 # then delete the disposable branch (local + remote were scratch)
 git branch -d wip/my-fix 2>/dev/null || git branch -D wip/my-fix
 git push origin --delete wip/my-fix 2>/dev/null || true
