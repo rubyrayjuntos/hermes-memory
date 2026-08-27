@@ -467,7 +467,6 @@ class Store:
         """
         name = graph_name or self.graph_name
         check_label(name)
-        _ = self._quoted_graph_ident(name)
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
             sp = _savepoint_name("drop_graph", 0)

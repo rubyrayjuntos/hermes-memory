@@ -31,6 +31,7 @@ import asyncpg
 
 from .config import HybridAgeConfig, load_config
 from .embed import Embedder, vec_to_literal
+from .store import validate_graph_name
 
 logger = logging.getLogger("hybrid_age.ingest")
 
@@ -382,7 +383,7 @@ class Ingestor:
                 logger.warning("prune failed for %s", fp, exc_info=True)
 
     def _graph(self) -> str:
-        return self.config.graph.replace("'", "")
+        return validate_graph_name(self.config.graph)
 
     # -- per-file pipeline ----------------------------------------------------
 
