@@ -637,6 +637,7 @@ if __name__ == "__main__":
 
 Utility script for injecting synthetic records and graph relationships to test scaling behavior:
 
+{% raw %}
 ```py
 import os
 import random
@@ -732,6 +733,7 @@ if __name__ == "__main__":
         exit(1)
     run_synthetic_load(db_dsn, args.size)
 ```
+{% endraw %}
 
 ## 12.2 Configuration Module (src/hermes\_memory/config.py)
 
