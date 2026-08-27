@@ -26,8 +26,8 @@ jobs:
     # so filter to pull requests via `issue.pull_request`.
     if: >-
       ${{
-        github.event.pull_request != null ||
-        github.event.issue.pull_request != null
+        (github.event.pull_request != null && github.event.pull_request.head.repo.full_name == github.repository) ||
+        (github.event.issue.pull_request != null && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR'))
       }}
     runs-on: ubuntu-latest
     # Expose secret as job env so `if: env.*` is evaluable in steps.
