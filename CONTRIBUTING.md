@@ -68,13 +68,56 @@ Schema changes follow [plan §3.3](docs/plans/v0.1.md):
 | `legacy/scripts/graph_*.py` | v0.2-scope extraction prototypes — not shipped |
 | `docs/` | Architecture deep dive, AGE quirks, plans |
 
+## Keeping your local in sync (trunk-based — please read before you start)
+
+`main` is the **only durable branch**. Every `wip/<card-id>` is a disposable scratch checkout that is deleted the day its PR squash-merges. Nothing lives long outside `main`.
+
+```bash
+# run before you start AND before you stop — always
+git fetch --prune && git status && git worktree list && git branch -vv
+
+# make pulls auto-sync and auto-prune (one-time)
+git config --global fetch.prune true
+git config --global pull.rebase true
+git config --global branch.autoSetupMerge simple
+```
+
+**Maintainers (push to `origin` directly):**
+
+```bash
+# after any PR merges — yours or anyone else's — fast-forward local trunk
+git checkout main && git pull origin main
+# then delete the disposable branch (local + remote were scratch)
+git branch -d wip/my-fix 2>/dev/null || git branch -D wip/my-fix
+git push origin --delete wip/my-fix 2>/dev/null || true
+git fetch --prune
+```
+
+**External contributors (fork workflow — required for OSS):**
+
+```bash
+# once
+gh repo fork rubyrayjuntos/hermes-memory --clone
+git remote add upstream https://github.com/rubyrayjuntos/hermes-memory.git
+
+# every time before you branch
+git fetch --all --prune
+git checkout main && git pull upstream main && git push origin main
+git checkout -b fix/my-thing
+
+# when upstream PRs merge, your local is stale until you sync
+gh repo sync              # or: git fetch upstream && git checkout main && git reset --hard upstream/main
+```
+
+Branch protection requires `main` to be up to date before merge, so CI will warn `branch out of date` until you pull. If you are behind, rebase: `git fetch upstream && git rebase upstream/main`.
+
 ## Pull Requests
 
 1. Fork the repo (or claim a board card)
-2. Create a `wip/<card-id>` or feature branch
+2. Create a `wip/<card-id>` or feature branch — never push `stash`, `local-sync`, or snapshot branches
 3. Commit your changes (card prefix, e.g. `C4: ...`)
 4. Ensure the property suite passes (and integration tests if you touched store/ingest)
-5. Open a PR — fill out the template
+5. Open a PR — fill out the template; when it squash-merges, delete the branch the same day (see above)
 
 ## Code Style
 
