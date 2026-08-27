@@ -30,7 +30,9 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage; exit 0;;
-    --wait) WAIT="$2"; shift 2;;
+    --wait)
+      [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "--wait requires an integer SECONDS argument" >&2; usage; exit 2; }
+      WAIT="$2"; shift 2;;
     --autofix) AUTOFIX=1; shift;;
     [0-9]*) PR="$1"; shift;;
     *) echo "unknown arg: $1" >&2; usage; exit 2;;
