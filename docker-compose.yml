@@ -5,24 +5,58 @@ services:
       dockerfile: Dockerfile
     image: hermes-memory-postgres:local
     container_name: hermes-memory-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: hermes
-      POSTGRES_PASSWORD: ${HERMES_PG_PASSWORD:?set HERMES_PG_PASSWORD in .env}
-      POSTGRES_DB: hermes_memory
+      POSTGRES_USER: ${HERMES_PG_USER:-hermes}
+      POSTGRES_PASSWORD: ${HERMES_PG_PASSWORD:?set HERMES_PG_PASSWORD in .env — see .env.example}
+      POSTGRES_DB: ${HERMES_PG_DB:-hermes_memory}
     ports:
-      # Host 5432 is commonly taken (other Postgres containers on this host);
-      # expose on 5450 instead. DSNs must use port 5450.
-      - "127.0.0.1:5450:5432"
+      - "127.0.0.1:${HERMES_PG_HOST_PORT:-5450}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hermes -d hermes_memory"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-hermes} -d $${POSTGRES_DB:-hermes_memory}"]
       interval: 5s
       timeout: 5s
       retries: 12
       start_period: 30s
+    networks:
+      - hermes_network
+
+  # Optional transaction pooling — enable with `docker compose --profile pooled up -d`.
+  # Zero-config default is direct 5450 (CI + pytest use this). Pi / high-concurrency prod uses 6432.
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.0
+    container_name: hermes-pgbouncer
     restart: unless-stopped
+    profiles: ["pooled"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${HERMES_PG_USER:-hermes}
+      DB_PASSWORD: ${HERMES_PG_PASSWORD:?set HERMES_PG_PASSWORD in .env}
+      DB_NAME: ${HERMES_PG_DB:-hermes_memory}
+      POOL_MODE: ${PGBOUNCER_POOL_MODE:-transaction}
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-200}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-25}
+    ports:
+      - "127.0.0.1:${PGBOUNCER_HOST_PORT:-6432}:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${DB_USER:-hermes} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hermes_network
 
 volumes:
   pgdata:
+    driver: local
+
+networks:
+  hermes_network:
+    driver: bridge
