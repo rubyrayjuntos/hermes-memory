@@ -29,10 +29,13 @@
 
 ## How to close
 
-On 2026-09-26, a cron will remind via `gh issue create` (label: `roadmap`) if this file still exists. Delete this file when decision is recorded, or convert to `docs/plans/librarian-promotion.md`.
+This file is the reminder. The actual scheduled scheduler is **Hermes cron job `librarian-30day-review` (job `a2cf8ca26920`, once at 2026-09-26 09:00 UTC, `deliver:origin`)** and **GitHub Issue #21** (open, `enhancement`). No `.github/workflows/` job runs a `gh issue create` on that date — the fenced snippet below is documentation only. On 2026-09-26 the Hermes cron will deliver a nudge to the origin chat; Issues #21 already tracks the gate. Delete this file when decision is recorded, or convert to `docs/plans/librarian-promotion.md`.
 
 ---
-*Scheduled reminder:* create an issue on due date:
+*Scheduled reminder (already created):*
+- Hermes cron: `librarian-30day-review` → 2026-09-26T09:00:00Z, deliver origin
+- GitHub Issue #21: https://github.com/rubyrayjuntos/hermes-memory/issues/21
+- Snippet (for manual re-run if needed):
 
 ```bash
 gh issue create --title "Review: librarian 30-day plugin promotion (due 2026-09-26)" \

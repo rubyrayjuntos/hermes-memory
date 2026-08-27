@@ -5,3 +5,5 @@ agent: librarian
 
 Run the librarian umbrella per `skills/librarian/SKILL.md`. Default `health`; pass `ingest <path>` or `verify` as args.
 
+$ARGUMENTS
+

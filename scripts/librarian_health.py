@@ -8,7 +8,7 @@ e.g. ids 1799-1801).
   WHERE metadata->>'file_path' IS NOT NULL
     AND (metadata->>'hash' IS NULL OR metadata->>'doc_type' IS NULL)
 
-Wraps Store.librarian_health() and also emits raw psql counts for triage.
+Wraps Store.librarian_health() and also emits raw asyncpg counts for triage.
 Exit 0 = healthy (scoped missing ==0), 1 = drift, 2 = DB unreachable.
 
 Usage:

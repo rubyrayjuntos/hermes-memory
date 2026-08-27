@@ -58,7 +58,7 @@ Every chunk via `on_memory_write` must carry `doc_type` (`api_reference|architec
 
 ## 30-day plugin entry review gate
 
-> **Review due: 2026-09-26 (30 days from 2026-08-27).** This umbrella + `librarian-health` cron run as repo-local scripts/workflows for 30 days with no Hermes core change. On that date, evaluate: drift issue rate, `librarian_health` daily runs, property/integration pass rate. If stable, propose a `hermes` plugin entry (`project.entry-points.hermes_agent.memory_providers` or a `hermes skill install ./skills/librarian`). If unstable or noisy, keep repo-local. See `docs/plans/librarian-30day-review.md`.
+> **Review due: 2026-09-26 (30 days from 2026-08-27).** This umbrella + `librarian-health` cron run as repo-local scripts/workflows for 30 days with no Hermes core change. On that date, evaluate: drift issue rate, `librarian_health` daily runs, property/integration pass rate. If stable, propose a `hermes` plugin entry (`project.entry-points.hermes_agent.memory_providers` or a `hermes skill install ./skills/librarian`). If unstable or noisy, keep repo-local. See `docs/plans/librarian-30day-review.md` + **Hermes cron `librarian-30day-review` (job `a2cf8ca26920`, once at 2026-09-26 09:00 UTC, `deliver:origin`)** + **GitHub Issue #21**. The `.github/workflows/librarian-health.yml` daily job is a *seeded smoke* on an ephemeral DB (runs migrations then `librarian_health` expecting 0 drift), not a prod `hermes:5440` drift monitor — prod monitoring requires an out-of-band DSN via secrets.
 
 ## References
 
