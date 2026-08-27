@@ -102,7 +102,7 @@ git remote add upstream https://github.com/rubyrayjuntos/hermes-memory.git 2>/de
 
 # every time before you branch
 git fetch --all --prune
-git checkout main && git pull upstream main && git push origin main
+git checkout main && git pull --ff-only upstream main && git push origin main
 git checkout -b fix/my-thing
 
 # when upstream PRs merge, your local is stale until you sync
