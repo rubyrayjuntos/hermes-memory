@@ -1,0 +1,70 @@
+name: librarian-health
+on:
+  schedule:
+    - cron: "0 9 * * *"  # daily 09:00 UTC — seeded smoke (not prod drift; see Codex P1)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    # NOTE: This job uses an ephemeral pgvector service, not the persistent
+    # hermes:5440 prod DB (which is localhost-only). It is a seeded smoke
+    # test of Store.librarian_health() logic, not a prod drift monitor.
+    # Prod drift monitoring requires an out-of-band DSN via secrets — not
+    # wired here per Codex P1. Fresh DB will always report 0 drift.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: hermes
+          POSTGRES_PASSWORD: ci-local-password
+          POSTGRES_DB: hermes_memory
+        ports:
+          - 5450:5432
+        options: >-
+          --health-cmd="pg_isready -U hermes -d hermes_memory"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - name: Wait for Postgres
+        run: until pg_isready -h 127.0.0.1 -p 5450 -U hermes; do sleep 1; done
+        env:
+          PGPASSWORD: ci-local-password
+      - name: Run migrations (create memory_entries + AGE)
+        env:
+          PGPASSWORD: ci-local-password
+        run: |
+          PGPASSWORD="$PGPASSWORD" python scripts/migrate.py --dsn "postgres://hermes:ci-local-password@127.0.0.1:5450/hermes_memory"
+      - name: Run scoped health check (seeded smoke)
+        id: health
+        continue-on-error: true
+        env:
+          HYBRID_AGE_DSN: postgres://hermes:ci-local-password@127.0.0.1:5450/hermes_memory
+          HERMES_PG_PASSWORD: ci-local-password
+        run: |
+          python scripts/librarian_health.py --fail-on-drift --json /tmp/health.json
+          echo "exit=$?"
+          cat /tmp/health.json
+      - name: Open drift issue on failure (includes JSON)
+        if: steps.health.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          HEALTH_JSON=$(cat /tmp/health.json 2>/dev/null || echo '{}')
+          BODY="Automated health failure (seeded smoke, not prod drift — fresh ephemeral DB). Store.librarian_health() scoped to file-backed rows only (issue #17).
+
+          \`\`\`json
+          $HEALTH_JSON
+          \`\`\`
+
+          If this fires daily with empty DB, the health logic itself drifted — see scripts/librarian_health.py."
+          gh issue create --title "drift: librarian scoped health failed $(date -u +%Y-%m-%d)" --body "$BODY" --label "bug" || echo "issue create failed (may already exist)"
