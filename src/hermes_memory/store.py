@@ -236,6 +236,35 @@ class Store:
                 f"%{_escape_like(content_substr)}%",
             )
 
+    async def librarian_health(self) -> Dict[str, int]:
+        """Librarian-scoped health counts — file-backed rows only (issue #17).
+
+        The naive query ``WHERE metadata->>'hash' IS NULL`` false-positives on
+        user prefs written via the generic memory tool (no file_path, no hash
+        by design — e.g. ids 1799-1801). Correct scope is file-backed only:
+
+            WHERE metadata->>'file_path' IS NOT NULL
+              AND (metadata->>'hash' IS NULL OR metadata->>'doc_type' IS NULL)
+
+        Returns ``{"total_file_backed": N, "missing_hash": H, "missing_doc_type": D}``.
+        Callers should assert H==0 and D==0; user prefs are excluded by design.
+        """
+        async with self.pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT count(*) FROM memory_entries WHERE metadata->>'file_path' IS NOT NULL"
+            )
+            missing_hash = await conn.fetchval(
+                "SELECT count(*) FROM memory_entries WHERE metadata->>'file_path' IS NOT NULL AND metadata->>'hash' IS NULL"
+            )
+            missing_doc = await conn.fetchval(
+                "SELECT count(*) FROM memory_entries WHERE metadata->>'file_path' IS NOT NULL AND metadata->>'doc_type' IS NULL"
+            )
+            return {
+                "total_file_backed": int(total or 0),
+                "missing_hash": int(missing_hash or 0),
+                "missing_doc_type": int(missing_doc or 0),
+            }
+
     # -- Vector search ----------------------------------------------------------
 
     async def vector_search(self, vec_literal: str, k: int) -> List[Dict[str, Any]]:
