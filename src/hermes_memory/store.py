@@ -514,14 +514,40 @@ class Store:
                                 key_prop = "path" if "path" in props else "name"
                                 non_key = {k: v for k, v in props.items() if k != key_prop}
                                 # AGE 1.6 has no ON CREATE SET / ON MATCH SET;
-                                # MERGE on the minimal key, then plain
-                                # SET v += props for mutable properties
-                                # (plan §3.3, same pattern as ingest.py).
-                                cypher = (
-                                    f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}})\n"
-                                    f"SET v += {age_props(non_key)}\n"
-                                    f"RETURN id(v)"
-                                )
+                                # MERGE on the minimal key, then SET only mutable
+                                # props. For Concept weight/created_at we use
+                                # ON-CREATE semantics (coalesce) so accumulated
+                                # weight and original created_at are not reset.
+                                if not non_key:
+                                    cypher = (
+                                        f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}}) RETURN id(v)"
+                                    )
+                                else:
+                                    set_parts = []
+                                    for k, v in non_key.items():
+                                        if k in ("weight", "created_at"):
+                                            # preserve existing value if present
+                                            if isinstance(v, bool):
+                                                lit = str(v).lower()
+                                            elif isinstance(v, (int, float)):
+                                                lit = str(v)
+                                            else:
+                                                lit = age_str(v)
+                                            set_parts.append(f"v.{k} = coalesce(v.{k}, {lit})")
+                                        else:
+                                            if isinstance(v, bool):
+                                                lit = str(v).lower()
+                                            elif isinstance(v, (int, float)):
+                                                lit = str(v)
+                                            else:
+                                                lit = age_str(v)
+                                            set_parts.append(f"v.{k} = {lit}")
+                                    set_clause = ", ".join(set_parts)
+                                    cypher = (
+                                        f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}})\n"
+                                        f"SET {set_clause}\n"
+                                        f"RETURN id(v)"
+                                    )
                                 row = await conn.fetchrow(
                                     f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)"
                                 )
@@ -707,6 +733,7 @@ class Store:
             await self.load_age(conn)
             try:
                 async with conn.transaction():
+                    await conn.execute("SELECT pg_advisory_xact_lock($1)", loser_id)
                     sp_fetch = savepoint_name("merge_fetch", 0)
                     await conn.execute(f"SAVEPOINT {sp_fetch}")
                     try:
@@ -771,7 +798,12 @@ class Store:
                                     props["cosine"] = float(str(rc).strip('"'))
                                 except Exception:
                                     pass
-                            props_str = f" SET e += {age_props(props)}" if props else ""
+                            set_parts = []
+                            if "weight" in props:
+                                set_parts.append(f"e.weight = CASE WHEN e.weight IS NULL OR e.weight < {float(props['weight'])} THEN {float(props['weight'])} ELSE e.weight END")
+                            if "cosine" in props:
+                                set_parts.append(f"e.cosine = CASE WHEN e.cosine IS NULL OR e.cosine < {float(props['cosine'])} THEN {float(props['cosine'])} ELSE e.cosine END")
+                            props_str = (" SET " + ", ".join(set_parts)) if set_parts else ""
                             cypher = (
                                 f"MATCH (a), (b) WHERE id(a) = {keeper_id} AND id(b) = {mid} "
                                 f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
@@ -802,7 +834,12 @@ class Store:
                                     props["cosine"] = float(str(rc).strip('"'))
                                 except Exception:
                                     pass
-                            props_str = f" SET e += {age_props(props)}" if props else ""
+                            set_parts = []
+                            if "weight" in props:
+                                set_parts.append(f"e.weight = CASE WHEN e.weight IS NULL OR e.weight < {float(props['weight'])} THEN {float(props['weight'])} ELSE e.weight END")
+                            if "cosine" in props:
+                                set_parts.append(f"e.cosine = CASE WHEN e.cosine IS NULL OR e.cosine < {float(props['cosine'])} THEN {float(props['cosine'])} ELSE e.cosine END")
+                            props_str = (" SET " + ", ".join(set_parts)) if set_parts else ""
                             cypher = (
                                 f"MATCH (a), (b) WHERE id(a) = {nid} AND id(b) = {keeper_id} "
                                 f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
@@ -812,6 +849,7 @@ class Store:
                         except Exception:
                             await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
                             logger.debug("merge incoming edge failed", exc_info=True)
+                            raise
 
                     sp_w = savepoint_name("merge_weight", 0)
                     await conn.execute(f"SAVEPOINT {sp_w}")
@@ -822,22 +860,29 @@ class Store:
                     except Exception:
                         await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_w}")
                         logger.debug("merge weight update failed", exc_info=True)
+                        raise
 
                     sp_bridge = savepoint_name("merge_bridge", 0)
                     await conn.execute(f"SAVEPOINT {sp_bridge}")
                     try:
                         await conn.execute(
-                            "UPDATE memory_chunk_nodes SET vertex_id = $1 WHERE vertex_id = $2",
-                            keeper_id, loser_id,
+                            "DELETE FROM memory_chunk_nodes WHERE graph_name = $1 AND vertex_id = $2 "
+                            "AND (chunk_id, source) IN (SELECT chunk_id, source FROM memory_chunk_nodes WHERE vertex_id = $3 AND graph_name = $1)",
+                            self.graph_name, keeper_id, loser_id,
+                        )
+                        await conn.execute(
+                            "UPDATE memory_chunk_nodes SET vertex_id = $1 WHERE vertex_id = $2 AND graph_name = $3",
+                            keeper_id, loser_id, self.graph_name,
                         )
                         await conn.execute(
                             "DELETE FROM memory_chunk_nodes a USING memory_chunk_nodes b "
-                            "WHERE a.ctid < b.ctid AND a.chunk_id=b.chunk_id AND a.source=b.source AND a.vertex_id=b.vertex_id"
+                            "WHERE a.ctid < b.ctid AND a.chunk_id=b.chunk_id AND a.source=b.source AND a.vertex_id=b.vertex_id AND a.graph_name=b.graph_name"
                         )
                         await conn.execute(f"RELEASE SAVEPOINT {sp_bridge}")
                     except Exception:
                         await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_bridge}")
                         logger.debug("bridge merge failed", exc_info=True)
+                        raise
 
                     sp_del = savepoint_name("merge_delete", 0)
                     await conn.execute(f"SAVEPOINT {sp_del}")
@@ -858,13 +903,16 @@ class Store:
     async def prune_orphan_concepts(self, orphan_ids):
         """SAVEPOINT-guarded DETACH DELETE for orphan Concept vertices + bridge cleanup.
 
-        Ensures Concept vlabel exists; each delete in its own SAVEPOINT.
+        Revalidates degree==0 and age cutoff inside the same transaction (no new edges).
+        Bridge cleanup is graph_name-scoped. Each delete in its own SAVEPOINT.
         Returns count of pruned vertices.
         """
         if not orphan_ids:
             return 0
         await self.ensure_about_labels()
         graph = self.graph_name
+        import datetime as _dt
+        cutoff_iso = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat()
         pruned = 0
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
@@ -872,13 +920,27 @@ class Store:
                 async with conn.transaction():
                     for idx, oid in enumerate(orphan_ids):
                         oid = int(oid)
+                        await conn.execute("SELECT pg_advisory_xact_lock($1)", oid)
                         sp = savepoint_name("prune_orphan", idx)
                         await conn.execute(f"SAVEPOINT {sp}")
                         try:
+                            # Revalidate: degree==0 and created_at older than cutoff, locked
+                            rows = await conn.fetch(
+                                f"SELECT * FROM cypher('{graph}', $$ "
+                                f"MATCH (c:Concept) WHERE id(c) = {oid} "
+                                "OPTIONAL MATCH (c)-[r]-() "
+                                "WITH c, count(r) AS degree "
+                                f"WHERE degree = 0 AND c.created_at IS NOT NULL AND c.created_at < {age_str(cutoff_iso)} "
+                                "RETURN id(c) "
+                                f"$$) AS (id agtype)"
+                            )
+                            if not rows:
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                                continue
                             await conn.fetch(
                                 f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) WHERE id(c) = {oid} DETACH DELETE c $$) AS (a agtype)"
                             )
-                            await conn.execute("DELETE FROM memory_chunk_nodes WHERE vertex_id = $1", oid)
+                            await conn.execute("DELETE FROM memory_chunk_nodes WHERE vertex_id = $1 AND graph_name = $2", oid, self.graph_name)
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
                             pruned += 1
                         except Exception:
@@ -897,8 +959,8 @@ class Store:
                 async with self.pool.acquire() as conn:
                     try:
                         bridge_affected = await conn.fetchval(
-                            "SELECT count(*) FROM memory_chunk_nodes WHERE vertex_id = ANY($1::bigint[])",
-                            all_loser_ids,
+                            "SELECT count(*) FROM memory_chunk_nodes WHERE vertex_id = ANY($1::bigint[]) AND graph_name = $2",
+                            all_loser_ids, self.graph_name,
                         )
                         bridge_affected = int(bridge_affected or 0)
                     except Exception:
