@@ -473,8 +473,7 @@ fetchMetrics();
 setInterval(fetchMetrics, 30000);
 // Live graph growth: poll 3D every 20s (same budget as metrics) so
 // conversation Turns/Concepts appear as you chat. Paused while panel open.
-let _liveTimer = setInterval(()=>{ if(!$('panel').classList.contains('open') && !$('hResults').style.display.includes('block')) load(); }, 20000);
-$('panel').addEventListener('transitionend', ()=>{});
+setInterval(()=>{ if(!$('panel').classList.contains('open') && !$('hResults').style.display.includes('block')) load(); }, 20000);
 </script>
 </body>
 </html>
