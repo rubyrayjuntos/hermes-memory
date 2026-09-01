@@ -300,7 +300,7 @@ async function doHybrid(){
     const retrieval=j.retrieval || j.metrics || {};
     const isRanked = ranked.length && ranked[0].title;
     if(isRanked){
-      $('hMeta').innerHTML = `${ranked.length} hits · k=${retrieval.k||'?'} hops=${retrieval.hops||'?'} · ${escapeHTML(retrieval.embed_model||'nomic-embed-text')} ${escapeHTML(String(retrieval.embed_dim||768))}d · bridge ${retrieval.bridge_vertices||0}v · <span style="color:#94a3b8">query "${j.query||q}"</span>`;
+      $('hMeta').innerHTML = `${ranked.length} hits · k=${retrieval.k||'?'} hops=${retrieval.hops||'?'} · ${escapeHTML(retrieval.embed_model||'nomic-embed-text')} ${escapeHTML(String(retrieval.embed_dim||768))}d · bridge ${retrieval.bridge_vertices||0}v · <span style="color:#94a3b8">query "${escapeHTML(j.query||q)}"</span>`;
       if(!ranked.length){ $('hList').innerHTML='<span style="color:#64748b">no hits — try a broader term or check Ollama is up (nomic-embed-text)</span>'; return; }
       $('hList').innerHTML = ranked.map((hit,i)=>{
         const title=escapeHTML(hit.title || hit.label || hit.name || hit.id);
