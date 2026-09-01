@@ -99,8 +99,9 @@ def main():
         print("[1/5] Backing up schema from source...")
         backup_path = (Path.home() / f"librarian-upgrade-schema-{__import__('datetime').date.today()}.sql")
         result = subprocess.run(
-            ["pg_dump", "-s", from_dsn],
-            capture_output=True, text=True,
+            ["pg_dump", "-s", "-f", str(backup_path), from_dsn],
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             print(f"    Schema backup failed: {result.stderr}")
