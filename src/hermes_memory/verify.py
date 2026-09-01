@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 import time
 from typing import List, Optional, Tuple
@@ -153,10 +154,32 @@ async def run_verify(dsn: Optional[str] = None,
 
             # ---- prefetch returns a string (never raises contract) --------
             out = provider.prefetch("Project Zephyr storage engine")
+            # graph lines / token counts for tail reporting (hybrid vs vector)
+            graph_lines = 0
+            total_prefetch_lines = 0
+            tokens_est = 0
+            try:
+                if isinstance(out, str) and out:
+                    # provider._format emits "- [Label name] -REL-> [Label name]" for graph
+                    graph_lines = len(re.findall(r"\[.*?\]\s*-.*->\s*\[.*?\]", out))
+                    total_prefetch_lines = len([ln for ln in out.splitlines() if ln.strip().startswith("- ")])
+                    tokens_est = max(1, len(out) // 4) if out else 0
+                else:
+                    tokens_est = 0
+            except Exception:
+                pass
+            vector_lines = max(0, total_prefetch_lines - graph_lines)
+            delta = graph_lines - vector_lines
             result.add(
                 "prefetch returns string",
                 isinstance(out, str),
-                f"len={len(out)}",
+                f"len={len(out) if isinstance(out, str) else '?'} tokens~{tokens_est} graph_lines={graph_lines} vector_lines={vector_lines} delta={delta}",
+            )
+            # extra explicit graph-lines check for tail consumers
+            result.add(
+                "prefetch graph lines",
+                isinstance(out, str),
+                f"graph_lines={graph_lines} total_lines={total_prefetch_lines} tokens~{tokens_est} (hybrid graph vs vector delta={delta})",
             )
         finally:
             provider.shutdown()
