@@ -19,10 +19,10 @@
 
 ## Status 2026-09-01 — v0.2 production-ready plugin (code DONE, soak for tuning)
 > C7/C8 code DONE per `board.md` (`df4e077`/`1a8a99f`); shown as `[ready]` here for Sprint 2 re-run on accumulated live corpus (699v/1936e). C9/C10 intentionally `blocked` until soak data available. Source of truth for queuing is GitHub Project #6 Sprint 2 (not this file).
+> **Soak ledger:** 37✓ 38✓ 39✓, #40 in-progress, #41 pending re-ablation ~50 Turns
 
 ## Board
-
-### C7 — Benchmark harness `[code DONE — soak re-run in Sprint 2]`
+### C7 — Benchmark harness `[done]`
 Adapt Appendix D benchmarker to real schema. Deliverables:
 - Golden-set builder: extract (query → expected memory) pairs from real session logs
 - Metrics: Retrieval-Hit Rate, Injection-Hit Rate, Injection MRR, empty-block rate,
@@ -34,8 +34,7 @@ Adapt Appendix D benchmarker to real schema. Deliverables:
 
 **Accept:** harness runs against live compose stack; ablation produces the
 Hybrid-vs-Vector-only table; all four metric families reported.
-
-### C8 — Synthetic load generator `[code DONE — soak regen in Sprint 2]`
+### C8 — Synthetic load generator `[done]`
 Adapt Appendix 12.1 to real schema + bridge-table population.
 Sizes 1K / 10K / 100K rows; batched MERGE per §3.3; cleans up after itself
 (`--teardown` flag removing synthetic rows by marker prefix).
