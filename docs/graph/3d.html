@@ -300,33 +300,33 @@ async function doHybrid(){
     const retrieval=j.retrieval || j.metrics || {};
     const isRanked = ranked.length && ranked[0].title;
     if(isRanked){
-      $('hMeta').innerHTML = `${ranked.length} hits · k=${retrieval.k||'?'} hops=${retrieval.hops||'?'} · ${retrieval.embed_model||'nomic-embed-text'} ${retrieval.embed_dim||768}d · bridge ${retrieval.bridge_vertices||0}v · <span style="color:#94a3b8">query "${j.query||q}"</span>`;
+      $('hMeta').innerHTML = `${ranked.length} hits · k=${retrieval.k||'?'} hops=${retrieval.hops||'?'} · ${escapeHTML(retrieval.embed_model||'nomic-embed-text')} ${escapeHTML(String(retrieval.embed_dim||768))}d · bridge ${retrieval.bridge_vertices||0}v · <span style="color:#94a3b8">query "${j.query||q}"</span>`;
       if(!ranked.length){ $('hList').innerHTML='<span style="color:#64748b">no hits — try a broader term or check Ollama is up (nomic-embed-text)</span>'; return; }
       $('hList').innerHTML = ranked.map((hit,i)=>{
-        const title=hit.title || hit.label || hit.name || hit.id;
-        const group=hit.group || hit.label || '';
-        const score=hit.rank_score!=null ? hit.rank_score : (hit.score!=null? hit.score: '');
+        const title=escapeHTML(hit.title || hit.label || hit.name || hit.id);
+        const group=escapeHTML(hit.group || hit.label || '');
+        const score=escapeHTML(hit.rank_score!=null ? String(hit.rank_score) : (hit.score!=null? String(hit.score): ''));
         const gov=hit.governed ? ' · <span style="color:#6ee7b7">governed</span>' : '';
         const vid=String(hit.id);
         return `<div style="border:1px solid #1e293b;background:#0b1224;border-radius:10px;padding:8px;margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:11px;color:#f1f5f9">${title}</b><span style="font-size:10px;color:#7dd3fc">${group} · ${score}${gov}</span></div>
-          <div style="font-size:10px;color:#64748b;margin-top:2px">id ${vid}</div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px">id ${escapeHTML(vid)}</div>
           <div style="margin-top:6px;display:flex;gap:6px">
             <button style="font-size:10px;padding:3px 7px" onclick="focusNode('${vid.replace(/'/g,"\\'")}')">focus in 3D</button>
             <button style="font-size:10px;padding:3px 7px" onclick="showNodeById('${vid.replace(/'/g,"\\'")}')">inspect</button>
           </div>
         </div>`;
-      }).join('') + `<div style="font-size:10px;color:#64748b;margin-top:6px">retrieval: ${JSON.stringify({by_label: retrieval.by_label, edges_traversed: retrieval.edges_traversed, graph_backend: retrieval.graph_backend}).slice(0,200)}</div>`;
+      }).join('') + `<div style="font-size:10px;color:#64748b;margin-top:6px">retrieval: ${escapeHTML(JSON.stringify({by_label: retrieval.by_label, edges_traversed: retrieval.edges_traversed, graph_backend: retrieval.graph_backend}).slice(0,200))}</div>`;
       return;
     }
-    $('hMeta').innerHTML = `${results.length} hits · vector ${retrieval.vector_ms||retrieval.embed_ms||'?'}ms · graph ${retrieval.graph_ms||'?'}ms · fusion ${retrieval.fusion_ms||'?'}ms`;
+    $('hMeta').innerHTML = `${results.length} hits · vector ${escapeHTML(String(retrieval.vector_ms||retrieval.embed_ms||'?'))}ms · graph ${escapeHTML(String(retrieval.graph_ms||'?'))}ms · fusion ${escapeHTML(String(retrieval.fusion_ms||'?'))}ms`;
     if(!results.length){ $('hList').innerHTML='<span style="color:#64748b">no hits — try a broader term or check Ollama is up (nomic-embed-text)</span>'; return; }
     $('hList').innerHTML = results.map((hit,i)=>{
       const fp=hit.file_path || hit.metadata?.file_path || hit.path || '';
       const score = hit.score!=null ? hit.score.toFixed(3) : (hit.similarity!=null? hit.similarity.toFixed(3): '');
-      const snippet=(hit.content||hit.text||'').slice(0,220).replace(/</g,'&lt;');
+      const snippet=escapeHTML((hit.content||hit.text||'').slice(0,220));
       return `<div style="border:1px solid #1e293b;background:#0b1224;border-radius:10px;padding:8px;margin-bottom:8px">
-        <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:11px;color:#f1f5f9">${fp||'untitled'}</b><span style="font-size:10px;color:#7dd3fc">${score}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:11px;color:#f1f5f9">${escapeHTML(fp||'untitled')}</b><span style="font-size:10px;color:#7dd3fc">${escapeHTML(score)}</span></div>
         <div style="font-size:11px;color:#cbd5e1;margin-top:4px;white-space:pre-wrap;word-break:break-word">${snippet}…</div>
         <div style="margin-top:6px;display:flex;gap:6px">
           <button style="font-size:10px;padding:3px 7px" onclick="focusFile('${fp.replace(/'/g,"\\'")}')">focus in 3D</button>
@@ -343,7 +343,7 @@ async function doHybrid(){
     }
   }catch(e){
     $('hMeta').textContent='';
-    $('hList').innerHTML=`<span style="color:#fca5a5">search failed:</span> ${e.message} <br><span style="font-size:10px;color:#64748b">hint: is Ollama running? POST uses nomic-embed-text</span>`;
+    $('hList').innerHTML=`<span style="color:#fca5a5">search failed:</span> ${escapeHTML(e.message)} <br><span style="font-size:10px;color:#64748b">hint: is Ollama running? POST uses nomic-embed-text</span>`;
   }
 }
 
