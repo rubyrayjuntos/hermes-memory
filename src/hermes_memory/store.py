@@ -128,6 +128,72 @@ def dedup_key(name: str, label: str) -> Tuple[str, str]:
     """
     return (name.strip().lower(), label)
 
+def _cosine_similarity(a, b):
+    """Pure-python cosine: dot/(||a||*||b||). None if invalid."""
+    if not a or not b or len(a) != len(b):
+        return None
+    try:
+        import math
+        dot = sum(x * y for x, y in zip(a, b))
+        na = math.sqrt(sum(x * x for x in a))
+        nb = math.sqrt(sum(y * y for y in b))
+        if na == 0 or nb == 0:
+            return None
+        return dot / (na * nb)
+    except Exception:
+        return None
+
+
+def compaction_keepers(pairs):
+    """Deterministic dedup: keeper = min(id) for each connected component.
+
+    pairs: iterable of (keeper_candidate, loser_candidate) or (a,b,cosine).
+    Returns dict loser->keeper with deterministic ordering (smaller id wins).
+    Overlapping pairs are transitively merged via Union-Find.
+    """
+    parent = {}
+
+    def find(x):
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if ra < rb:
+            parent[rb] = ra
+        else:
+            parent[ra] = rb
+
+    ids = set()
+    plist = []
+    for p in pairs:
+        a, b = int(p[0]), int(p[1])
+        ids.add(a)
+        ids.add(b)
+        plist.append((a, b))
+        if a not in parent:
+            parent[a] = a
+        if b not in parent:
+            parent[b] = b
+    for a, b in plist:
+        union(a, b)
+    result = {}
+    groups = {}
+    for nid in ids:
+        r = find(nid)
+        groups.setdefault(r, []).append(nid)
+    for root, members in groups.items():
+        members_sorted = sorted(members)
+        keeper = members_sorted[0]
+        for m in members_sorted[1:]:
+            result[m] = keeper
+    return result
+
+
 
 class Store:
     """Async data access over the pgvector + AGE schema."""
@@ -448,14 +514,40 @@ class Store:
                                 key_prop = "path" if "path" in props else "name"
                                 non_key = {k: v for k, v in props.items() if k != key_prop}
                                 # AGE 1.6 has no ON CREATE SET / ON MATCH SET;
-                                # MERGE on the minimal key, then plain
-                                # SET v += props for mutable properties
-                                # (plan §3.3, same pattern as ingest.py).
-                                cypher = (
-                                    f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}})\n"
-                                    f"SET v += {age_props(non_key)}\n"
-                                    f"RETURN id(v)"
-                                )
+                                # MERGE on the minimal key, then SET only mutable
+                                # props. For Concept weight/created_at we use
+                                # ON-CREATE semantics (coalesce) so accumulated
+                                # weight and original created_at are not reset.
+                                if not non_key:
+                                    cypher = (
+                                        f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}}) RETURN id(v)"
+                                    )
+                                else:
+                                    set_parts = []
+                                    for k, v in non_key.items():
+                                        if k in ("weight", "created_at"):
+                                            # preserve existing value if present
+                                            if isinstance(v, bool):
+                                                lit = str(v).lower()
+                                            elif isinstance(v, (int, float)):
+                                                lit = str(v)
+                                            else:
+                                                lit = age_str(v)
+                                            set_parts.append(f"v.{k} = coalesce(v.{k}, {lit})")
+                                        else:
+                                            if isinstance(v, bool):
+                                                lit = str(v).lower()
+                                            elif isinstance(v, (int, float)):
+                                                lit = str(v)
+                                            else:
+                                                lit = age_str(v)
+                                            set_parts.append(f"v.{k} = {lit}")
+                                    set_clause = ", ".join(set_parts)
+                                    cypher = (
+                                        f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}})\n"
+                                        f"SET {set_clause}\n"
+                                        f"RETURN id(v)"
+                                    )
                                 row = await conn.fetchrow(
                                     f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)"
                                 )
@@ -523,6 +615,363 @@ class Store:
                     logger.warning("edge batch txn failed", exc_info=True)
         return done
 
+
+    # -- Concept compaction helpers (issue #37) ---------------------------------
+
+    async def fetch_concepts(self):
+        """Fetch all Concept vertices: id, name, weight, created_at, degree.
+
+        Returns list of dicts {id:int, name:str, weight:int, created_at:str|None, degree:int}.
+        SAVEPOINT-guarded; Concept vlabel ensured via ensure_about_labels.
+        """
+        await self.ensure_about_labels()
+        graph = self.graph_name
+        cypher = (
+            f"SELECT * FROM cypher('{graph}', $$ "
+            "MATCH (c:Concept) "
+            "OPTIONAL MATCH (c)-[r]-() "
+            "WITH c, count(r) AS degree "
+            "RETURN id(c), c.name, c.weight, c.created_at, degree "
+            f"$$) AS (id agtype, name agtype, weight agtype, created_at agtype, degree agtype)"
+        )
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            sp = savepoint_name("fetch_concepts", 0)
+            rows = []
+            try:
+                async with conn.transaction():
+                    await conn.execute(f"SAVEPOINT {sp}")
+                    try:
+                        rows = await conn.fetch(cypher)
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        logger.debug("fetch_concepts failed", exc_info=True)
+                        return []
+            except Exception:
+                logger.debug("fetch_concepts txn failed", exc_info=True)
+                return []
+        out = []
+        for r in rows:
+            try:
+                raw_id = r["id"]
+                vid = int(str(raw_id).strip('"'))
+                raw_name = r["name"]
+                name = str(raw_name).strip('"') if raw_name is not None else ""
+                if name == "null":
+                    name = ""
+                raw_w = r["weight"]
+                weight = 1
+                if raw_w is not None:
+                    s = str(raw_w).strip('"')
+                    if s != "null" and s != "":
+                        try:
+                            weight = int(float(s))
+                        except Exception:
+                            weight = 1
+                raw_ca = r["created_at"]
+                ca = None
+                if raw_ca is not None:
+                    s = str(raw_ca).strip('"')
+                    if s != "null" and s != "":
+                        ca = s
+                raw_deg = r["degree"]
+                degree = 0
+                if raw_deg is not None:
+                    try:
+                        degree = int(str(raw_deg).strip('"'))
+                    except Exception:
+                        degree = 0
+                out.append({"id": vid, "name": name, "weight": weight, "created_at": ca, "degree": degree})
+            except Exception:
+                continue
+        return out
+
+    async def find_orphan_concept_ids(self, days: int = 7):
+        """Prune candidates: Concept degree==0 and older than days (created_at).
+
+        If created_at missing, node is not considered orphan (conservative).
+        """
+        import datetime
+        concepts = await self.fetch_concepts()
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        orphans = []
+        for c in concepts:
+            if c.get("degree", 0) != 0:
+                continue
+            ca = c.get("created_at")
+            if not ca:
+                continue
+            try:
+                iso = ca.replace("Z", "+00:00") if isinstance(ca, str) else ca
+                dt = datetime.datetime.fromisoformat(iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=datetime.timezone.utc)
+                if dt < cutoff:
+                    orphans.append(int(c["id"]))
+            except Exception:
+                continue
+        return orphans
+
+    async def merge_concept_pair(self, keeper_id: int, loser_id: int):
+        """SAVEPOINT-guarded merge of a near-duplicate Concept pair.
+
+        - Ensures Concept vlabel exists (no ad-hoc labels).
+        - Rewires all incident edges from loser -> keeper (MERGE + SET props).
+        - Updates keeper weight as sum (numeric bare literal via age_props).
+        - Moves bridge rows vertex_id loser->keeper.
+        - DETACH DELETE loser.
+        Returns True on success.
+        """
+        if int(keeper_id) == int(loser_id):
+            return False
+        await self.ensure_about_labels()
+        graph = self.graph_name
+        keeper_id = int(keeper_id)
+        loser_id = int(loser_id)
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            try:
+                async with conn.transaction():
+                    await conn.execute("SELECT pg_advisory_xact_lock($1)", loser_id)
+                    sp_fetch = savepoint_name("merge_fetch", 0)
+                    await conn.execute(f"SAVEPOINT {sp_fetch}")
+                    try:
+                        edge_rows = await conn.fetch(
+                            f"SELECT * FROM cypher('{graph}', $$ "
+                            f"MATCH (loser:Concept) WHERE id(loser) = {loser_id} "
+                            "MATCH (loser)-[r]->(m) RETURN type(r), id(m), r.weight, r.cosine "
+                            f"$$) AS (t agtype, mid agtype, w agtype, c agtype)"
+                        )
+                        in_rows = await conn.fetch(
+                            f"SELECT * FROM cypher('{graph}', $$ "
+                            f"MATCH (loser:Concept) WHERE id(loser) = {loser_id} "
+                            "MATCH (n)-[r]->(loser) RETURN type(r), id(n), r.weight, r.cosine "
+                            f"$$) AS (t agtype, nid agtype, w agtype, c agtype)"
+                        )
+                        wrow = await conn.fetchrow(
+                            f"SELECT * FROM cypher('{graph}', $$ "
+                            f"MATCH (k:Concept) WHERE id(k) = {keeper_id} RETURN k.weight "
+                            f"$$) AS (w agtype)"
+                        )
+                        lrow = await conn.fetchrow(
+                            f"SELECT * FROM cypher('{graph}', $$ "
+                            f"MATCH (l:Concept) WHERE id(l) = {loser_id} RETURN l.weight "
+                            f"$$) AS (w agtype)"
+                        )
+                        await conn.execute(f"RELEASE SAVEPOINT {sp_fetch}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_fetch}")
+                        logger.debug("merge_concept_pair fetch failed", exc_info=True)
+                        return False
+
+                    def _parse_weight(raw):
+                        if raw is None or str(raw).strip('"') == "null":
+                            return 1
+                        try:
+                            s = str(raw).strip('"')
+                            return int(float(s)) if s else 1
+                        except Exception:
+                            return 1
+
+                    keeper_w = _parse_weight(wrow["w"] if wrow else None)
+                    loser_w = _parse_weight(lrow["w"] if lrow else None)
+                    new_weight = int(keeper_w + loser_w)
+
+                    for idx, er in enumerate(edge_rows):
+                        sp = savepoint_name("merge_out", idx)
+                        await conn.execute(f"SAVEPOINT {sp}")
+                        try:
+                            label = str(er["t"]).strip('"')
+                            check_label(label)
+                            mid = int(str(er["mid"]).strip('"'))
+                            props = {}
+                            rw = er["w"]
+                            rc = er["c"]
+                            if rw is not None and str(rw).strip('"') != "null":
+                                try:
+                                    props["weight"] = float(str(rw).strip('"'))
+                                except Exception:
+                                    pass
+                            if rc is not None and str(rc).strip('"') != "null":
+                                try:
+                                    props["cosine"] = float(str(rc).strip('"'))
+                                except Exception:
+                                    pass
+                            set_parts = []
+                            if "weight" in props:
+                                set_parts.append(f"e.weight = CASE WHEN e.weight IS NULL OR e.weight < {float(props['weight'])} THEN {float(props['weight'])} ELSE e.weight END")
+                            if "cosine" in props:
+                                set_parts.append(f"e.cosine = CASE WHEN e.cosine IS NULL OR e.cosine < {float(props['cosine'])} THEN {float(props['cosine'])} ELSE e.cosine END")
+                            props_str = (" SET " + ", ".join(set_parts)) if set_parts else ""
+                            cypher = (
+                                f"MATCH (a), (b) WHERE id(a) = {keeper_id} AND id(b) = {mid} "
+                                f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
+                            )
+                            await conn.fetchrow(f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)")
+                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        except Exception:
+                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            logger.debug("merge outgoing edge failed", exc_info=True)
+                            raise
+                    for idx, er in enumerate(in_rows):
+                        sp = savepoint_name("merge_in", idx)
+                        await conn.execute(f"SAVEPOINT {sp}")
+                        try:
+                            label = str(er["t"]).strip('"')
+                            check_label(label)
+                            nid = int(str(er["nid"]).strip('"'))
+                            props = {}
+                            rw = er["w"]
+                            rc = er["c"]
+                            if rw is not None and str(rw).strip('"') != "null":
+                                try:
+                                    props["weight"] = float(str(rw).strip('"'))
+                                except Exception:
+                                    pass
+                            if rc is not None and str(rc).strip('"') != "null":
+                                try:
+                                    props["cosine"] = float(str(rc).strip('"'))
+                                except Exception:
+                                    pass
+                            set_parts = []
+                            if "weight" in props:
+                                set_parts.append(f"e.weight = CASE WHEN e.weight IS NULL OR e.weight < {float(props['weight'])} THEN {float(props['weight'])} ELSE e.weight END")
+                            if "cosine" in props:
+                                set_parts.append(f"e.cosine = CASE WHEN e.cosine IS NULL OR e.cosine < {float(props['cosine'])} THEN {float(props['cosine'])} ELSE e.cosine END")
+                            props_str = (" SET " + ", ".join(set_parts)) if set_parts else ""
+                            cypher = (
+                                f"MATCH (a), (b) WHERE id(a) = {nid} AND id(b) = {keeper_id} "
+                                f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
+                            )
+                            await conn.fetchrow(f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)")
+                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        except Exception:
+                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            logger.debug("merge incoming edge failed", exc_info=True)
+                            raise
+
+                    sp_w = savepoint_name("merge_weight", 0)
+                    await conn.execute(f"SAVEPOINT {sp_w}")
+                    try:
+                        cypher = f"MATCH (k:Concept) WHERE id(k) = {keeper_id} SET k += {age_props({'weight': new_weight})} RETURN id(k)"
+                        await conn.fetchrow(f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)")
+                        await conn.execute(f"RELEASE SAVEPOINT {sp_w}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_w}")
+                        logger.debug("merge weight update failed", exc_info=True)
+                        raise
+
+                    sp_bridge = savepoint_name("merge_bridge", 0)
+                    await conn.execute(f"SAVEPOINT {sp_bridge}")
+                    try:
+                        await conn.execute(
+                            "DELETE FROM memory_chunk_nodes WHERE graph_name = $1 AND vertex_id = $2 "
+                            "AND (chunk_id, source) IN (SELECT chunk_id, source FROM memory_chunk_nodes WHERE vertex_id = $3 AND graph_name = $1)",
+                            self.graph_name, keeper_id, loser_id,
+                        )
+                        await conn.execute(
+                            "UPDATE memory_chunk_nodes SET vertex_id = $1 WHERE vertex_id = $2 AND graph_name = $3",
+                            keeper_id, loser_id, self.graph_name,
+                        )
+                        await conn.execute(
+                            "DELETE FROM memory_chunk_nodes a USING memory_chunk_nodes b "
+                            "WHERE a.ctid < b.ctid AND a.chunk_id=b.chunk_id AND a.source=b.source AND a.vertex_id=b.vertex_id AND a.graph_name=b.graph_name"
+                        )
+                        await conn.execute(f"RELEASE SAVEPOINT {sp_bridge}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_bridge}")
+                        logger.debug("bridge merge failed", exc_info=True)
+                        raise
+
+                    sp_del = savepoint_name("merge_delete", 0)
+                    await conn.execute(f"SAVEPOINT {sp_del}")
+                    try:
+                        await conn.fetch(
+                            f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) WHERE id(c) = {loser_id} DETACH DELETE c $$) AS (a agtype)"
+                        )
+                        await conn.execute(f"RELEASE SAVEPOINT {sp_del}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_del}")
+                        logger.debug("loser DETACH DELETE failed", exc_info=True)
+                        return False
+            except Exception:
+                logger.debug("merge_concept_pair transaction failed", exc_info=True)
+                return False
+        return True
+
+    async def prune_orphan_concepts(self, orphan_ids):
+        """SAVEPOINT-guarded DETACH DELETE for orphan Concept vertices + bridge cleanup.
+
+        Revalidates degree==0 and age cutoff inside the same transaction (no new edges).
+        Bridge cleanup is graph_name-scoped. Each delete in its own SAVEPOINT.
+        Returns count of pruned vertices.
+        """
+        if not orphan_ids:
+            return 0
+        await self.ensure_about_labels()
+        graph = self.graph_name
+        import datetime as _dt
+        cutoff_iso = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat()
+        pruned = 0
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            try:
+                async with conn.transaction():
+                    for idx, oid in enumerate(orphan_ids):
+                        oid = int(oid)
+                        await conn.execute("SELECT pg_advisory_xact_lock($1)", oid)
+                        sp = savepoint_name("prune_orphan", idx)
+                        await conn.execute(f"SAVEPOINT {sp}")
+                        try:
+                            # Revalidate: degree==0 and created_at older than cutoff, locked
+                            rows = await conn.fetch(
+                                f"SELECT * FROM cypher('{graph}', $$ "
+                                f"MATCH (c:Concept) WHERE id(c) = {oid} "
+                                "OPTIONAL MATCH (c)-[r]-() "
+                                "WITH c, count(r) AS degree "
+                                f"WHERE degree = 0 AND c.created_at IS NOT NULL AND c.created_at < {age_str(cutoff_iso)} "
+                                "RETURN id(c) "
+                                f"$$) AS (id agtype)"
+                            )
+                            if not rows:
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                                continue
+                            await conn.fetch(
+                                f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) WHERE id(c) = {oid} DETACH DELETE c $$) AS (a agtype)"
+                            )
+                            await conn.execute("DELETE FROM memory_chunk_nodes WHERE vertex_id = $1 AND graph_name = $2", oid, self.graph_name)
+                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                            pruned += 1
+                        except Exception:
+                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            logger.debug("prune orphan %s failed", oid, exc_info=True)
+            except Exception:
+                logger.debug("prune_orphan_concepts txn failed", exc_info=True)
+        return pruned
+
+    async def preview_concept_compaction(self, pairs, orphan_ids):
+        """Dry-run preview: pairs, orphans, bridge rows affected (no writes)."""
+        bridge_affected = 0
+        if pairs or orphan_ids:
+            all_loser_ids = [int(l) for _, l, _ in pairs] + [int(o) for o in orphan_ids]
+            if all_loser_ids:
+                async with self.pool.acquire() as conn:
+                    try:
+                        bridge_affected = await conn.fetchval(
+                            "SELECT count(*) FROM memory_chunk_nodes WHERE vertex_id = ANY($1::bigint[]) AND graph_name = $2",
+                            all_loser_ids, self.graph_name,
+                        )
+                        bridge_affected = int(bridge_affected or 0)
+                    except Exception:
+                        bridge_affected = 0
+        return {
+            "pairs": [{"keeper": int(k), "loser": int(l), "cosine": float(c)} for k, l, c in pairs],
+            "orphans": [int(o) for o in orphan_ids],
+            "bridge_rows_affected": int(bridge_affected),
+        }
+
+    # -- Graph admin — injection-safe via identifier quoting ------------------
     # -- Graph admin — injection-safe via identifier quoting ------------------
 
     async def drop_graph(self, graph_name: str | None = None) -> None:
