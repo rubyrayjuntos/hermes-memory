@@ -118,6 +118,9 @@ const COLORS = {
 const $ = id => document.getElementById(id);
 const apiEl = $('api'), statsEl = $('stats'), qEl = $('q'), labelSel = $('labelSel'), limitSel = $('limitSel');
 
+// XSS-safe escaping for any API-sourced string interpolated into innerHTML
+function escapeHTML(s){ return String(s ?? '').replace(/[&<>"']/g, m=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
 let raw = {nodes:[], links:[]};
 let graph;
 
@@ -134,7 +137,7 @@ function colorFor(d){ return COLORS[d.label] || COLORS.default; }
 
 function buildLegend(){
   const uniq = [...new Set(raw.nodes.map(n=>n.label))].sort();
-  $('legend').innerHTML = uniq.map(l=>`<div><span class="dot" style="background:${COLORS[l]||COLORS.default}"></span>${l}</div>`).join('') || '<span style="color:#64748b">no nodes</span>';
+  $('legend').innerHTML = uniq.map(l=>`<div><span class="dot" style="background:${COLORS[l]||COLORS.default}"></span>${escapeHTML(l)}</div>`).join('') || '<span style="color:#64748b">no nodes</span>';
 }
 
 function applyFilter(){
@@ -153,7 +156,7 @@ function applyFilter(){
 function showPanel(node){
   const links = raw.links.filter(l=> (l.source.id||l.source)===node.id || (l.target.id||l.target)===node.id);
   $('pTitle').textContent = node.name || node.id;
-  $('pBadge').innerHTML = `<span class="badge" style="background:${colorFor(node)};color:#0f172a">${node.label}</span> <span style="font-size:11px;color:#94a3b8">id ${node.id}</span>`;
+  $('pBadge').innerHTML = `<span class="badge" style="background:${colorFor(node)};color:#0f172a">${escapeHTML(node.label)}</span> <span style="font-size:11px;color:#94a3b8">id ${escapeHTML(node.id)}</span>`;
   const props = node.props || {};
   const meta = Object.entries(props).map(([k,v])=>`${k}: ${typeof v==='object'? JSON.stringify(v): String(v)}`).join('\n') || '(no properties)';
   $('pMeta').textContent = meta;
@@ -161,7 +164,7 @@ function showPanel(node){
     const other = (l.source.id||l.source)===node.id ? (l.target.id||l.target) : (l.source.id||l.source);
     const otherNode = raw.nodes.find(n=>n.id===String(other));
     const dir = (l.source.id||l.source)===node.id ? '→' : '←';
-    return `${dir} <b>${l.label}</b> — ${otherNode ? otherNode.name : other} <span style="color:#64748b">(${other})</span>`;
+    return `${dir} <b>${escapeHTML(l.label)}</b> — ${escapeHTML(otherNode ? otherNode.name : other)} <span style="color:#64748b">(${escapeHTML(String(other))})</span>`;
   }).join('<br>') : '<span style="color:#64748b">no edges in current budget</span>';
   $('panel').classList.add('open');
   // L3: vector inspector — only for File nodes that have a file_path
@@ -191,24 +194,24 @@ async function fetchVector(file_path){
     const r=await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const j=await r.json();
     if(!j.chunks || !j.chunks.length){
-      body.innerHTML=`<span style="color:#f59e0b">no chunks for</span> <code style="color:#e2e8f0">${file_path}</code> — total ${j.total} · bridged ${j.bridged_vertices}`;
+      body.innerHTML=`<span style="color:#f59e0b">no chunks for</span> <code style="color:#e2e8f0">${escapeHTML(file_path)}</code> — total ${escapeHTML(String(j.total))} · bridged ${escapeHTML(String(j.bridged_vertices))}`;
       return;
     }
     body.innerHTML = j.chunks.map((c,idx)=>`
       <div style="border:1px solid #1e293b;background:#0b1224;border-radius:10px;padding:8px;margin-bottom:8px">
         <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:#94a3b8">
-          <span class="badge" style="background:#1e293b;color:#cbd5e1">${c.doc_type||'?'}</span>
-          <span>hash <code style="color:#7dd3fc">${c.hash||'—'}</code></span>
-          <span>${c.language||''}</span>
-          <span>${c.indexed_at ? new Date(c.indexed_at).toLocaleString() : ''}</span>
+          <span class="badge" style="background:#1e293b;color:#cbd5e1">${escapeHTML(c.doc_type||'?')}</span>
+          <span>hash <code style="color:#7dd3fc">${escapeHTML(c.hash||'—')}</code></span>
+          <span>${escapeHTML(c.language||'')}</span>
+          <span>${escapeHTML(c.indexed_at ? new Date(c.indexed_at).toLocaleString() : '')}</span>
         </div>
-        <div style="margin:6px 0 4px 0;font-size:10px;color:#64748b">768-d · preview 64 · min ${c.preview_stats.min} max ${c.preview_stats.max} mean ${c.preview_stats.mean} · id ${c.id.slice(0,8)}…</div>
+        <div style="margin:6px 0 4px 0;font-size:10px;color:#64748b">768-d · preview 64 · min ${escapeHTML(String(c.preview_stats.min))} max ${escapeHTML(String(c.preview_stats.max))} mean ${escapeHTML(String(c.preview_stats.mean))} · id ${escapeHTML(c.id.slice(0,8))}…</div>
         ${sparklineSVG(c.preview)}
-        <div style="margin-top:6px;font-size:11px;color:#cbd5e1;white-space:pre-wrap;word-break:break-word">${c.snippet}…</div>
+        <div style="margin-top:6px;font-size:11px;color:#cbd5e1;white-space:pre-wrap;word-break:break-word">${escapeHTML(c.snippet)}…</div>
       </div>
-    `).join('') + `<div style="font-size:10px;color:#64748b;margin-top:4px">file total ${j.total} chunks · bridged to ${j.bridged_vertices} vertices · query <code>GET /api/librarian/chunks?file_path=${file_path}</code></div>`;
+    `).join('') + `<div style="font-size:10px;color:#64748b;margin-top:4px">file total ${escapeHTML(String(j.total))} chunks · bridged to ${escapeHTML(String(j.bridged_vertices))} vertices · query <code>GET /api/librarian/chunks?file_path=${escapeHTML(file_path)}</code></div>`;
   }catch(e){
-    body.innerHTML=`<span style="color:#fca5a5">vector fetch failed:</span> ${e.message}`;
+    body.innerHTML=`<span style="color:#fca5a5">vector fetch failed:</span> ${escapeHTML(e.message)}`;
   }
 }
 

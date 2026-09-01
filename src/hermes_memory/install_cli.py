@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_HOME = Path.home() / ".hermes"
 
 
@@ -20,6 +20,60 @@ def get_env_files():
 def write_env_file(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+def merge_env_file(path: Path, updates: dict) -> None:
+    """Read-modify-write: preserve existing keys, update only *updates*."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, str] = {}
+    order: list[str] = []
+    raw_lines: list[str] = []
+    if path.exists():
+        raw_lines = path.read_text().splitlines()
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            k, v = stripped.split("=", 1)
+            k = k.strip()
+            if k not in existing:
+                order.append(k)
+            existing[k] = v.strip()
+    # merge updates
+    for k, v in updates.items():
+        if k not in existing:
+            order.append(k)
+        existing[k] = v
+    # reconstruct preserving comments/blank-ish? simplest: keep comments + merged keys
+    out_lines: list[str] = []
+    seen: set[str] = set()
+    if path.exists():
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                out_lines.append(line)
+                continue
+            if "=" in stripped:
+                k = stripped.split("=", 1)[0].strip()
+                if k in updates:
+                    out_lines.append(f"{k}={existing[k]}")
+                    seen.add(k)
+                elif k in existing and k not in seen:
+                    out_lines.append(f"{k}={existing[k]}")
+                    seen.add(k)
+                else:
+                    # duplicate or already handled
+                    if k not in seen:
+                        out_lines.append(line)
+                        seen.add(k)
+            else:
+                out_lines.append(line)
+    # append any new keys not yet written
+    for k in order:
+        if k not in seen:
+            out_lines.append(f"{k}={existing[k]}")
+            seen.add(k)
+    path.write_text("\n".join(out_lines) + "\n")
 
 
 def main():
@@ -39,22 +93,42 @@ def main():
                         help="Assume yes to all prompts")
     args = parser.parse_args()
 
-    dsn = args.dsn or input("HYBRID_AGE_DSN: ").strip() or \
-        "postgres://hermes:***@localhost:5450/hermes_memory"
+    dsn = args.dsn or input("HYBRID_AGE_DSN: ").strip() or None
+    if not dsn or "***" in dsn:
+        # Prompt for real password instead of storing placeholder
+        import getpass
+        pw = getpass.getpass("HYBRID_AGE_DSN password (will be embedded in DSN): ").strip()
+        if pw:
+            dsn = f"postgres://hermes:{pw}@localhost:5450/hermes_memory"
+        elif dsn and "***" not in dsn:
+            pass
+        else:
+            print("ERROR: A real Postgres password is required. Set HERMES_PG_PASSWORD or pass --dsn with a real password.", file=sys.stderr)
+            print("       The placeholder '***' cannot be used — PostgreSQL will refuse to start/authenticate.", file=sys.stderr)
+            sys.exit(1)
+        # Also ensure HERMES_PG_PASSWORD is persisted for compose
+        for env_path in get_env_files():
+            try:
+                if env_path.exists() and "HERMES_PG_PASSWORD" in env_path.read_text():
+                    continue
+            except OSError:
+                pass
+            merge_env_file(env_path, {"HERMES_PG_PASSWORD": pw}) if pw else None
     embed_url = args.embed_url or input("HYBRID_AGE_EMBED_URL: ").strip() or \
         "http://localhost:11434/v1"
     embed_model = args.embed_model or input("HYBRID_AGE_EMBED_MODEL: ").strip() or \
         "nomic-embed-text"
     graph = args.graph or input("HYBRID_AGE_GRAPH: ").strip() or "hermes_knowledge"
 
-    # Write env files
+    # Write env files — merge, do not truncate unrelated keys
+    updates = {
+        "HYBRID_AGE_DSN": dsn,
+        "HYBRID_AGE_EMBED_URL": embed_url,
+        "HYBRID_AGE_EMBED_MODEL": embed_model,
+        "HYBRID_AGE_GRAPH": graph,
+    }
     for env_path in get_env_files():
-        env_path.parent.mkdir(parents=True, exist_ok=True)
-        txt = (f"HYBRID_AGE_DSN={dsn}\n"
-               f"HYBRID_AGE_EMBED_URL={embed_url}\n"
-               f"HYBRID_AGE_EMBED_MODEL={embed_model}\n"
-               f"HYBRID_AGE_GRAPH={graph}\n")
-        write_env_file(env_path, txt)
+        merge_env_file(env_path, updates)
 
     # 1. Install plugins
     print("[1/7] Installing hybrid-age plugin...")
@@ -86,8 +160,9 @@ def main():
 
     # 3. Configure config.yaml via hermes CLI
     print("[3/7] Configuring Hermes config.yaml...")
+    hermes_bin = shutil.which("hermes") or "hermes"
     result = subprocess.run(
-        ["hermes", "config", "set", "plugins.enabled", "['hybrid-age']"],
+        [hermes_bin, "config", "set", "plugins.enabled", "['hybrid-age']"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -95,7 +170,7 @@ def main():
     else:
         print("    plugins.enabled set.")
     result = subprocess.run(
-        ["hermes", "config", "set", "plugins.disabled", "['pgvector']"],
+        [hermes_bin, "config", "set", "plugins.disabled", "['pgvector']"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -103,29 +178,66 @@ def main():
     else:
         print("    plugins.disabled set.")
 
-    # 4. Write hybrid_age block to config.yaml
+    # 4. Write hybrid_age block to config.yaml — parse YAML if available
     print("[4/7] Writing hybrid_age block to config.yaml...")
     config_path = HERMES_HOME / "config.yaml"
-    new_block = (f"\nhybrid_age:\n"
-                 f"  dsn_env: HYBRID_AGE_DSN\n"
-                 f"  embed_url_env: HYBRID_AGE_EMBED_URL\n"
-                 f"  embed_model: {embed_model}\n"
-                 f"  graph: {graph}\n"
-                 f"  vector_k: 12\n"
-                 f"  min_similarity: 0.55\n"
-                 f"  max_tokens: 1200\n")
+    new_block_dict = {
+        "dsn_env": "HYBRID_AGE_DSN",
+        "embed_url_env": "HYBRID_AGE_EMBED_URL",
+        "embed_model": embed_model,
+        "graph": graph,
+        "vector_k": 12,
+        "min_similarity": 0.55,
+        "max_tokens": 1200,
+    }
+    try:
+        import yaml  # type: ignore
+        has_yaml = True
+    except ImportError:
+        has_yaml = False
     if config_path.exists():
-        with open(config_path, 'r') as f:
-            config_text = f.read()
-        if "hybrid_age:" in config_text:
-            config_text = re.sub(r"hybrid_age:.*?(?=\n[\w\W]*$)",
-                                 new_block, config_text, flags=re.DOTALL)
-        else:
-            config_text = config_text.rstrip() + new_block
+        if has_yaml:
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = yaml.safe_load(f) or {}
+                cfg["hybrid_age"] = new_block_dict
+                with open(config_path, 'w') as f:
+                    yaml.safe_dump(cfg, f, sort_keys=False)
+            except Exception as e:
+                print(f"    WARNING: YAML update failed ({e}), falling back to text append")
+                has_yaml = False
+        if not has_yaml:
+            with open(config_path, 'r') as f:
+                config_text = f.read()
+            if "hybrid_age:" in config_text:
+                # Replace through next top-level key or EOF (properly)
+                config_text = re.sub(
+                    r"^hybrid_age:.*?(?=^\w|\Z)",
+                    lambda m: f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n",
+                    config_text, flags=re.DOTALL | re.MULTILINE
+                )
+                # If regex didn't consume old indented values (fallback), ensure single block
+                if config_text.count("hybrid_age:") > 1:
+                    # keep first occurrence, remove duplicates
+                    parts = config_text.split("hybrid_age:")
+                    config_text = parts[0] + "hybrid_age:" + parts[1].split("\nhybrid_age:")[0]
+                    # rebuild with correct block if needed
+                    if f"graph: {graph}" not in config_text:
+                        config_text = re.sub(r"^hybrid_age:.*?(?=^\w|\Z)",
+                                             f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n",
+                                             config_text, flags=re.DOTALL | re.MULTILINE)
+            else:
+                config_text = config_text.rstrip() + f"\nhybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n"
+            if not has_yaml:
+                with open(config_path, 'w') as f:
+                    f.write(config_text)
     else:
-        config_text = new_block
-    with open(config_path, 'w') as f:
-        f.write(config_text)
+        if has_yaml:
+            with open(config_path, 'w') as f:
+                yaml.safe_dump({"hybrid_age": new_block_dict}, f, sort_keys=False)
+        else:
+            with open(config_path, 'w') as f:
+                f.write(f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n")
     print("    config.yaml updated.")
 
     # 5. Start Docker compose
@@ -167,10 +279,18 @@ def main():
     print("[6/7] Restarting Flask API (7890)...")
     subprocess.run(["pkill", "-f", "graph_api.py"], capture_output=True)
     time.sleep(1)
-    api_script = str(REPO_ROOT / "scripts" / "graph_api.py")
-    subprocess.run(["nohup", "python3", api_script,
-                    "> /tmp/librarian_api.log 2>&1 &"],
-                    capture_output=True)
+    api_script = REPO_ROOT / "scripts" / "graph_api.py"
+    try:
+        log_path = Path("/tmp/librarian_api.log")
+        # Use Popen with absolute python, not shell redirection literals
+        subprocess.Popen(
+            [sys.executable, str(api_script)],
+            stdout=open(log_path, "ab"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except Exception as e:
+        print(f"    API start failed: {e}")
     print("    API startup initiated.")
     time.sleep(3)
     result = subprocess.run(["curl", "-s",
@@ -181,9 +301,9 @@ def main():
     else:
         print(f"    Flask API may not be up yet. Log: {result.stdout[:200]}")
 
-    # 7. Run verification
+    # 7. Run verification — use python -m to be cwd-independent
     print("[7/7] Running hermes-memory-verify...")
-    result = subprocess.run(["hermes-memory-verify"],
+    result = subprocess.run([sys.executable, "-m", "hermes_memory.verify"],
                             capture_output=True, text=True)
     print(result.stdout)
     if result.returncode == 0:
