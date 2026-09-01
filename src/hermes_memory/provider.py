@@ -423,7 +423,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         rows = await self.store.expand_graph(
             seed_ids,
-            ["RELATED_TO", "WORKS_ON", "USES", "DEPENDS_ON", "BUILT_WITH"],
+            [],  # dynamic weighted walk — score by weight×cosine, not whitelist
             limit=40,
         )
 

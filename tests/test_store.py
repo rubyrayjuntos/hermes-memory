@@ -96,3 +96,45 @@ async def test_safe_label_and_drop_guard(store):
     with _pytest.raises(ValueError):
         check_label("123bad")
     assert check_label("hermes_knowledge") == "hermes_knowledge"
+
+@pytest.mark.asyncio
+async def test_expand_graph_weighted_edges(db_pool, store, clean_hermes_test_db):
+    """Weighted walk: numeric weight/cosine stored as numerics, ordered by w*c DESC."""
+    async with db_pool.acquire() as conn:
+        await conn.execute("LOAD 'age';")
+        await conn.execute("SET search_path = ag_catalog, public;")
+        try:
+            await conn.execute("SELECT create_vlabel('hermes_knowledge', 'TestNode');")
+        except Exception:
+            pass
+        try:
+            await conn.execute("SELECT create_elabel('hermes_knowledge', 'RELATED_TO');")
+        except Exception:
+            pass
+    vids = await store.merge_vertices_batched([
+        ("TestNode", {"name": "expand_src"}),
+        ("TestNode", {"name": "expand_dst_hi"}),
+        ("TestNode", {"name": "expand_dst_lo"}),
+    ])
+    assert all(v is not None for v in vids), f"vertex creation failed: {vids}"
+    src_id, hi_id, lo_id = int(vids[0]), int(vids[1]), int(vids[2])
+
+    done = await store.merge_edges_batched(
+        [("RELATED_TO", src_id, hi_id), ("RELATED_TO", src_id, lo_id)],
+        edge_props={
+            ("RELATED_TO", src_id, hi_id): {"weight": 0.9, "cosine": 0.9},
+            ("RELATED_TO", src_id, lo_id): {"weight": 0.2, "cosine": 0.3},
+        },
+    )
+    assert done == 2, f"expected 2 edges merged, got {done}"
+
+    rows = await store.expand_graph([src_id])
+    assert len(rows) >= 2, f"expected at least 2 rows, got {rows}"
+    # agtype rel is quoted '"RELATED_TO"' — strip
+    rels = [str(r[1]).strip('"') for r in rows]
+    assert "RELATED_TO" in rels, f"no RELATED_TO in {rels} rows={rows}"
+    order = [str(r[2]) for r in rows if str(r[1]).strip('"') == "RELATED_TO"]
+    hi_pos = next((i for i, s in enumerate(order) if "expand_dst_hi" in s), None)
+    lo_pos = next((i for i, s in enumerate(order) if "expand_dst_lo" in s), None)
+    assert hi_pos is not None and lo_pos is not None, f"dst not in order={order}"
+    assert hi_pos < lo_pos, f"hi {hi_pos} should be before lo {lo_pos} order={order}"
