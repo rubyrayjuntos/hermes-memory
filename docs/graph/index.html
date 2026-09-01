@@ -53,7 +53,6 @@
   <input id="q" type="text" placeholder="filter name… (client-side)" style="min-width:140px">
   <input id="hq" type="text" placeholder="hybrid search… (vector+graph)" style="min-width:180px">
   <button id="hSearch">search</button>
-  <button id="conceptBtn" style="background:#f59e0b;color:#0f172a;border-color:#d97706;font-weight:700">◆ Concept spine</button>
   <button id="reload">reload</button>
   <button id="fit">fit</button>
   <button id="spin">spin: on</button>
@@ -108,12 +107,11 @@ const CONFIG = {
   // same-origin when served from Flask /api/librarian/pane — otherwise use explicit host
   API_BASE: location.port === '7890' ? '' : 'http://127.0.0.1:7890',
   PATH_3D: '/api/librarian/graph/3d',
-  PATH_CONCEPT: '/api/librarian/graph/concept',
   FALLBACK_TO_DEMO: true,
 };
 const COLORS = {
   Person:'#a78bfa', Project:'#60a5fa', Technology:'#34d399', Organization:'#f87171',
-  Concept:'#f59e0b', CronJob:'#ef4444', PromptContext:'#10b981', VectorBridge:'#38bdf8', PostgresAGE:'#6366f1',
+  Concept:'#f59e0b',
   File:'#818cf8', Module:'#6366f1', Dependency:'#84cc16', Standard:'#f59e0b',
   Session:'#e879f9', Turn:'#c084fc', default:'#38bdf8'
 };
@@ -278,7 +276,6 @@ $('closeP').onclick = ()=> $('panel').classList.remove('open');
 $('closeH').onclick = ()=> $('hResults').style.display='none';
 $('hSearch').onclick = doHybrid;
 $('hq').addEventListener('keydown', e=>{ if(e.key==='Enter') doHybrid(); });
-$('conceptBtn').onclick = fetchConcept;
 
 let lastNode=null;
 const _showPanelOrig = showPanel;
@@ -381,39 +378,6 @@ function showNodeById(vid){
     const props=j.properties||j;
     showPanel({id:vid, label: j.label||j.group||'Node', name: j.name||j.title||props.name||vid, props: props, val:2});
   }).catch(()=> focusNode(vid));
-}
-
-async function fetchConcept(){
-  $('hResults').style.display='block';
-  $('hMeta').innerHTML='<span style="color:#f59e0b">◆ Concept spine</span> — whitelisted EXECUTES_CRON|WRITES_TO|BRIDGES|INJECTS (no IMPORTS noise)';
-  $('hList').innerHTML='<span style="color:#94a3b8">traversing Concept:Hermes Librarian → CronJob → PostgresAGE / VectorBridge → PromptContext…</span>';
-  try{
-    const url=`${CONFIG.API_BASE}${CONFIG.PATH_CONCEPT}?name=${encodeURIComponent('Hermes Librarian')}&hops=2&fresh=1`;
-    const r=await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j=await r.json();
-    if(j.error) throw new Error(j.error);
-    // render synthesis first
-    $('hList').innerHTML = `
-      <div style="border:1px solid #f59e0b;background:#1a1405;border-radius:10px;padding:10px;margin-bottom:10px">
-        <div style="font-size:11px;font-weight:700;color:#fde68a;margin-bottom:4px">⬢ Architectural synthesis (LLM, 2 sentences)</div>
-        <div style="font-size:12px;color:#f1f5f9;line-height:1.5">${j.synthesis}</div>
-        <div style="font-size:10px;color:#92400e;margin-top:6px">whitelist ${j.meta.whitelist.join(' | ')} · ${j.meta.verts}v/${j.meta.edges}e · hops=${j.meta.hops}</div>
-      </div>
-      ` + j.nodes.map(n=>`<div style="border:1px solid #1e293b;background:#0b1224;border-radius:10px;padding:8px;margin-bottom:6px">
-        <div style="display:flex;justify-content:space-between"><b style="font-size:11px;color:#f1f5f9">${n.label}: ${n.name}</b><span style="font-size:10px;color:#7dd3fc">id ${n.id}</span></div>
-        <div style="font-size:10px;color:#94a3b8">${Object.entries(n.props).map(([k,v])=>k+': '+String(v)).join(' · ')}</div>
-        <div style="margin-top:4px"><button style="font-size:10px;padding:3px 7px" onclick="focusNode('${String(n.id).replace(/'/g,"\\'")}')">focus</button></div>
-      </div>`).join('') + j.links.map(l=>`<div style="font-size:10px;color:#64748b">→ <b>${l.label}</b> ${l.source} → ${l.target}</div>`).join('');
-    // switch 3D to the spine — this is the clean topology, not the lexical hairball
-    raw = {nodes: j.nodes, links: j.links, meta: j.meta};
-    buildLegend();
-    graph.graphData(raw);
-    setApi('ok', `API: concept · ${j.meta.verts}v/${j.meta.edges}e · synthesis ok`);
-    statsEl.textContent = `concept: ${j.meta.verts} spine nodes · ${j.meta.edges} whitelisted edges`;
-    setTimeout(()=>graph.zoomToFit(600), 400);
-  }catch(e){
-    $('hList').innerHTML=`<span style="color:#fca5a5">concept fetch failed:</span> ${e.message}`;
-  }
 }
 
 // CRUD — wired to /api/librarian/nodes/* (requires audit first per AGENTS.md SAVEPOINT discipline)
