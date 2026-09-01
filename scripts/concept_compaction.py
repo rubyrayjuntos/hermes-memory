@@ -207,7 +207,7 @@ def main(argv: List[str] | None = None) -> int:
         dry_run = False
     dsn = resolve_dsn(args.dsn)
     print(f"concept_compaction: threshold={args.threshold} orphan_days={args.orphan_days} dry_run={dry_run}")
-    print(f"concept_compaction: dsn={dsn.split('@')[-1] if '@' in dsn else dsn}")
+    print("concept_compaction: dsn=(redacted)")
     result = asyncio.run(run_compaction(dsn, threshold=args.threshold, orphan_days=args.orphan_days, dry_run=dry_run))
     import json
     print(json.dumps(result, indent=2))
