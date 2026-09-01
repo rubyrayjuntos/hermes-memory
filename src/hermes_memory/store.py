@@ -152,13 +152,15 @@ class Store:
         content: str,
         vec_literal: Optional[str],
         metadata: Dict[str, Any] | None = None,
-    ) -> None:
+    ) -> Optional[int]:
+        """Insert a turn and return its id (RETURNING id) for graph linkage."""
         async with self.pool.acquire() as conn:
-            await conn.execute(
+            row = await conn.fetchrow(
                 """
                 INSERT INTO conversations
                     (session_id, agent_identity, role, content, embedding, metadata)
                 VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb)
+                RETURNING id
                 """,
                 session_id,
                 agent_identity,
@@ -167,6 +169,58 @@ class Store:
                 vec_literal,
                 json.dumps(metadata or {}),
             )
+            return int(row["id"]) if row and row["id"] is not None else None
+
+    async def ensure_about_labels(self) -> None:
+        """Ensure Turn/Concept vertices and ABOUT edge labels exist.
+
+        Each create_* runs inside a SAVEPOINT so 'already exists' never poisons
+        the surrounding transaction; other errors are logged but not raised.
+        """
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            try:
+                async with conn.transaction():
+                    for idx, (kind, label) in enumerate(
+                        [("v", "Turn"), ("v", "Concept"), ("e", "ABOUT")]
+                    ):
+                        sp = savepoint_name(f"ensure_{label.lower()}", idx)
+                        await conn.execute(f"SAVEPOINT {sp}")
+                        try:
+                            if kind == "v":
+                                await conn.execute(
+                                    f"SELECT create_vlabel('{self.graph_name}', '{label}')"
+                                )
+                            else:
+                                await conn.execute(
+                                    f"SELECT create_elabel('{self.graph_name}', '{label}')"
+                                )
+                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        except Exception as exc:
+                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            if "already exists" not in str(exc).lower():
+                                logger.debug("ensure label %s failed", label, exc_info=True)
+            except Exception:
+                logger.debug("ensure_about_labels transaction error", exc_info=True)
+
+    async def bridge_turn(self, conv_id: int, vertex_id: int) -> None:
+        """Bridge a conversation Turn vertex: conv_{id} -> Turn vertex."""
+        chunk_id = f"conv_{int(conv_id)}"
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO memory_chunk_nodes (chunk_id, source, vertex_id, graph_name)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (chunk_id, source, vertex_id) DO NOTHING
+                    """,
+                    chunk_id,
+                    "conversation",
+                    int(vertex_id),
+                    self.graph_name,
+                )
+            except Exception:
+                logger.debug("bridge_turn failed", exc_info=True)
 
     async def upsert_memory_entry(
         self,

@@ -3,7 +3,7 @@
 Port of the production-proven plugin (~/.hermes/plugins/hybrid-age/provider.py)
 to the packaged provider layout, per docs/plans/v0.1.md §3.1.
 
-Contract highlights:
+Contract highlights (Turn->ABOUT->Concept linker with real cosine, bridge conv_{id}):
 - name = "hybrid-age"
 - is_available(): no network — config resolvable + driver importable
 - initialize(session_id, **kwargs): skip writes unless agent_context == "primary"
@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import math
 import re
 import threading
 import time
@@ -40,6 +41,88 @@ logger = logging.getLogger("hybrid_age")
 SECRET_RE = re.compile(r"api[_-]?key|secret|password|BEGIN PRIVATE", re.I)
 
 TURN_MIN_CHARS = 40
+
+# -- ABOUT linker helpers (Turn -> ABOUT -> Concept, real cosine) -----------
+# Copied inline from ~/.hermes/scripts/graph_extractor.py — do not import that file.
+# Pattern: multi-word capitalized phrases, whitespace except newline.
+_ABOUT_PATTERN = r'\b([A-Z][a-z]+(?:[^\S\n]+[A-Z][a-z]+){1,3})\b'
+_PHRASE_STOPWORDS = {
+    "the", "a", "an", "and", "but", "or", "if", "then", "else", "when",
+    "while", "why", "what", "how", "who", "which", "that", "this", "these",
+    "those", "there", "here", "it", "its", "is", "are", "was", "were", "be",
+    "been", "being", "do", "does", "did", "actually", "unless", "no", "not",
+    "yes", "also", "just", "only", "very", "much", "more", "most", "some",
+    "any", "each", "every", "both", "either", "neither", "for", "from",
+    "with", "without", "into", "onto", "about", "after", "before", "during",
+    "since", "until", "because", "so", "such", "than", "too", "now", "next",
+    "first", "second", "third", "last", "final", "one", "two", "three",
+    "note", "warning", "result", "results", "step", "steps", "example",
+    "summary", "verdict", "fix", "fixed", "broken", "working", "current",
+}
+
+
+def _extract_concepts(text: str, max_concepts: int = 3) -> list[str]:
+    """Extract 1-3 Concept names via capitalized phrase regex.
+
+    Mirrors extract_capitalized_phrases from graph_extractor.py inline:
+    - multi-word capitalized runs (2-4 words) not crossing newlines
+    - stopword filtering, dedup, 45-char cap
+    - max 3, fallback to single keyword if none
+    """
+    matches = re.findall(_ABOUT_PATTERN, text or "")
+    results: list[str] = []
+    seen: set[str] = set()
+    for m in matches:
+        phrase = re.sub(r"\s+", " ", m).strip(" \t*_#`-\u2014:;,.")
+        if not phrase or phrase in seen:
+            continue
+        words = phrase.split()
+        if len(words) < 2:
+            continue
+        if words[0].lower() in _PHRASE_STOPWORDS:
+            continue
+        if all(w.lower() in _PHRASE_STOPWORDS for w in words):
+            continue
+        if len(phrase) > 45:
+            continue
+        results.append(phrase)
+        seen.add(phrase)
+        if len(results) >= max_concepts:
+            break
+    if not results:
+        # Fallback: single capitalized word or first significant token
+        singles = re.findall(r"\b([A-Z][a-z]{2,})\b", text or "")
+        for s in singles:
+            if s.lower() in _PHRASE_STOPWORDS:
+                continue
+            if s not in seen:
+                results.append(s)
+                break
+        if not results:
+            tokens = re.findall(r"\b([A-Za-z]{4,})\b", text or "")
+            for t in tokens:
+                if t.lower() in _PHRASE_STOPWORDS:
+                    continue
+                cand = t.capitalize() if t.islower() else t
+                if cand not in seen:
+                    results.append(cand)
+                    break
+    return results[:max_concepts]
+
+
+def _cosine_similarity(a: list[float] | None, b: list[float] | None) -> float | None:
+    """Pure-python cosine: dot/(||a||*||b||). None if inputs invalid."""
+    if not a or not b or len(a) != len(b):
+        return None
+    try:
+        dot = sum(x * y for x, y in zip(a, b))
+        na = math.sqrt(sum(x * x for x in a))
+        nb = math.sqrt(sum(y * y for y in b))
+        if na == 0 or nb == 0:
+            return None
+        return dot / (na * nb)
+    except Exception:
+        return None
 _NOISE_RE = re.compile(
     r"^("
     r"ok(ay)?|thanks?( you)?|thx|ty|np|"
@@ -311,10 +394,18 @@ class HybridAgeMemoryProvider(MemoryProvider):
         vec_literal = vec_to_literal(vec) if vec else None
 
         if item["type"] == "turn":
-            await store.insert_turn(
+            conv_id = await store.insert_turn(
                 item["session_id"], self._agent_identity,
                 item["role"], item["content"], vec_literal,
             )
+            # Turn->ABOUT->Concept linker (real cosine, SAVEPOINT-guarded, never poison txn)
+            if conv_id is not None:
+                try:
+                    await self._link_turn_concepts(
+                        store, embedder, conv_id, item["session_id"], item["content"], vec
+                    )
+                except Exception:
+                    logger.debug("ABOUT linker failed", exc_info=True)
         elif item["type"] == "memory":
             action = item["action"]
             target = item["target"]
@@ -339,6 +430,82 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 await store.remove_memory_entries(
                     self._agent_identity, target, content,
                 )
+
+    async def _link_turn_concepts(
+        self, store: Store, embedder: Embedder, conv_id: int,
+        session_id: str, content: str, turn_vec: list[float] | None,
+    ) -> None:
+        """Create Turn->ABOUT->Concept edges with real cosine + bridge."""
+        concepts = _extract_concepts(content)
+        if not concepts:
+            return
+        # Compute real cosine per concept; threshold 0.55
+        scored: list[tuple[str, float]] = []
+        for concept in concepts:
+            try:
+                cvec = await embedder.embed_text(concept)
+            except Exception:
+                cvec = None
+            cos = _cosine_similarity(turn_vec, cvec)
+            if cos is None:
+                cos = 0.75
+            # Clamp to [-1,1] for safety
+            cos = max(-1.0, min(1.0, float(cos)))
+            if cos < 0.55:
+                continue
+            scored.append((concept, cos))
+        if not scored:
+            return
+        # Ensure labels exist (SAVEPOINT-guarded)
+        try:
+            await store.ensure_about_labels()
+        except Exception:
+            logger.debug("ensure_about_labels failed", exc_info=True)
+        # Merge Turn vertex (content truncated 200 chars)
+        turn_content = (content or "")[:200]
+        turn_props = {"name": f"turn_{conv_id}", "session_id": session_id, "turn_id": int(conv_id), "content": turn_content}
+        # Use Concept vertices: MERGE on name; Turn vertex merges via name too
+        # Turn label expects name key; we provide it
+        vids: list[str | None] = []
+        try:
+            # Turn vertex first
+            vids_turn = await store.merge_vertices_batched([("Turn", turn_props)])
+            turn_vid_str = vids_turn[0] if vids_turn else None
+            if not turn_vid_str:
+                return
+            turn_vid = int(turn_vid_str)
+        except Exception:
+            logger.debug("Turn vertex merge failed", exc_info=True)
+            return
+        # Concept vertices
+        concept_items = [("Concept", {"name": c}) for c, _ in scored]
+        try:
+            concept_vids = await store.merge_vertices_batched(concept_items)
+        except Exception:
+            logger.debug("Concept vertex merge failed", exc_info=True)
+            return
+        # Build edges Turn->ABOUT->Concept with real cosine
+        edges: list[tuple[str, int, int]] = []
+        edge_props: dict[tuple[str, int, int], dict] = {}
+        for (concept, cos), cvid_str in zip(scored, concept_vids):
+            if not cvid_str:
+                continue
+            try:
+                cvid = int(cvid_str)
+            except ValueError:
+                continue
+            edges.append(("ABOUT", turn_vid, cvid))
+            edge_props[("ABOUT", turn_vid, cvid)] = {"weight": 1.0, "cosine": float(cos)}
+        if edges:
+            try:
+                await store.merge_edges_batched(edges, edge_props=edge_props)
+            except Exception:
+                logger.debug("ABOUT edge merge failed", exc_info=True)
+        # Bridge for vector-seed expansion
+        try:
+            await store.bridge_turn(conv_id, turn_vid)
+        except Exception:
+            logger.debug("bridge_turn failed", exc_info=True)
 
     # -- prefetch ----------------------------------------------------------------
 
