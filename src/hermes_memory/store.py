@@ -781,7 +781,7 @@ class Store:
                         except Exception:
                             await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
                             logger.debug("merge outgoing edge failed", exc_info=True)
-
+                            raise
                     for idx, er in enumerate(in_rows):
                         sp = savepoint_name("merge_in", idx)
                         await conn.execute(f"SAVEPOINT {sp}")
