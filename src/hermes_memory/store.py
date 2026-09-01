@@ -11,8 +11,10 @@ Rules (plan §3.3):
 """
 from __future__ import annotations
 
+import datetime
 import json
 import logging
+import math
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -193,6 +195,105 @@ def compaction_keepers(pairs):
             result[m] = keeper
     return result
 
+
+# -- Recency decay helpers (issue #38) ----------------------------------------
+
+def _parse_created_at(raw: Any) -> Optional[str]:
+    """Normalize an agtype created_at value to a plain ISO string or None."""
+    if raw is None:
+        return None
+    s = str(raw).strip().strip('"').strip("'")
+    if not s or s == "null":
+        return None
+    return s
+
+def recency_decay(
+    created_at: Optional[str],
+    half_life_days: float = 30.0,
+    now: Optional[datetime.datetime] = None,
+) -> float:
+    """Compute recency decay exp(-age_days/half_life) with fallback 0.5 for legacy.
+
+    - created_at: ISO string or None. If None/missing/unparseable -> 0.5.
+    - half_life_days: denominator for exp decay (default 30).
+    - now: reference time for deterministic tests; defaults to utcnow.
+    - Future dates clamp age to 0 -> decay 1.0.
+    """
+    if not created_at:
+        return 0.5
+    try:
+        iso = str(created_at).replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        if now is None:
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
+        else:
+            now_dt = now
+            if now_dt.tzinfo is None:
+                now_dt = now_dt.replace(tzinfo=datetime.timezone.utc)
+        age_days = (now_dt - dt).total_seconds() / 86400.0
+        if age_days < 0:
+            age_days = 0
+        hl = float(half_life_days) if half_life_days else 30.0
+        if hl <= 0:
+            return 0.5
+        decay = math.exp(-age_days / hl)
+        if decay < 0:
+            return 0.0
+        if decay > 1:
+            return 1.0
+        return float(decay)
+    except Exception:
+        return 0.5
+
+def recency_decay_for_edge(
+    edge_created_at: Optional[str],
+    vertex_created_at: Optional[str],
+    half_life_days: float = 30.0,
+    now: Optional[datetime.datetime] = None,
+) -> float:
+    """Prefer edge created_at, fallback to target vertex created_at, else 0.5."""
+    primary = _parse_created_at(edge_created_at)
+    if primary:
+        return recency_decay(primary, half_life_days, now)
+    fallback = _parse_created_at(vertex_created_at)
+    if fallback:
+        return recency_decay(fallback, half_life_days, now)
+    return 0.5
+
+def recency_score(
+    weight: float,
+    cosine: float,
+    created_at: Optional[str] = None,
+    half_life_days: float = 30.0,
+    now: Optional[datetime.datetime] = None,
+    *,
+    edge_created_at: Optional[str] = None,
+    vertex_created_at: Optional[str] = None,
+) -> float:
+    """Composite score: 0.5*cosine + 0.3*weight + 0.2*exp(-age/half_life).
+
+    created_at is shorthand for edge_created_at when vertex not needed.
+    Weight and cosine fallback to 0.5 if None/nan.
+    """
+    try:
+        w = float(weight) if weight is not None else 0.5
+    except Exception:
+        w = 0.5
+    try:
+        c = float(cosine) if cosine is not None else 0.5
+    except Exception:
+        c = 0.5
+    # sanitize 0-1 range? keep as given but clamp nan
+    if w != w:  # nan
+        w = 0.5
+    if c != c:
+        c = 0.5
+    ea = edge_created_at if edge_created_at is not None else created_at
+    va = vertex_created_at
+    decay = recency_decay_for_edge(ea, va, half_life_days, now)
+    return 0.5 * c + 0.3 * w + 0.2 * decay
 
 
 class Store:
@@ -436,13 +537,17 @@ class Store:
     async def expand_graph(
         self, seed_vertex_ids: Sequence[int], rel_types: Sequence[str] = (), limit: int = 40,
         min_weight: float = 0.0, min_cosine: float = 0.0,
+        decay_half_life_days: float = 30.0,
     ) -> List[Tuple[Any, Optional[str], Any]]:
         """1-hop weighted expand from seed vertices. Cypher inside SAVEPOINT.
 
         Dynamic memory graph: edges carry weight (force) and cosine (vector radius).
-        If rel_types empty → walk all types scored by weight*cosine. Otherwise
-        filter to that whitelist but still score-ordered. Edges without props
-        default to 0.5 so legacy IMPORTS edges remain walkable.
+        Recency-aware scoring: 0.5*cosine + 0.3*weight + 0.2*exp(-age_days/half_life)
+        where age from edge created_at or target vertex created_at, fallback 0.5
+        for legacy edges without timestamps. If rel_types empty → walk all types
+        scored with decay. Otherwise filter to that whitelist but still
+        score-ordered. Edges without props default to 0.5 so legacy IMPORTS
+        edges remain walkable.
         """
         if not seed_vertex_ids:
             return []
@@ -453,6 +558,9 @@ class Store:
             type_filter = f"type(r) IN [{rels}] AND "
         else:
             type_filter = ""
+        # Fetch extra columns for recency scoring; Python re-ranks with decay.
+        # Fetch 2x limit to allow newer low-w*c edges to surface via recency.
+        fetch_limit = max(int(limit) * 2, int(limit) + 20) if int(limit) > 0 else 0
         cypher = f"""
             SELECT * FROM cypher('{graph}', $$
                 MATCH (n)
@@ -460,10 +568,9 @@ class Store:
                 OPTIONAL MATCH (n)-[r]->(m)
                 WHERE {type_filter}coalesce(r.weight, 0.5) >= {float(min_weight)}
                   AND coalesce(r.cosine, 0.5) >= {float(min_cosine)}
-                RETURN n, type(r) AS rel, m
-                ORDER BY coalesce(r.weight, 0.5) * coalesce(r.cosine, 0.5) DESC
-                LIMIT {int(limit)}
-            $$) AS (n agtype, rel agtype, m agtype)
+                RETURN n, type(r) AS rel, m, coalesce(r.weight, 0.5), coalesce(r.cosine, 0.5), r.created_at, m.created_at
+                LIMIT {int(fetch_limit)}
+            $$) AS (n agtype, rel agtype, m agtype, w agtype, c agtype, r_created agtype, m_created agtype)
         """
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
@@ -478,7 +585,35 @@ class Store:
                         await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
                         logger.warning("cypher expand failed; rolled to savepoint", exc_info=True)
                         return []
-                return [(r["n"], r["rel"], r["m"]) for r in rows]
+                # Recency-aware re-ranking in Python
+                scored: List[Tuple[float, Any]] = []
+                for r in rows:
+                    # Parse weight/cosine agtype -> float with fallback 0.5
+                    try:
+                        raw_w = r["w"]
+                        w = float(str(raw_w).strip('"')) if raw_w is not None and str(raw_w).strip('"') != "null" else 0.5
+                    except Exception:
+                        w = 0.5
+                    try:
+                        raw_c = r["c"]
+                        c = float(str(raw_c).strip('"')) if raw_c is not None and str(raw_c).strip('"') != "null" else 0.5
+                    except Exception:
+                        c = 0.5
+                    # Edge/target created_at for decay (fallback 0.5 already in helper)
+                    edge_ca = _parse_created_at(r["r_created"]) if "r_created" in r else None
+                    # r may not have key if old cypher fallback? handle gracefully
+                    # Use helper that already normalizes; but pass raw string iso
+                    # r_created,m_created may be agtype None/null
+                    vert_ca = _parse_created_at(r["m_created"]) if "m_created" in r else None
+                    # Compute decay and composite score
+                    decay = recency_decay_for_edge(edge_ca, vert_ca, decay_half_life_days)
+                    score = 0.5 * c + 0.3 * w + 0.2 * decay
+                    scored.append((score, r))
+                # Sort by score descending, stable tie-break preserves fetch order
+                scored.sort(key=lambda x: x[0], reverse=True)
+                # Trim to requested limit
+                trimmed = scored[: int(limit)] if int(limit) > 0 else scored
+                return [(row["n"], row["rel"], row["m"]) for _, row in trimmed]
             except Exception:
                 logger.debug("expand_graph transaction error", exc_info=True)
                 return []
