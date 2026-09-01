@@ -306,21 +306,34 @@ class Store:
     # -- Graph expansion (SAVEPOINT-wrapped Cypher) -----------------------------
 
     async def expand_graph(
-        self, seed_vertex_ids: Sequence[int], rel_types: Sequence[str], limit: int = 40
+        self, seed_vertex_ids: Sequence[int], rel_types: Sequence[str] = (), limit: int = 40,
+        min_weight: float = 0.0, min_cosine: float = 0.0,
     ) -> List[Tuple[Any, Optional[str], Any]]:
-        """1-hop expand from seed vertices. Cypher inside SAVEPOINT."""
+        """1-hop weighted expand from seed vertices. Cypher inside SAVEPOINT.
+
+        Dynamic memory graph: edges carry weight (force) and cosine (vector radius).
+        If rel_types empty → walk all types scored by weight*cosine. Otherwise
+        filter to that whitelist but still score-ordered. Edges without props
+        default to 0.5 so legacy IMPORTS edges remain walkable.
+        """
         if not seed_vertex_ids:
             return []
         ids_literal = "[" + ", ".join(str(int(i)) for i in seed_vertex_ids) + "]"
-        rels = ", ".join(age_str(r) for r in rel_types)
         graph = self.graph_name
+        if rel_types:
+            rels = ", ".join(age_str(r) for r in rel_types)
+            type_filter = f"type(r) IN [{rels}] AND "
+        else:
+            type_filter = ""
         cypher = f"""
             SELECT * FROM cypher('{graph}', $$
                 MATCH (n)
                 WHERE id(n) IN {ids_literal}
                 OPTIONAL MATCH (n)-[r]->(m)
-                WHERE type(r) IN [{rels}]
+                WHERE {type_filter}coalesce(r.weight, 0.5) >= {float(min_weight)}
+                  AND coalesce(r.cosine, 0.5) >= {float(min_cosine)}
                 RETURN n, type(r) AS rel, m
+                ORDER BY coalesce(r.weight, 0.5) * coalesce(r.cosine, 0.5) DESC
                 LIMIT {int(limit)}
             $$) AS (n agtype, rel agtype, m agtype)
         """
@@ -408,9 +421,14 @@ class Store:
         return results
 
     async def merge_edges_batched(
-        self, edges: Iterable[Tuple[str, int, int]], batch_size: int = 50
+        self, edges: Iterable[Tuple[str, int, int]], batch_size: int = 50,
+        edge_props: Optional[Dict[Tuple[str,int,int], Dict[str, Any]]] = None,
     ) -> int:
-        """MERGE edges on (start, end, label); SAVEPOINT-guarded, batched."""
+        """MERGE edges on (start, end, label); SAVEPOINT-guarded, batched.
+
+        edge_props optional map (label,src,dst) -> {weight, cosine, ...}
+        merged via SET e += props (AGE 1.6 MERGE then SET).
+        """
         done = 0
         edges = list(edges)
         graph = self.graph_name
@@ -424,9 +442,11 @@ class Store:
                             sp = _savepoint_name("merge_e", idx)
                             await conn.execute(f"SAVEPOINT {sp}")
                             try:
+                                props = (edge_props or {}).get((label, src, dst), {})
+                                props_str = f" SET e += {age_props(props)}" if props else ""
                                 cypher = (
                                     f"MATCH (a), (b) WHERE id(a) = {int(src)} AND id(b) = {int(dst)} "
-                                    f"MERGE (a)-[e:{_check_label(label)}]->(b) RETURN id(e)"
+                                    f"MERGE (a)-[e:{_check_label(label)}]->(b){props_str} RETURN id(e)"
                                 )
                                 row = await conn.fetchrow(
                                     f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)"

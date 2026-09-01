@@ -160,11 +160,14 @@ function showPanel(node){
   const props = node.props || {};
   const meta = Object.entries(props).map(([k,v])=>`${k}: ${typeof v==='object'? JSON.stringify(v): String(v)}`).join('\n') || '(no properties)';
   $('pMeta').textContent = meta;
-  $('pLinks').innerHTML = links.length ? `<b>${links.length} edges</b><br>` + links.slice(0,20).map(l=>{
+  $('pLinks').innerHTML = links.length ? `<b>${links.length} edges</b> · <span style="font-size:10px;color:#94a3b8">weight × cosine = force (higher = stronger memory linkage)</span><br>` + links.slice(0,20).map(l=>{
     const other = (l.source.id||l.source)===node.id ? (l.target.id||l.target) : (l.source.id||l.source);
     const otherNode = raw.nodes.find(n=>n.id===String(other));
     const dir = (l.source.id||l.source)===node.id ? '→' : '←';
-    return `${dir} <b>${escapeHTML(l.label)}</b> — ${escapeHTML(otherNode ? otherNode.name : other)} <span style="color:#64748b">(${escapeHTML(String(other))})</span>`;
+    const w = l.weight!=null ? Number(l.weight).toFixed(2) : '0.50';
+    const c = l.cosine!=null ? Number(l.cosine).toFixed(2) : '0.50';
+    const score = (Number(w)*Number(c)).toFixed(2);
+    return `${dir} <b>${escapeHTML(l.label)}</b> — ${escapeHTML(otherNode ? otherNode.name : other)} <span style="color:#64748b">(${escapeHTML(String(other))})</span> <span style="color:#f59e0b">w${w}·c${c}=${score}</span>`;
   }).join('<br>') : '<span style="color:#64748b">no edges in current budget</span>';
   $('panel').classList.add('open');
   // L3: vector inspector — only for File nodes that have a file_path
@@ -468,6 +471,10 @@ document.getElementById('graph').style.paddingTop = '38px';
 load();
 fetchMetrics();
 setInterval(fetchMetrics, 30000);
+// Live graph growth: poll 3D every 20s (same budget as metrics) so
+// conversation Turns/Concepts appear as you chat. Paused while panel open.
+let _liveTimer = setInterval(()=>{ if(!$('panel').classList.contains('open') && !$('hResults').style.display.includes('block')) load(); }, 20000);
+$('panel').addEventListener('transitionend', ()=>{});
 </script>
 </body>
 </html>

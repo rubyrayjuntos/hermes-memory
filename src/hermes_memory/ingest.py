@@ -546,7 +546,17 @@ class Ingestor:
 
         edges = [("IMPORTS", file_vid, dv) for dv in dep_vids if file_vid and dv]
         if edges:
-            self.stats.edges += await self._merge_edges(conn, edges)
+            # Dynamic graph: IMPORTS edges carry vector radius + force
+            # internal imports (./foo) get higher cosine than external (react)
+            # weight 1.0 for now; future increments on re-ingest.
+            import math as _math
+            edge_props = {}
+            for lab, src, dst in edges:
+                # Heuristic: internal -> cosine 0.88, external -> 0.75
+                # we don't have dep name here, so default 0.80; ingest will
+                # refine via provider's per-turn ABOUT edges with real cosine.
+                edge_props[(lab, src, dst)] = {"weight": 1.0, "cosine": 0.80}
+            self.stats.edges += await self._merge_edges(conn, edges, edge_props=edge_props)
 
         # -- Bridges ------------------------------------------------------------
         # Bridge the same enumerated chunk ids actually written to doc_chunks
@@ -609,10 +619,10 @@ class Ingestor:
                 self.stats.errors += 1
         return results
 
-    async def _merge_edges(self, conn, edges) -> int:
+    async def _merge_edges(self, conn, edges, edge_props=None) -> int:
         done = 0
         graph = self._graph()
-        from .store import check_label, savepoint_name
+        from .store import age_props, check_label, savepoint_name
         edges = list(edges)
         for start in range(0, len(edges), 50):
             batch = edges[start:start + 50]
@@ -622,10 +632,12 @@ class Ingestor:
                         sp = savepoint_name("ing_e", idx)
                         await conn.execute(f"SAVEPOINT {sp}")
                         try:
+                            props = (edge_props or {}).get((label, src, dst), {})
+                            props_str = f" SET e += {age_props(props)}" if props else ""
                             cy = (
                                 f"MATCH (a), (b) WHERE id(a) = {int(src)} "
                                 f"AND id(b) = {int(dst)} "
-                                f"MERGE (a)-[e:{check_label(label)}]->(b) RETURN id(e)"
+                                f"MERGE (a)-[e:{check_label(label)}]->(b){props_str} RETURN id(e)"
                             )
                             row = await conn.fetchrow(
                                 f"SELECT * FROM cypher('{graph}', $$ {cy} $$) AS (id agtype)")
