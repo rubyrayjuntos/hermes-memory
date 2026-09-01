@@ -174,7 +174,7 @@ class Store:
                 INSERT INTO memory_entries
                     (agent_identity, target, content, embedding, metadata)
                 VALUES ($1, $2, $3, $4::vector, $5::jsonb)
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (agent_identity, target, md5(content)) DO NOTHING
                 """,
                 agent_identity,
                 target,
