@@ -42,9 +42,11 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     embedding vector(768),
     metadata JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (agent_identity, target, content)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS memory_entries_unique_hash
+    ON public.memory_entries (agent_identity, target, md5(content));
 
 -- Bridge: pgvector chunks <-> AGE graph vertices
 CREATE TABLE IF NOT EXISTS memory_chunk_nodes (

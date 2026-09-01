@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hermes Librarian — 3D Knowledge Graph</title>
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/3d-force-graph@1.73.3/dist/3d-force-graph.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:#050a18;color:#e2e8f0;height:100vh;overflow:hidden}
+  header{position:absolute;top:0;left:0;right:0;z-index:10;background:rgba(15,23,42,.88);backdrop-filter:blur(8px);border-bottom:1px solid #1e293b;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  header h1{font-size:14px;font-weight:700;letter-spacing:.02em}
+  header .sub{font-size:11px;color:#94a3b8}
+  .chip{font-size:11px;padding:5px 8px;border-radius:999px;border:1px solid #334155;background:#0f172a;color:#cbd5e1}
+  select, input[type=text]{font-size:12px;padding:6px 8px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;outline:none}
+  select:focus,input:focus{border-color:#38bdf8}
+  button{font-size:12px;padding:6px 10px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;cursor:pointer}
+  button:hover{background:#334155}
+  #api{font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid transparent}
+  .ok{background:#052e1f;color:#6ee7b7;border-color:#065f46}
+  .err{background:#3f0a0a;color:#fca5a5;border-color:#7f1d1d}
+  .warn{background:#3a2a06;color:#fde68a;border-color:#92400e}
+  #graph{width:100vw;height:100vh}
+  #panel{position:absolute;right:12px;top:64px;bottom:12px;width:360px;background:rgba(15,23,42,.94);border:1px solid #334155;border-radius:14px;padding:14px;overflow:auto;display:none;z-index:9}
+  #panel.open{display:block}
+  #panel h2{font-size:13px;margin-bottom:6px}
+  #panel .meta{font-size:11px;color:#94a3b8;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .badge{display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+  .legend{position:absolute;left:12px;bottom:12px;z-index:9;background:rgba(15,23,42,.88);border:1px solid #334155;border-radius:12px;padding:10px 12px;font-size:11px;min-width:160px}
+  .legend b{color:#e2e8f0}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+  #stats{font-size:11px;color:#94a3b8}
+  #metrics{position:absolute;top:52px;left:0;right:0;z-index:9;background:rgba(8,15,35,.92);border-bottom:1px solid #1e293b;padding:8px 14px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:11px}
+  .m{padding:5px 9px;border-radius:999px;border:1px solid #26324a;background:#0f172a;display:flex;gap:6px;align-items:center}
+  .m b{color:#f1f5f9}
+  .m .v{color:#cbd5e1}
+  .m.ok{border-color:#065f46;background:#052e1f;color:#6ee7b7}
+  .m.bad{border-color:#7f1d1d;background:#3f0a0a;color:#fca5a5}
+  .m.warn{border-color:#92400e;background:#3a2a06;color:#fde68a}
+  a{color:#7dd3fc}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🧠 Hermes Librarian — 3D Force Graph</h1>
+    <div class="sub">599v · 1672e · level 1 visibility — memories + metadata — <span id="stats">loading…</span></div>
+  </div>
+  <span id="api" class="warn">API: checking…</span>
+  <label class="chip">label <select id="labelSel"><option value="">all</option><option>Person</option><option>Project</option><option>Technology</option><option>Concept</option><option>File</option><option>Module</option><option>Dependency</option><option>Standard</option></select></label>
+  <label class="chip">limit <select id="limitSel"><option>120</option><option selected>250</option><option>400</option><option>600</option></select></label>
+  <input id="q" type="text" placeholder="filter name… (client-side)" style="min-width:140px">
+  <input id="hq" type="text" placeholder="hybrid search… (vector+graph)" style="min-width:180px">
+  <button id="hSearch">search</button>
+  <button id="reload">reload</button>
+  <button id="fit">fit</button>
+  <button id="spin">spin: on</button>
+</header>
+
+<div id="metrics">
+  <span class="m" id="mVector"><b>vector</b> <span class="v">…</span></span>
+  <span class="m" id="mGraph"><b>graph</b> <span class="v">…</span></span>
+  <span class="m" id="mBridge"><b>bridge</b> <span class="v">…</span></span>
+  <span class="m" id="mHealth"><b>health</b> <span class="v">…</span></span>
+  <span class="m" id="mIntegrity"><b>integrity</b> <span class="v">…</span></span>
+  <span style="margin-left:auto;font-size:10px;color:#64748b" id="mWhen"></span>
+</div>
+
+<div id="graph"></div>
+
+<div id="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h2 id="pTitle">Node</h2><button id="closeP" style="padding:2px 8px">×</button></div>
+  <div id="pBadge"></div>
+  <div id="pMeta" class="meta"></div>
+  <div id="pLinks" class="meta" style="margin-top:10px"></div>
+  <div id="pVector" style="margin-top:14px;border-top:1px solid #26324a;padding-top:10px;display:none">
+    <div style="font-size:11px;font-weight:700;color:#f1f5f9;margin-bottom:6px">⬢ Vector inspector <span id="pVecSub" style="font-weight:400;color:#94a3b8"></span></div>
+    <div id="pVecBody" class="meta"></div>
+  </div>
+  <div id="pCrud" style="margin-top:14px;border-top:1px solid #26324a;padding-top:10px">
+    <div style="font-size:11px;font-weight:700;color:#f1f5f9;margin-bottom:6px">⚙ CRUD</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button id="btnAudit" style="font-size:11px">audit</button>
+      <button id="btnDelete" style="font-size:11px;background:#3f0a0a;border-color:#7f1d1d">delete</button>
+      <button id="btnMerge" style="font-size:11px">merge →</button>
+      <button id="btnRelabel" style="font-size:11px">relabel</button>
+    </div>
+    <div id="pCrudMsg" class="meta" style="margin-top:6px;color:#94a3b8"></div>
+  </div>
+</div>
+
+<div id="hResults" style="position:absolute;left:12px;top:96px;bottom:12px;width:380px;background:rgba(15,23,42,.96);border:1px solid #334155;border-radius:14px;padding:12px;overflow:auto;display:none;z-index:8">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:12px">🔍 Hybrid results</b><button id="closeH" style="padding:2px 8px">×</button></div>
+  <div id="hMeta" style="font-size:11px;color:#94a3b8;margin-bottom:8px"></div>
+  <div id="hList"></div>
+</div>
+
+<div class="legend">
+  <div><b>Color by label</b> · size = degree</div>
+  <div style="margin-top:6px" id="legend"></div>
+  <div style="margin-top:8px;color:#64748b">Click node → inspect · drag to orbit · scroll to zoom<br><span style="color:#94a3b8">IDs are decimal strings (64-bit safe)</span></div>
+</div>
+
+<script>
+const CONFIG = {
+  // same-origin when served from Flask /api/librarian/pane — otherwise use explicit host
+  API_BASE: location.port === '7890' ? '' : 'http://127.0.0.1:7890',
+  PATH_3D: '/api/librarian/graph/3d',
+  FALLBACK_TO_DEMO: true,
+};
+const COLORS = {
+  Person:'#a78bfa', Project:'#60a5fa', Technology:'#34d399', Organization:'#f87171',
+  Concept:'#f59e0b',
+  File:'#818cf8', Module:'#6366f1', Dependency:'#84cc16', Standard:'#f59e0b',
+  Session:'#e879f9', Turn:'#c084fc', default:'#38bdf8'
+};
+const $ = id => document.getElementById(id);
+const apiEl = $('api'), statsEl = $('stats'), qEl = $('q'), labelSel = $('labelSel'), limitSel = $('limitSel');
+
+// XSS-safe escaping for any API-sourced string interpolated into innerHTML
+function escapeHTML(s){ return String(s ?? '').replace(/[&<>"']/g, m=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+let raw = {nodes:[], links:[]};
+let graph;
+
+function setApi(cls, txt){ apiEl.className=cls; apiEl.textContent=txt; }
+
+function demoData(){
+  const labs = ['Person','Technology','Project','File','Concept'];
+  const nodes = Array.from({length:60},(_,i)=>({id:String(844424930131969+i), label:labs[i%labs.length], name:labs[i%labs.length]+' · '+i, props:{name:labs[i%labs.length]+' · '+i, demo:true}, val:1+Math.random()*3}));
+  const links=[]; for(let i=0;i<70;i++) links.push({source:nodes[Math.floor(Math.random()*nodes.length)].id, target:nodes[Math.floor(Math.random()*nodes.length)].id, label:['MENTIONS','CO_MENTIONED','IMPORTS'][i%3]});
+  return {nodes, links, meta:{limit:60, label:'demo', verts:60, edges:70}};
+}
+
+function colorFor(d){ return COLORS[d.label] || COLORS.default; }
+
+function buildLegend(){
+  const uniq = [...new Set(raw.nodes.map(n=>n.label))].sort();
+  $('legend').innerHTML = uniq.map(l=>`<div><span class="dot" style="background:${COLORS[l]||COLORS.default}"></span>${escapeHTML(l)}</div>`).join('') || '<span style="color:#64748b">no nodes</span>';
+}
+
+function applyFilter(){
+  const q = qEl.value.trim().toLowerCase();
+  if(!q){ graph.graphData(raw); return; }
+  const keep = new Set(raw.nodes.filter(n=> (n.name||'').toLowerCase().includes(q) || (n.label||'').toLowerCase().includes(q)).map(n=>n.id));
+  // keep neighbors of matches too for context
+  const linkKeep = raw.links.filter(l=> keep.has(l.source.id||l.source) || keep.has(l.target.id||l.target));
+  const extra = new Set(); linkKeep.forEach(l=>{extra.add(l.source.id||l.source); extra.add(l.target.id||l.target);});
+  const nodes = raw.nodes.filter(n=> keep.has(n.id) || extra.has(n.id));
+  const ids = new Set(nodes.map(n=>n.id));
+  const links = raw.links.filter(l=> ids.has(l.source.id||l.source) && ids.has(l.target.id||l.target));
+  graph.graphData({nodes, links});
+}
+
+function showPanel(node){
+  const links = raw.links.filter(l=> (l.source.id||l.source)===node.id || (l.target.id||l.target)===node.id);
+  $('pTitle').textContent = node.name || node.id;
+  $('pBadge').innerHTML = `<span class="badge" style="background:${colorFor(node)};color:#0f172a">${escapeHTML(node.label)}</span> <span style="font-size:11px;color:#94a3b8">id ${escapeHTML(node.id)}</span>`;
+  const props = node.props || {};
+  const meta = Object.entries(props).map(([k,v])=>`${k}: ${typeof v==='object'? JSON.stringify(v): String(v)}`).join('\n') || '(no properties)';
+  $('pMeta').textContent = meta;
+  $('pLinks').innerHTML = links.length ? `<b>${links.length} edges</b><br>` + links.slice(0,20).map(l=>{
+    const other = (l.source.id||l.source)===node.id ? (l.target.id||l.target) : (l.source.id||l.source);
+    const otherNode = raw.nodes.find(n=>n.id===String(other));
+    const dir = (l.source.id||l.source)===node.id ? '→' : '←';
+    return `${dir} <b>${escapeHTML(l.label)}</b> — ${escapeHTML(otherNode ? otherNode.name : other)} <span style="color:#64748b">(${escapeHTML(String(other))})</span>`;
+  }).join('<br>') : '<span style="color:#64748b">no edges in current budget</span>';
+  $('panel').classList.add('open');
+  // L3: vector inspector — only for File nodes that have a file_path
+  const fp = props.path || props.file_path || (node.label==='File' ? node.name : null);
+  if(fp && (node.label==='File' || fp.includes('/'))){
+    fetchVector(fp);
+  } else {
+    $('pVector').style.display='none';
+  }
+}
+
+function sparklineSVG(vals, w=320, h=48){
+  if(!vals || !vals.length) return '<span style="color:#64748b">no embedding</span>';
+  const mn=Math.min(...vals), mx=Math.max(...vals), range=mx-mn||1;
+  const step=w/(vals.length-1);
+  const pts=vals.map((v,i)=>`${(i*step).toFixed(1)},${(h - ((v-mn)/range)*h).toFixed(1)}`).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="background:#0b1224;border:1px solid #1e293b;border-radius:8px;display:block"><polyline fill="none" stroke="#38bdf8" stroke-width="1.2" points="${pts}"/><line x1="0" y1="${(h/2).toFixed(1)}" x2="${w}" y2="${(h/2).toFixed(1)}" stroke="#334155" stroke-dasharray="3 3" stroke-width="0.6"/></svg>`;
+}
+
+async function fetchVector(file_path){
+  const body=$('pVecBody'), sub=$('pVecSub');
+  $('pVector').style.display='block';
+  body.innerHTML='<span style="color:#94a3b8">loading vectors…</span>';
+  sub.textContent='· '+file_path;
+  try{
+    const url=`${CONFIG.API_BASE}/api/librarian/chunks?file_path=${encodeURIComponent(file_path)}&limit=4`;
+    const r=await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j=await r.json();
+    if(!j.chunks || !j.chunks.length){
+      body.innerHTML=`<span style="color:#f59e0b">no chunks for</span> <code style="color:#e2e8f0">${escapeHTML(file_path)}</code> — total ${escapeHTML(String(j.total))} · bridged ${escapeHTML(String(j.bridged_vertices))}`;
+      return;
+    }
+    body.innerHTML = j.chunks.map((c,idx)=>`
+      <div style="border:1px solid #1e293b;background:#0b1224;border-radius:10px;padding:8px;margin-bottom:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:#94a3b8">
+          <span class="badge" style="background:#1e293b;color:#cbd5e1">${escapeHTML(c.doc_type||'?')}</span>
+          <span>hash <code style="color:#7dd3fc">${escapeHTML(c.hash||'—')}</code></span>
+          <span>${escapeHTML(c.language||'')}</span>
+          <span>${escapeHTML(c.indexed_at ? new Date(c.indexed_at).toLocaleString() : '')}</span>
+        </div>
+        <div style="margin:6px 0 4px 0;font-size:10px;color:#64748b">768-d · preview 64 · min ${escapeHTML(String(c.preview_stats.min))} max ${escapeHTML(String(c.preview_stats.max))} mean ${escapeHTML(String(c.preview_stats.mean))} · id ${escapeHTML(c.id.slice(0,8))}…</div>
+        ${sparklineSVG(c.preview)}
+        <div style="margin-top:6px;font-size:11px;color:#cbd5e1;white-space:pre-wrap;word-break:break-word">${escapeHTML(c.snippet)}…</div>
+      </div>
+    `).join('') + `<div style="font-size:10px;color:#64748b;margin-top:4px">file total ${escapeHTML(String(j.total))} chunks · bridged to ${escapeHTML(String(j.bridged_vertices))} vertices · query <code>GET /api/librarian/chunks?file_path=${escapeHTML(file_path)}</code></div>`;
+  }catch(e){
+    body.innerHTML=`<span style="color:#fca5a5">vector fetch failed:</span> ${escapeHTML(e.message)}`;
+  }
+}
+
+async function load(){
+  const label = labelSel.value;
+  const limit = limitSel.value;
+  const url = `${CONFIG.API_BASE}${CONFIG.PATH_3D}?limit=${encodeURIComponent(limit)}&label=${encodeURIComponent(label)}&fresh=1`;
+  setApi('warn','API: loading…');
+  statsEl.textContent = 'fetching…';
+  try{
+    const r = await fetch(url, {headers:{'accept':'application/json'}});
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    if(!j.nodes) throw new Error('bad shape');
+    raw = j;
+    setApi('ok', `API: live · ${j.meta.verts}v/${j.meta.edges}e (limit ${j.meta.limit})`);
+    statsEl.textContent = `${j.meta.verts} nodes · ${j.meta.edges} edges · label=${j.meta.label}`;
+  }catch(e){
+    console.warn('3d fetch failed', e);
+    if(CONFIG.FALLBACK_TO_DEMO){
+      raw = demoData();
+      setApi('err', `API: offline · demo ${raw.meta.verts}v/${raw.meta.edges}e`);
+      statsEl.textContent = `demo ${raw.meta.verts}v/${raw.meta.edges}e — start: python3 ~/.hermes/scripts/graph_api.py`;
+    } else {
+      setApi('err', `API: error — ${e.message}`);
+      raw = {nodes:[], links:[]};
+    }
+  }
+  buildLegend();
+  graph.graphData(raw);
+  setTimeout(()=>graph.zoomToFit(600), 400);
+}
+
+function initGraph(){
+  graph = ForceGraph3D()(document.getElementById('graph'))
+    .backgroundColor('#050a18')
+    .nodeLabel(n=> `${n.label} · ${n.name}\n${Object.entries(n.props||{}).slice(0,4).map(([k,v])=>k+': '+String(v).slice(0,40)).join('\n')}`)
+    .nodeColor(n=> colorFor(n))
+    .nodeVal(n=> n.val)
+    .nodeOpacity(0.92)
+    .linkColor(()=>'#334155')
+    .linkOpacity(0.45)
+    .linkWidth(0.7)
+    .linkDirectionalArrowLength(3)
+    .linkDirectionalArrowRelPos(1)
+    .onNodeClick(showPanel)
+    .onNodeHover(n=> document.body.style.cursor = n ? 'pointer' : 'grab')
+    .onLinkHover(l=> document.body.style.cursor = l ? 'pointer' : 'grab');
+  // nicer initial camera
+  graph.cameraPosition({z: 280});
+  graph.controls().autoRotate = true;
+  graph.controls().autoRotateSpeed = 0.35;
+}
+
+initGraph();
+$('reload').onclick = load;
+$('fit').onclick = ()=> graph.zoomToFit(500);
+$('spin').onclick = (e)=>{
+  const c = graph.controls(); c.autoRotate = !c.autoRotate; e.target.textContent = 'spin: ' + (c.autoRotate?'on':'off');
+};
+qEl.addEventListener('input', applyFilter);
+labelSel.addEventListener('change', load);
+limitSel.addEventListener('change', load);
+$('closeP').onclick = ()=> $('panel').classList.remove('open');
+$('closeH').onclick = ()=> $('hResults').style.display='none';
+$('hSearch').onclick = doHybrid;
+$('hq').addEventListener('keydown', e=>{ if(e.key==='Enter') doHybrid(); });
+
+let lastNode=null;
+const _showPanelOrig = showPanel;
+showPanel = function(node){ lastNode=node; $('pCrudMsg').textContent=''; return _showPanelOrig(node); };
+
+async function doHybrid(){
+  const q=$('hq').value.trim(); if(!q) return;
+  $('hResults').style.display='block';
+  $('hMeta').textContent='searching…';
+  $('hList').innerHTML='<span style="color:#94a3b8">vector + graph fusion…</span>';
+  try{
+    const url=`${CONFIG.API_BASE}/api/librarian/search?q=${encodeURIComponent(q)}&k=8&hops=2`;
+    const r=await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j=await r.json();
+    if(j.error) throw new Error(j.error + (j.detail? ': '+j.detail:''));
+    // j: {results:[{content, file_path, score, metadata}], metrics, graph: {nodes, edges} }
+    const ranked=j.ranked || j.results || j.hits || [];
+    const results=j.results || ranked; // ranked is the real shape
+    const retrieval=j.retrieval || j.metrics || {};
+    const isRanked = ranked.length && ranked[0].title;
+    if(isRanked){
+      $('hMeta').innerHTML = `${ranked.length} hits · k=${retrieval.k||'?'} hops=${retrieval.hops||'?'} · ${escapeHTML(retrieval.embed_model||'nomic-embed-text')} ${escapeHTML(String(retrieval.embed_dim||768))}d · bridge ${retrieval.bridge_vertices||0}v · <span style="color:#94a3b8">query "${j.query||q}"</span>`;
+      if(!ranked.length){ $('hList').innerHTML='<span style="color:#64748b">no hits — try a broader term or check Ollama is up (nomic-embed-text)</span>'; return; }
+      $('hList').innerHTML = ranked.map((hit,i)=>{
+        const title=escapeHTML(hit.title || hit.label || hit.name || hit.id);
+        const group=escapeHTML(hit.group || hit.label || '');
+        const score=escapeHTML(hit.rank_score!=null ? String(hit.rank_score) : (hit.score!=null? String(hit.score): ''));
+        const gov=hit.governed ? ' · <span style="color:#6ee7b7">governed</span>' : '';
+        const vid=String(hit.id);
+        return `<div style="border:1px solid #1e293b;background:#0b1224;border-radius:10px;padding:8px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:11px;color:#f1f5f9">${title}</b><span style="font-size:10px;color:#7dd3fc">${group} · ${score}${gov}</span></div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px">id ${escapeHTML(vid)}</div>
+          <div style="margin-top:6px;display:flex;gap:6px">
+            <button style="font-size:10px;padding:3px 7px" onclick="focusNode('${vid.replace(/'/g,"\\'")}')">focus in 3D</button>
+            <button style="font-size:10px;padding:3px 7px" onclick="showNodeById('${vid.replace(/'/g,"\\'")}')">inspect</button>
+          </div>
+        </div>`;
+      }).join('') + `<div style="font-size:10px;color:#64748b;margin-top:6px">retrieval: ${escapeHTML(JSON.stringify({by_label: retrieval.by_label, edges_traversed: retrieval.edges_traversed, graph_backend: retrieval.graph_backend}).slice(0,200))}</div>`;
+      return;
+    }
+    $('hMeta').innerHTML = `${results.length} hits · vector ${escapeHTML(String(retrieval.vector_ms||retrieval.embed_ms||'?'))}ms · graph ${escapeHTML(String(retrieval.graph_ms||'?'))}ms · fusion ${escapeHTML(String(retrieval.fusion_ms||'?'))}ms`;
+    if(!results.length){ $('hList').innerHTML='<span style="color:#64748b">no hits — try a broader term or check Ollama is up (nomic-embed-text)</span>'; return; }
+    $('hList').innerHTML = results.map((hit,i)=>{
+      const fp=hit.file_path || hit.metadata?.file_path || hit.path || '';
+      const score = hit.score!=null ? hit.score.toFixed(3) : (hit.similarity!=null? hit.similarity.toFixed(3): '');
+      const snippet=escapeHTML((hit.content||hit.text||'').slice(0,220));
+      return `<div style="border:1px solid #1e293b;background:#0b1224;border-radius:10px;padding:8px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:11px;color:#f1f5f9">${escapeHTML(fp||'untitled')}</b><span style="font-size:10px;color:#7dd3fc">${escapeHTML(score)}</span></div>
+        <div style="font-size:11px;color:#cbd5e1;margin-top:4px;white-space:pre-wrap;word-break:break-word">${snippet}…</div>
+        <div style="margin-top:6px;display:flex;gap:6px">
+          <button style="font-size:10px;padding:3px 7px" onclick="focusFile('${fp.replace(/'/g,"\\'")}')">focus in 3D</button>
+          <button style="font-size:10px;padding:3px 7px" onclick="document.getElementById('hq').value='';document.getElementById('q').value='${fp.replace(/'/g,"\\'").split('/').pop()}';applyFilter()">filter graph</button>
+        </div>
+      </div>`;
+    }).join('');
+    // optionally highlight hits in 3D
+    const hitPaths=new Set(results.map(r=>r.file_path||r.metadata?.file_path).filter(Boolean));
+    if(hitPaths.size){
+      // tint matching File nodes
+      const hitSet=new Set([...hitPaths].map(p=>p.split('/').pop().toLowerCase()));
+      // we just keep graph as is, user can filter
+    }
+  }catch(e){
+    $('hMeta').textContent='';
+    $('hList').innerHTML=`<span style="color:#fca5a5">search failed:</span> ${escapeHTML(e.message)} <br><span style="font-size:10px;color:#64748b">hint: is Ollama running? POST uses nomic-embed-text</span>`;
+  }
+}
+
+function focusFile(fp){
+  if(!fp) return;
+  // switch to File label, reload limited, then client filter
+  labelSel.value='File';
+  load().then(()=>{
+    setTimeout(()=>{
+      qEl.value=fp.split('/').pop();
+      applyFilter();
+      // fly to first match
+      const match=raw.nodes.find(n=> (n.name||'').toLowerCase().includes(fp.split('/').pop().toLowerCase()));
+      if(match && graph){
+        const obj=graph.graphData().nodes.find(n=>n.id===match.id);
+        if(obj) graph.centerAt(obj.x||0, obj.y||0, 400);
+      }
+    }, 600);
+  });
+}
+
+function focusNode(vid){
+  const n=raw.nodes.find(x=> String(x.id)===String(vid));
+  if(n){ showPanel(n); const obj=graph.graphData().nodes.find(x=> String(x.id)===String(vid)); if(obj) graph.centerAt(obj.x||0,obj.y||0,300); graph.zoomToFit(400); }
+  else {
+    // not in current budget — fetch and show
+    fetch(`${CONFIG.API_BASE}/api/librarian/nodes/${vid}`).then(r=>r.json()).then(j=>{
+      const props=j.properties||j;
+      showPanel({id:vid, label: j.label||'Node', name: j.name||props.name||vid, props: props, val:2});
+    });
+  }
+}
+function showNodeById(vid){
+  fetch(`${CONFIG.API_BASE}/api/librarian/nodes/${vid}`).then(r=>r.json()).then(j=>{
+    const props=j.properties||j;
+    showPanel({id:vid, label: j.label||j.group||'Node', name: j.name||j.title||props.name||vid, props: props, val:2});
+  }).catch(()=> focusNode(vid));
+}
+
+// CRUD — wired to /api/librarian/nodes/* (requires audit first per AGENTS.md SAVEPOINT discipline)
+let pendingVid=null;
+$('btnAudit').onclick = async ()=>{
+  if(!lastNode) return;
+  const vid=lastNode.id;
+  $('pCrudMsg').textContent='auditing…';
+  try{
+    const r=await fetch(`${CONFIG.API_BASE}/api/librarian/nodes/${vid}/audit`);
+    const j=await r.json();
+    $('pCrudMsg').innerHTML = `audit: <b>${j.neighborhood||j.edges||0} edges</b> · bridge rows ${j.bridge_rows||j.bridged||0} · duplicates ${j.duplicates||0} <br><span style="font-size:10px;color:#64748b">${JSON.stringify(j).slice(0,300)}</span>`;
+    pendingVid=vid;
+  }catch(e){ $('pCrudMsg').textContent='audit failed: '+e.message; }
+};
+$('btnDelete').onclick = async ()=>{
+  if(!lastNode) return;
+  const vid=lastNode.id;
+  if(!confirm(`Delete node ${lastNode.label} · ${lastNode.name} (${vid})? This removes its edges + bridge rows (SAVEPOINT-wrapped).`)) return;
+  $('pCrudMsg').textContent='deleting…';
+  try{
+    const r=await fetch(`${CONFIG.API_BASE}/api/librarian/nodes/${vid}`, {method:'DELETE'});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    $('pCrudMsg').innerHTML=`<span style="color:#6ee7b7">deleted</span> · ${JSON.stringify(j).slice(0,200)}`;
+    setTimeout(load, 800);
+  }catch(e){ $('pCrudMsg').textContent='delete failed: '+e.message; }
+};
+$('btnMerge').onclick = async ()=>{
+  if(!lastNode) return;
+  const target=prompt(`Merge ${lastNode.name} (${lastNode.id}) INTO target id:\n(pastes a decimal string id from another node)`);
+  if(!target) return;
+  $('pCrudMsg').textContent='merging…';
+  try{
+    const r=await fetch(`${CONFIG.API_BASE}/api/librarian/nodes/merge`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({from: lastNode.id, to: target.trim()})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    $('pCrudMsg').innerHTML=`<span style="color:#6ee7b7">merged</span> → ${target} · ${JSON.stringify(j).slice(0,200)}`;
+    setTimeout(load, 800);
+  }catch(e){ $('pCrudMsg').textContent='merge failed: '+e.message; }
+};
+$('btnRelabel').onclick = async ()=>{
+  if(!lastNode) return;
+  const lbl=prompt(`Relabel ${lastNode.name} (${lastNode.id}) to:`, lastNode.label);
+  if(!lbl || lbl===lastNode.label) return;
+  $('pCrudMsg').textContent='relabeling…';
+  try{
+    const r=await fetch(`${CONFIG.API_BASE}/api/librarian/nodes/${lastNode.id}`, {method:'PATCH', headers:{'content-type':'application/json'}, body: JSON.stringify({label: lbl.trim()})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    $('pCrudMsg').innerHTML=`<span style="color:#6ee7b7">relabeled</span> → ${lbl} · ${JSON.stringify(j).slice(0,200)}`;
+    setTimeout(load, 800);
+  }catch(e){ $('pCrudMsg').textContent='relabel failed: '+e.message; }
+};
+
+async function fetchMetrics(){
+  const url = `${CONFIG.API_BASE}/api/librarian/graph/stats?fresh=1`;
+  try{
+    const r = await fetch(url); if(!r.ok) throw new Error(r.status);
+    const s = await r.json();
+    // s has {vertices, edges, vector, bridge, integrity, graph}
+    const v = s.vector || {}, br = s.bridge || {}, integ = s.integrity || {}, verts = s.vertices || {}, edges = s.edges || {};
+    $('mVector').innerHTML = `<b>vector</b> <span class="v">${v.chunks||0} chunks · ${v.dim||768}d · ${v.embedded||0} embedded</span>`;
+    $('mGraph').innerHTML = `<b>graph</b> <span class="v">${verts.total||0} verts · ${edges.total||0} edges · ${s.graph||'hermes_knowledge'}</span>`;
+    $('mBridge').innerHTML = `<b>bridge</b> <span class="v">${br.rows||0} rows · ${br.vertices_bridged||0} verts bridged</span>`;
+    const healthy = integ.healthy;
+    const hCls = healthy ? 'm ok' : 'm bad';
+    $('mHealth').className = hCls;
+    $('mHealth').innerHTML = `<b>health</b> <span class="v">${healthy ? 'healthy ✓' : 'drift ✗'} · drifted ${integ.drifted||0}</span>`;
+    const warn = (integ.orphan_chunks||0) || (integ.isolated_files||0) > 20;
+    $('mIntegrity').className = warn ? 'm warn' : 'm';
+    $('mIntegrity').innerHTML = `<b>integrity</b> <span class="v">orphan_chunks ${integ.orphan_chunks||0} · isolated_files ${integ.isolated_files||0} · orphan_deps ${integ.orphan_deps||0}</span>`;
+    $('mWhen').textContent = new Date().toLocaleTimeString();
+  }catch(e){
+    $('mVector').innerHTML = `<b>vector</b> <span class="v">offline</span>`;
+    $('mHealth').className = 'm bad';
+    $('mHealth').innerHTML = `<b>health</b> <span class="v">API offline</span>`;
+  }
+}
+
+// pad graph below metrics bar
+document.getElementById('graph').style.paddingTop = '38px';
+
+// live on first paint
+load();
+fetchMetrics();
+setInterval(fetchMetrics, 30000);
+</script>
+</body>
+</html>

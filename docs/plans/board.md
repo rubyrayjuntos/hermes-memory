@@ -1,32 +1,47 @@
-# Kanban Board — hermes-memory v0.1
+# Kanban Board — hermes-memory
 
-Living board. Move cards by editing their section; card spec source of truth:
-[`docs/plans/v0.1.md`](v0.1.md) §5 (acceptance criteria) + §3–4 (interface contracts).
+> **Source of truth: GitHub Project #6 📜The Hermes Librarian Sprint board** — https://github.com/users/rubyrayjuntos/projects/6
+> This file is **execution scratch for the kanban skill's sub-agent swarm** (one `wip/<card>` branch per card, two-stage review).
+> Do not treat it as ledger — `gh project item-list 6` and Sprint Iteration view are authoritative.
 
-**Columns:** Backlog · Claimed · In Review · Verified · Done
-**Rules:** one `wip/<card-id>` branch per card · two-stage review before Verified ·
-branch deleted at merge · contracts (§3/§4) frozen — change proposals go to controller.
+**Columns (GitHub):** Todo · In Progress · Done (+ Sprint Iteration)  
+**Columns (local scratch):** Backlog · Claimed · In Review · Verified · Done  
+**Rules:** one `wip/<card-id>` branch per card · two-stage review before Verified · branch deleted at merge · contracts (`v0.1.md` §3/§4) frozen
 
 ---
 
-## Backlog
+## Status as of 2026-09-01 — v0.2 production-ready plugin (soak)
 
-_(empty — all cards spec'd)_
+v0.1+v0.2 code shipped to `main` — Project #6 Sprint view is the ledger, this file mirrors it.
+Production-ready hermes plugin achieved at `v0.2`; `C7-C10` remain in Sprint 2 for fine-tuning soak on live corpus.
 
-## Claimed
+## Backlog (GitHub Project Backlog — not yet queued, open issues)
 
-- [ ] **C1 — Scaffold & consolidation** *(ready — no deps)*
-- [ ] **C2 — Docker + schema + indexes** *(ready — no deps, parallel with C1)*
+- #9 Profile-scoped memory identity (Todo, Sprint 2, P2)
+- #12 Agent PR identities (Todo, Sprint 2, P2)
+- #14 context hermes profile bound or global? (Todo, P2)
+- #21 30-day plugin promotion due 2026-09-26 (Todo, Sprint 2, P1)
+- #28 CLI overhaul install/upgrade/migrate/uninstall (Todo, Sprint 2, P2)
 
-## Done
+These 5 are intentionally open — v0.2 is code-complete; they await sprint queuing for soak tuning.
 
-- [x] **C8 — Synthetic load generator** — spec PASS (incl. confirming + fixing C7's silent agtype parser bug), quality APPROVED after fix cycle (`1a8a99f`: batch isolation, streaming corpus ~10× RAM reduction, stable savepoint hashes). 1000 rows in 5.7s; expansion proven firing via --debug-graph. C7 report amended with correction notice. Brand Style Guide PDF uploaded by Ray; rebased cleanly.
-- [x] **C7 — Benchmark harness** — spec PASS, quality fixes applied (`df4e077` evidence doc + cleanup). First real numbers: Injection-Hit 0.90, throughput 16 turns/sec. Honest finding: bridge table empty → graph expansion contributed nothing yet (extractors v0.2); ablation re-run planned post-C8/C10. Report: docs/reports/c7-bench.md.
-- [x] **C6 — Docs truth-pass** — spec PASS (cold-walk verified), nit fixed (94d0a8f).
-- [x] **C5 — Verify harness & tests** — spec PASS, security regression check PASS, quality APPROVED after fix cycle.
-- [x] **C3 — Provider port** — spec PASS (every §3.1 row runtime-verified; warm prefetch 88ms), quality APPROVED after fix cycle (`6e8da18`: idempotent init, drain-task strong ref, Cypher key validation, shutdown ordering, fire-and-forget enqueue, LIKE escaping, batch padding). Live smoke: rows land both tables, DB-down degrades to "".
-- [x] **C2 — Docker + schema + indexes** — spec PASS (live end-to-end verified), quality fixes applied & verified (`be7c82d`). Image pinned `apache/age:release_PG17_1.6.0` (1.7.0-for-PG17 does not exist; Appendix A). GIN containment index proven with Bitmap Index Scan on 5k rows.
-- [x] **C1 — Scaffold & consolidation** — MERGED (62844ac). Spec PASS, quality APPROVED after fix cycle.
+## Done (Project #6 Done — mirrors local Done)
+
+- [x] **C1 — Scaffold & consolidation** — MERGED `62844ac`
+- [x] **C2 — Docker + schema + indexes** — `be7c82d` (`apache/age:release_PG17_1.6.0`)
+- [x] **C3 — Provider port** — `6e8da18` (warm prefetch 88ms)
+- [x] **C4 — Ingest port** — `9316629` + `318f74b` (hash/dedup/drift, drift-flag proof)
+- [x] **C5 — Verify harness & tests** — property suite P1-P8
+- [x] **C6 — Docs truth-pass** — `94d0a8f`
+- [x] **C7 — Benchmark harness** — `df4e077` — *code DONE, re-run in Sprint 2 for fine-tuning on live 699v/1936e*
+- [x] **C8 — Synthetic load generator** — `1a8a99f` — *code DONE, regen 10K/100K in Sprint 2 soak*
+- Closed issues: #1, #2, #3, #4, #10, #17 (taxonomy enrichment #17 includes ids 1799-1801 fix)
+
+## Soak / Fine-tuning (Sprint 2 — 2026-09-07, see `sprint-v02.md`)
+
+- **C7** and **C8** — code DONE, remain `ready`-equivalent for re-ablation after soak
+- **C9** Production install execution — `blocked on Phase-2 pre-flight` → unblock in Sprint 2
+- **C10** Tuning experiments (weights 0.8/0.1/0.1 etc, budgets 500→9999) — `blocked on C7 + real data` → runs on accumulated corpus
 
 ---
 
@@ -40,5 +55,10 @@ _(empty — all cards spec'd)_
 | C4 | Ingest port | C2 | fixture ingest counts exact; re-run = 0 new; drift flagged |
 | C5 | Verify harness + tests | C3,C4 | property suite green; verify.py catches broken drain; CI green |
 | C6 | Docs truth-pass | C5 | cold-start README walkthrough <10 min; claims match artifacts |
+| C7 | Benchmark harness | — | ablation table + 4 metric families (soak re-run) |
+| C8 | Synthetic load generator | — | 10K corpus <5 min, teardown clean (soak regen) |
+| C9 | Production install | Phase-2 | V1-V5 gates, benchmarks as V-gate |
+| C10 | Tuning experiments | C7+data | chosen profile + budget recorded in config+README |
 
 Property tests P1–P8 land with C3/C4/C5 per register in v0.1.md §6.
+Sub-agent flow now mirrors GitHub: `gh project item-edit` updates Status/Sprint, not just this file.

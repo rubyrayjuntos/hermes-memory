@@ -235,6 +235,34 @@ Tested against **Hermes Agent v0.20.x**. Newer Hermes versions regularly add kwa
 to provider methods; the provider accepts `**kwargs` everywhere, but pin expectations
 until re-tested.
 
+
+## Operations
+
+### CLI commands (new in 0.2)
+
+| Command | What it does |
+|---|---|
+| `hermes-memory-install` | Full first‑time setup: docker compose, plugin copy, pip install, config.yaml `hybrid_age` block, 7890 restart, verify. |
+| `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
+| `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
+| `hermes-memory-uninstall` | Disable hybrid‑age, drop hermes_memory DB, remove plugin dir, fall back to built‑in MEMORY.md/USER.md. |
+
+### Backup & restore
+
+```bash
+# Backup the hermes_memory database (custom, compressed format)
+pg_dump -Fc hermes_memory > ~/librarian-$(date +%F).dump
+
+# Restore
+pg_restore -d hermes_memory ~/librarian-2026-08-31.dump
+```
+
+### Between‑version migration notes
+
+- **AGE 1.7.0 → 1.6.0**: the provider uses `MERGE‑then‑SET +=` (no `ON CREATE SET`/`ON MATCH SET`).
+- **Canonical dedup** (AGENTS.md): `memory_entries` dedup is on `(agent_identity, target, md5(content))` via `memory_entries_unique_hash` UNIQUE index on `md5(content)` — plain `UNIQUE (agent_identity, target, content)` exceeds btree 2704-byte limit. Fresh installs get the correct index from `sql/init/02_schema.sql`. Deployments that already applied `V6__fix_memory_entries_conflict_target.sql` (plain content UNIQUE) should apply `V7__canonical_md5_dedup.sql` which drops the plain constraint and creates the `md5(content)` index. `store.py:upsert_memory_entry` uses `ON CONFLICT (agent_identity, target, md5(content)) DO NOTHING` matching that index.
+- **`hermes memory reset`** only erases built‑in `MEMORY.md`/`USER.md` rows; it does **not** touch `hermes_memory` pgvector/AGE tables or the plugin directory.
+
 ## License
 
 MIT
