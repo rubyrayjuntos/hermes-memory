@@ -37,16 +37,7 @@ def test_p9_compaction_keeper_is_min_id(pairs):
         assert keeper not in mapping, f"keeper {keeper} should not also be a loser"
     # Transitive: if (1,2) and (2,3) -> 2 and 3 both map to 1
     # Check: all nodes in a connected component share same root (min)
-    # Build groups via mapping + roots
-    all_ids = set()
-    for a, b in pairs:
-        all_ids.add(a); all_ids.add(b)
-    # Re-derive groups via compaction_keepers logic: each group's keeper is min
-    keeper_set = set(mapping.values())
-    for k in keeper_set:
-        # No two keepers should be connected via pair chain without merging
-        # i.e., keepers are representatives of distinct components
-        pass  # structural; min property already checked
+    # Transitive behavior is covered by test_p9_compaction_keepers_transitive().
 
 
 @settings(max_examples=100)
