@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_HOME = Path.home() / ".hermes"
 
 
@@ -19,6 +19,56 @@ def get_env_files():
 def write_env_file(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+def merge_env_file(path: Path, updates: dict) -> None:
+    """Read-modify-write: preserve existing keys, update only *updates*."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, str] = {}
+    order: list[str] = []
+    raw_lines: list[str] = []
+    if path.exists():
+        raw_lines = path.read_text().splitlines()
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            k, v = stripped.split("=", 1)
+            k = k.strip()
+            if k not in existing:
+                order.append(k)
+            existing[k] = v.strip()
+    for k, v in updates.items():
+        if k not in existing:
+            order.append(k)
+        existing[k] = v
+    out_lines: list[str] = []
+    seen: set[str] = set()
+    if path.exists():
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                out_lines.append(line)
+                continue
+            if "=" in stripped:
+                k = stripped.split("=", 1)[0].strip()
+                if k in updates:
+                    out_lines.append(f"{k}={existing[k]}")
+                    seen.add(k)
+                elif k in existing and k not in seen:
+                    out_lines.append(f"{k}={existing[k]}")
+                    seen.add(k)
+                else:
+                    if k not in seen:
+                        out_lines.append(line)
+                        seen.add(k)
+            else:
+                out_lines.append(line)
+    for k in order:
+        if k not in seen:
+            out_lines.append(f"{k}={existing[k]}")
+            seen.add(k)
+    path.write_text("\n".join(out_lines) + "\n")
 
 
 def main():
@@ -44,24 +94,29 @@ def main():
         print("Both --from-dsn and --to-dsn are required.")
         sys.exit(1)
 
-    # 1. Backup schema if requested
+    # 1. Backup schema if requested — actually write to backup_path
     if args.backup:
         print("[1/5] Backing up schema from source...")
-        backup_path = Path(f"~/librarian-upgrade-schema-{__import__('datetime').date.today()}.sql")
-        backup_path = Path(backup_path).expanduser()
+        backup_path = (Path.home() / f"librarian-upgrade-schema-{__import__('datetime').date.today()}.sql")
         result = subprocess.run(
             ["pg_dump", "-s", from_dsn],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
             print(f"    Schema backup failed: {result.stderr}")
-        else:
-            print(f"    Schema backed up to {backup_path}")
+            sys.exit(1)
+        try:
+            backup_path.write_text(result.stdout)
+            print(f"    Schema backed up to {backup_path} ({len(result.stdout)} bytes)")
+        except OSError as e:
+            print(f"    Schema backup write failed: {e}")
+            sys.exit(1)
 
-    # 2. Run migrations on target
+    # 2. Run migrations on target — use absolute path + python -m
     print("[2/5] Running migrations on target DSN...")
+    migrate_script = REPO_ROOT / "scripts" / "migrate.py"
     result = subprocess.run(
-        ["scripts/migrate.py", "--dsn", to_dsn],
+        [sys.executable, str(migrate_script), "--dsn", to_dsn],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -69,15 +124,16 @@ def main():
         sys.exit(1)
     print("    Migrations applied.")
 
-    # 3. Rewrite DSNs in env files
+    # 3. Rewrite DSNs in env files — merge, do not truncate
     print("[3/5] Rewriting DSNs in env files...")
     for env_path in get_env_files():
-        write_env_file(env_path, f"HYBRID_AGE_DSN={to_dsn}\n")
+        merge_env_file(env_path, {"HYBRID_AGE_DSN": to_dsn})
 
     # 4. Configure plugins
     print("[4/5] Configuring plugins...")
+    hermes_bin = shutil.which("hermes") or "hermes"
     result = subprocess.run(
-        ["hermes", "config", "set", "plugins.enabled", "['hybrid-age']"],
+        [hermes_bin, "config", "set", "plugins.enabled", "['hybrid-age']"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -85,7 +141,7 @@ def main():
     else:
         print("    plugins.enabled set.")
     result = subprocess.run(
-        ["hermes", "config", "set", "plugins.disabled", "['pgvector']"],
+        [hermes_bin, "config", "set", "plugins.disabled", "['pgvector']"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -93,10 +149,10 @@ def main():
     else:
         print("    plugins.disabled set.")
 
-    # 5. Restart API and verify (optional)
+    # 5. Restart API and verify (optional) — pass target DSN explicitly
     if not args.skip_verify:
         print("[5/5] Running hermes-memory-verify...")
-        result = subprocess.run(["hermes-memory-verify"],
+        result = subprocess.run([sys.executable, "-m", "hermes_memory.verify", "--dsn", to_dsn],
                                 capture_output=True, text=True)
         print(result.stdout)
         if result.returncode != 0:

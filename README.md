@@ -259,8 +259,8 @@ pg_restore -d hermes_memory ~/librarian-2026-08-31.dump
 
 ### Between‑version migration notes
 
-- **AGE 1.7.0 → 1.6.0**: the provider uses `MERGE‑then‑SET +=` (no `ON CREATE SET`/`ON MATCH SET`). The `V6__fix_memory_entries_conflict_target.sql` migration adds the UNIQUE constraint `memory_entries_agent_target_content_key` and drops the `md5(content)` index — run this once after any cross‑version data move.
-- **V6 constraint**: `UNIQUE (agent_identity, target, content)` must exist for `ON CONFLICT` in `store.py`. If missing, `upsert_memory_entry` raises `InvalidColumnReferenceError`.
+- **AGE 1.7.0 → 1.6.0**: the provider uses `MERGE‑then‑SET +=` (no `ON CREATE SET`/`ON MATCH SET`).
+- **Canonical dedup** (AGENTS.md): `memory_entries` dedup is on `(agent_identity, target, md5(content))` via `memory_entries_unique_hash` UNIQUE index on `md5(content)` — plain `UNIQUE (agent_identity, target, content)` exceeds btree 2704-byte limit. Fresh installs get the correct index from `sql/init/02_schema.sql`. Deployments that already applied `V6__fix_memory_entries_conflict_target.sql` (plain content UNIQUE) should apply `V7__canonical_md5_dedup.sql` which drops the plain constraint and creates the `md5(content)` index. `store.py:upsert_memory_entry` uses `ON CONFLICT (agent_identity, target, md5(content)) DO NOTHING` matching that index.
 - **`hermes memory reset`** only erases built‑in `MEMORY.md`/`USER.md` rows; it does **not** touch `hermes_memory` pgvector/AGE tables or the plugin directory.
 
 ## License
