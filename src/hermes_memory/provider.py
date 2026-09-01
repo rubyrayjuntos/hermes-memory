@@ -463,7 +463,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.debug("ensure_about_labels failed", exc_info=True)
         # Merge Turn vertex (content truncated 200 chars)
         turn_content = (content or "")[:200]
-        turn_props = {"name": f"turn_{conv_id}", "session_id": session_id, "turn_id": int(conv_id), "content": turn_content}
+        turn_props = {"name": f"turn_{conv_id}", "session_id": session_id, "turn_id": int(conv_id), "content": turn_content, "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
         # Use Concept vertices: MERGE on name; Turn vertex merges via name too
         # Turn label expects name key; we provide it
         vids: list[str | None] = []
@@ -478,7 +478,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.debug("Turn vertex merge failed", exc_info=True)
             return
         # Concept vertices
-        concept_items = [("Concept", {"name": c}) for c, _ in scored]
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        concept_items = [("Concept", {"name": c, "weight": 1, "created_at": now_iso}) for c, _ in scored]
         try:
             concept_vids = await store.merge_vertices_batched(concept_items)
         except Exception:
