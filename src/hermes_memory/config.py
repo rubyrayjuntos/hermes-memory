@@ -44,6 +44,7 @@ class HybridAgeConfig:
     prefetch_timeout_s: float = 2.0
     dsn_env: str = DEFAULT_DSN_ENV
     embed_url_env: str = DEFAULT_EMBED_URL_ENV
+    decay_half_life_days: float = 30.0
     _raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -101,12 +102,19 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
         cfg.graph = os.environ["HYBRID_AGE_GRAPH"]
 
     for key in ("vector_k", "min_similarity", "max_tokens", "embed_dim",
-                "queue_maxsize", "prefetch_timeout_s"):
+                "queue_maxsize", "prefetch_timeout_s", "decay_half_life_days"):
         if raw.get(key) is not None:
             try:
                 setattr(cfg, key, type(getattr(cfg, key))(raw[key]))
             except (TypeError, ValueError):
                 pass
+
+    # also allow env override for decay_half_life_days
+    if os.environ.get("HYBRID_AGE_DECAY_HALF_LIFE_DAYS"):
+        try:
+            cfg.decay_half_life_days = float(os.environ["HYBRID_AGE_DECAY_HALF_LIFE_DAYS"])
+        except (TypeError, ValueError):
+            pass
 
     return cfg
 
@@ -173,5 +181,16 @@ CONFIG_SCHEMA_FIELDS = [
         "type": "integer",
         "minimum": 200,
         "maximum": 1200,
+    },
+    {
+        "key": "decay_half_life_days",
+        "description": "Half-life in days for recency decay exp(-age/half_life) used in graph expansion scoring",
+        "secret": False,
+        "required": False,
+        "default": 30,
+        "type": "number",
+        "minimum": 1,
+        "maximum": 365,
+        "env_var": "HYBRID_AGE_DECAY_HALF_LIFE_DAYS",
     },
 ]

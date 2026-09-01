@@ -496,7 +496,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             except ValueError:
                 continue
             edges.append(("ABOUT", turn_vid, cvid))
-            edge_props[("ABOUT", turn_vid, cvid)] = {"weight": 1.0, "cosine": float(cos)}
+            edge_props[("ABOUT", turn_vid, cvid)] = {"weight": 1.0, "cosine": float(cos), "created_at": now_iso}
         if edges:
             try:
                 await store.merge_edges_batched(edges, edge_props=edge_props)
@@ -591,8 +591,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         rows = await self.store.expand_graph(
             seed_ids,
-            [],  # dynamic weighted walk — score by weight×cosine, not whitelist
+            [],  # dynamic weighted walk — score by weight×cosine×recency, not whitelist
             limit=40,
+            decay_half_life_days=getattr(self.config, "decay_half_life_days", 30.0),
         )
 
         lines: List[str] = []

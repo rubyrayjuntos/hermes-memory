@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime
 import hashlib
 import json
 import logging
@@ -546,12 +547,11 @@ class Ingestor:
 
         edges = [("IMPORTS", file_vid, dv) for dv in dep_vids if file_vid and dv]
         if edges:
-            # Dynamic graph: IMPORTS edges carry vector radius + force.
-            # weight 1.0 for now; future increments on re-ingest.
-            # cosine heuristic pending real vector similarity for ABOUT edges.
+            # Dynamic graph: IMPORTS edges carry vector radius + force + recency.
             edge_props = {}
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
             for lab, src, dst in edges:
-                edge_props[(lab, src, dst)] = {"weight": 1.0, "cosine": 0.80}
+                edge_props[(lab, src, dst)] = {"weight": 1.0, "cosine": 0.80, "created_at": now_iso}
             self.stats.edges += await self._merge_edges(conn, edges, edge_props=edge_props)
 
         # -- Bridges ------------------------------------------------------------
