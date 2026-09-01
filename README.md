@@ -91,44 +91,39 @@ hermes-memory-ingest path/to/repo   # re-run: dedup means 0 new entities
 
 ## Architecture
 
+The memory core spans **three coordinated layers**:
+
+| Layer | What it holds | How it's built |
+|---|---|---|
+| **Conversations** | `conversations` table — one row per turn (user + assistant), contains `session_id`, `turn_id`, `content`, `created_at` ISO | `sync_turn` per-turn: embed Turn → extract 1-3 Concepts → MERGE Turn/Concept/ABOUT → bridge `memory_chunk_nodes` |
+| **Vector + Graph** | `memory_entries` (pgvector HNSW, 768-dim nomic-embed-text) + `AGE hermes_knowledge` graph (File/Module/Dependency/Standard/Concept/ Turn nodes + typed edges) | Ingest walks codebase → SHA-256 chunks → embed → File/Module/Dependency with `IMPORTS` edges (weight 1.0 internal / 0.80 external, cosine 0.80). AGE labels via `create_vlabel`/`create_elabel`. |
+| **3D Inspector** | Live growth view: `docs/graph/3d.html` polls `/api/librarian/graph/stats` 30s + `/api/librarian/graph/3d` 20s (paused during panel inspect). Edge labels: `IMPORTS w1.0·c0.80` and `ABOUT w1.0·c0.55-1.0` (orange). Filter toggles `IMPORTS`/`ABOUT` hide/show without reload. | `3d.html` JS: `fetchMetrics()` + `load()` + `String(id)` for vis-network IDs. Badge `#verifyBadge` top-right polls `/api/librarian/verify` → `PASS/FAIL · <len> chars · <lines> lines`, fallback to graph/stats placeholder. |
+
+**Walk** (expand_graph): `0.5*cosine + 0.3*weight + 0.2*exp(-age/30)` where age from `r.created_at / m.created_at`, legacy fallback 0.5. Score-order `DESC`, gates `min_cosine=0.0`, `min_weight=0.0`. Radius gate `r.cosine >= $radius` with `ORDER BY (0.5*r.cosine + 0.3*COALESCE(r.weight,0.5) + 0.2*exp(-age/30.0)) DESC`.
+
+**Concept compaction** (cosine≥0.92): Union-Find `compaction_keepers` keeps min-id deterministic; `merge_concept_pair` rewires edges via `SET e += {weight, cosine}` bare numeric via `age_props`; `prune_orphan_concepts` deletes degree==0 + created_at>7d; bridge `UPDATE ... AND graph_name=$1` dedup.
+
+**Verify**: `hermes-memory-verify PASS 4/4 len 4022` (`db-connectivity`, `conversations 2`, `memory_entries mirror 1`, `prefetch len 4022`). `health healthy:true`; `isolated_files 36` expected drift until ABOUT bridges fill; `orphan_chunks 0`.
+
 ```text
-User message
-    │
-    ▼
-Hermes Agent turn loop
-    │ sync_turn(user, assistant, session_id)      [non-blocking enqueue]
-    ▼
-asyncio.Queue ── background drain ──► embed (Ollama nomic-embed-text, 768-dim)
-    │                                        │
-    │                                        ▼
-    │                        memory_entries (pgvector HNSW)
-    │                                        │
-    │                          memory_chunk_nodes (bridge table)
-    │                                        │
-    ▼                                        ▼
-conversations (queue table)         AGE hermes_knowledge graph
-
-prefetch(query): embed query → pgvector ANN top-k → bridge → 1–2 hop Cypher expand
-                 → rank(similarity) → ≤1200-token fenced block injected into prompt
-                 (target <2s warm; Hermes hard-caps prefetch at 8s)
+User message ─▶ sync_turn ──► embed Turn(768d) ──► extract Concepts (regex, stopwords, 45-char max, max 3) ──► cosine dot/√ ──► MERGE Turn {session_id, turn_id:int, content[:200] weight:1 created_at} + Concept {name weight:1 created_at} + ABOUT {weight:1, cosine:real} ──► bridge_turn conv_<id>/conversation ──► memory_chunk_nodes ──► graph growth (w×c inspector)
+                                    │
+                                    ▼
+                     AGE hermes_knowledge (File/Module/Dependency IMPORTS edges + Concept nodes + ABOUT edges from turns)
+                                    │
+                                    ▼
+                     expand_graph(seed, [], limit, min_weight, min_cosine, decay_half_life) → 0.5·cos+0.3·weight+0.2·exp(-age/half_life) DESC
 ```
+|| Embeddings | `src/hermes_memory/embed.py` | OpenAI-compatible client (Ollama), 768-dim invariant |
+|| Store | `src/hermes_memory/store.py` | SQL/Cypher data access; every Cypher statement inside a SAVEPOINT |
+|| Ingest | `src/hermes_memory/ingest.py` | Codebase indexing: hash→chunk→embed→vector+graph+bridge |
+|| Verify | `src/hermes_memory/verify.py` | End-to-end pipeline smoke-check CLI |
 
-| Module | File | Purpose |
-|--------|------|---------|
-| Provider | `src/hermes_memory/provider.py` | `HybridAgeMemoryProvider` implementing the Hermes `MemoryProvider` ABC |
-| Config | `src/hermes_memory/config.py` | Resolution order: config.yaml > env vars > defaults |
-| Setup schema | `src/hermes_memory/config_schema.py` | Powers `hermes memory setup hybrid-age` |
-| Embeddings | `src/hermes_memory/embed.py` | OpenAI-compatible client (Ollama), 768-dim invariant |
-| Store | `src/hermes_memory/store.py` | SQL/Cypher data access; every Cypher statement inside a SAVEPOINT |
-| Ingest | `src/hermes_memory/ingest.py` | Codebase indexing: hash→chunk→embed→vector+graph+bridge |
-| Verify | `src/hermes_memory/verify.py` | End-to-end pipeline smoke-check CLI |
-
-| Layer | Tech | Purpose |
-|-------|------|---------|
-| Storage | Postgres 17 + pgvector | Embeddings (HNSW) + conversation/memory/doc-chunk rows |
-| Graph | Apache AGE 1.6 | Entity vertices + typed edges in the `hermes_knowledge` graph |
-| Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertex IDs |
-
+|| Layer | Tech | Purpose |
+||-------|------|---------|
+|| Storage | Postgres 17 + pgvector | Embeddings (HNSW) + conversation/memory/doc-chunk rows |
+|| Graph | Apache AGE 1.6 | Entity vertices + typed edges in the `hermes_knowledge` graph |
+|| Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertex IDs |
 ## Scope: v0.1 vs v0.2
 
 | Capability | v0.1 | v0.2 roadmap |
