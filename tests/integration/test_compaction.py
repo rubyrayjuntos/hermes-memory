@@ -47,17 +47,18 @@ async def test_compaction_dedup_ordering_and_weight(db_pool, store, clean_hermes
     )
     assert done == 2
 
-    # Bridge rows for Concepts (to test bridge_rows_affected)
+    # Choose keeper = min(c1,c2) deterministic
+    keeper, loser = (c1, c2) if c1 < c2 else (c2, c1)
+
+    # Bridge rows for the loser + orphan Concepts (to test bridge_rows_affected)
     async with db_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO memory_chunk_nodes (chunk_id, source, vertex_id, graph_name) VALUES "
             "($1, 'test', $2, 'hermes_knowledge'), ($3, 'test', $4, 'hermes_knowledge') ON CONFLICT DO NOTHING",
-            f"ctest:{c1}", c1, f"ctest:{c2}", c2,
+            f"ctest:{loser}", loser, f"ctest:{orphan}", orphan,
         )
 
-    # Preview should see bridge rows = 2 for pair (keeper->loser) + orphans
-    # Choose keeper = min(c1,c2) deterministic
-    keeper, loser = (c1, c2) if c1 < c2 else (c2, c1)
+    # Preview should see bridge rows = 2 for pair (keeper->loser) + orphan
     preview = await store.preview_concept_compaction([(keeper, loser, 0.96)], [orphan])
     assert preview["bridge_rows_affected"] >= 2, preview
     assert len(preview["pairs"]) == 1
@@ -93,6 +94,10 @@ async def test_compaction_dedup_ordering_and_weight(db_pool, store, clean_hermes
     concepts_final = await store.fetch_concepts()
     ids_final = {c["id"] for c in concepts_final}
     assert orphan not in ids_final
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT vertex_id FROM memory_chunk_nodes WHERE chunk_id LIKE 'ctest:%'")
+        vids_bridge = {int(r["vertex_id"]) for r in rows}
+    assert orphan not in vids_bridge
 
     # Cleanup turn
     async with db_pool.acquire() as conn:
