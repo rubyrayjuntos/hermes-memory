@@ -324,6 +324,29 @@ class Ingestor:
         try:
             await conn.execute("LOAD 'age';")
             await conn.execute("SET search_path = ag_catalog, public;")
+            # Backfill taxonomy for existing installs where ingest state caused
+            # files with null doc_type/hash/indexed_at to be skipped forever
+            # (Codex P1: reindex unchanged files when enriching metadata).
+            # This repairs rows in-place so healthy:false heals on next run
+            # without requiring file changes or state deletion.
+            try:
+                await conn.execute("""
+                    UPDATE memory_entries
+                       SET metadata = metadata
+                         || jsonb_build_object('doc_type',
+                              CASE
+                                WHEN metadata->>'language' = 'Documentation' THEN 'architecture_decision'
+                                WHEN metadata->>'language' IN ('SQL','Config') THEN 'standard_operating_procedure'
+                                ELSE 'api_reference'
+                              END)
+                         || jsonb_build_object('hash', COALESCE(metadata->>'hash', md5(content)))
+                         || jsonb_build_object('indexed_at', COALESCE(metadata->>'indexed_at', now()::text))
+                         || jsonb_build_object('language', COALESCE(metadata->>'language','Text'))
+                     WHERE metadata->>'file_path' IS NOT NULL
+                       AND (metadata->>'doc_type' IS NULL OR metadata->>'hash' IS NULL OR metadata->>'indexed_at' IS NULL)
+                """)
+            except Exception:
+                logger.debug("taxonomy backfill skipped", exc_info=True)
             if diff.deleted:
                 await self._prune_deleted(conn, str(codebase), diff.deleted)
             # State must contain only successfully-indexed files so that a
@@ -410,11 +433,24 @@ class Ingestor:
             return
 
         codebase_s = str(codebase)
+        import datetime as _dt
+        # Taxonomy per AGENTS.md: doc_type always required for file-backed rows.
+        # Map language to doc_type; file ingest defaults to api_reference
+        # (provider.py uses same default for file_path-backed writes).
+        _doc_type = "api_reference"
+        if lang == "Documentation":
+            _doc_type = "architecture_decision"
+        elif lang == "SQL":
+            _doc_type = "standard_operating_procedure"
+        elif lang in ("Config",):
+            _doc_type = "standard_operating_procedure"
         meta_common = {
             "file_path": rel,
             "hash": digest,
             "language": lang,
             "codebase": codebase_s,
+            "doc_type": _doc_type,
+            "indexed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         }
 
         # -- L2a: doc_chunks (all chunks; replace prior rows for this file) ----
