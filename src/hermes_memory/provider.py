@@ -479,7 +479,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
         # Concept vertices
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        concept_items = [("Concept", {"name": c, "weight": 1, "created_at": now_iso}) for c, _ in scored]
+        concept_items = [("Concept", {"name": c, "created_at": now_iso}) for c, _ in scored]
         try:
             concept_vids = await store.merge_vertices_batched(concept_items)
         except Exception:
