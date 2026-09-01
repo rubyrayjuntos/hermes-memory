@@ -546,15 +546,11 @@ class Ingestor:
 
         edges = [("IMPORTS", file_vid, dv) for dv in dep_vids if file_vid and dv]
         if edges:
-            # Dynamic graph: IMPORTS edges carry vector radius + force
-            # internal imports (./foo) get higher cosine than external (react)
+            # Dynamic graph: IMPORTS edges carry vector radius + force.
             # weight 1.0 for now; future increments on re-ingest.
-            import math as _math
+            # cosine heuristic pending real vector similarity for ABOUT edges.
             edge_props = {}
             for lab, src, dst in edges:
-                # Heuristic: internal -> cosine 0.88, external -> 0.75
-                # we don't have dep name here, so default 0.80; ingest will
-                # refine via provider's per-turn ABOUT edges with real cosine.
                 edge_props[(lab, src, dst)] = {"weight": 1.0, "cosine": 0.80}
             self.stats.edges += await self._merge_edges(conn, edges, edge_props=edge_props)
 

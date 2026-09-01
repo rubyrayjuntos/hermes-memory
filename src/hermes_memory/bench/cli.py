@@ -383,7 +383,7 @@ class BenchHarness:
             return []
         rows = await self.store.expand_graph(
             seed_ids,
-            ["RELATED_TO", "WORKS_ON", "USES", "DEPENDS_ON", "BUILT_WITH"],
+            [],  # dynamic weighted — no whitelist, score by weight×cosine
             limit=40,
         )
         out: List[tuple[str, float]] = []

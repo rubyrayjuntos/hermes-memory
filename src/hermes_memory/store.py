@@ -51,6 +51,9 @@ def age_props(properties: Dict[str, Any]) -> str:
     - None values are dropped entirely.
     - Keys must match the safe-identifier pattern (same as labels); invalid
       keys are skipped with a warning rather than interpolated into Cypher.
+    - Numeric values (int/float) are emitted as bare literals so Cypher
+      numeric comparisons (coalesce(r.weight,0.5) >= $min) work; all other
+      values go through age_str (quoted).
     - Keys are preserved exactly once, insertion order kept.
     """
     parts = []
@@ -60,7 +63,12 @@ def age_props(properties: Dict[str, Any]) -> str:
         if not _SAFE_IDENT.match(key or ""):
             logger.warning("age_props: skipping invalid property key %r", key)
             continue
-        parts.append(f"{key}: {age_str(val)}")
+        if isinstance(val, bool):
+            parts.append(f"{key}: {str(val).lower()}")
+        elif isinstance(val, (int, float)):
+            parts.append(f"{key}: {val}")
+        else:
+            parts.append(f"{key}: {age_str(val)}")
     return "{" + ", ".join(parts) + "}"
 
 

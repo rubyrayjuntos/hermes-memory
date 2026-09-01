@@ -20,11 +20,17 @@ from hermes_memory.store import _SAFE_IDENT, age_props, age_str  # noqa: E402
 def test_p2_none_dropped_and_keys_preserved(props):
     out = age_props(props)
     body = out[1:-1]
+    def expected_pair(k, v):
+        if isinstance(v, bool):
+            return f"{k}: {str(v).lower()}"
+        if isinstance(v, (int, float)):
+            return f"{k}: {v}"
+        return f"{k}: {age_str(v)}"
     # Each valid, non-None key renders its full pair exactly once.
     for key, val in props.items():
         if val is None or not _SAFE_IDENT.match(key or ""):
             continue
-        pair = f"{key}: {age_str(val)}"
+        pair = expected_pair(key, val)
         assert re.search(rf"(?<![A-Za-z0-9_]){re.escape(pair)}", body), \
             f"expected exactly one {pair!r} in {out!r}"
     # No other key/value pairs were invented: count rendered pairs by
@@ -37,7 +43,7 @@ def test_p2_none_dropped_and_keys_preserved(props):
     remaining = body
     for k, v in props.items():
         if v is not None and _SAFE_IDENT.match(k or ""):
-            pair = f"{k}: {age_str(v)}"
+            pair = expected_pair(k, v)
             remaining = re.sub(rf"(?<![A-Za-z0-9_]){re.escape(pair)}", "", remaining,
                                count=1)
     assert remaining.strip(", ") == "" and (
