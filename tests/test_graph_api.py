@@ -7,6 +7,7 @@ import pytest
 
 from hermes_memory.graph_api import (
     clamp_limit,
+    conversation_first_budget,
     match_route,
     parse_vertex,
     preview_embedding,
@@ -70,6 +71,14 @@ def test_preview_embedding():
     assert preview == [0.1, 0.5]
     assert stats["min"] == -0.2
     assert stats["max"] == 0.5
+
+
+def test_conversation_first_budget():
+    convo, other = conversation_first_budget(250)
+    assert convo == 175
+    assert other == 75
+    assert convo > other
+    assert convo + other == 250
 
 
 def test_validate_bind_host_loopback_only():

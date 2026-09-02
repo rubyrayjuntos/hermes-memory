@@ -121,6 +121,14 @@ def validate_bind_host(host: str) -> str:
     return host
 
 
+def conversation_first_budget(limit: int) -> tuple[int, int]:
+    """Split an 'all' view: conversations take 70%, remainder is File/IMPORTS."""
+    n = max(1, int(limit))
+    convo = max(1, (n * 7) // 10)
+    other = max(0, n - convo)
+    return convo, other
+
+
 def clamp_limit(raw: Any, default: int = DEFAULT_LIMIT) -> int:
     try:
         n = int(raw)
@@ -407,10 +415,13 @@ class Runtime:
         assert self.store is not None
         return self.loop.call(self._agraph_3d(label, limit))
 
-    async def _agraph_3d(self, label: Optional[str], limit: int) -> Dict[str, Any]:
-        assert self.store is not None and self.pool is not None
-        graph = self.store.graph_name
-        label_pat = f"(n:{label})" if label else "(n)"
+    async def _fetch_3d_rows(self, conn, graph: str, label: Optional[str], limit: int):
+        if limit <= 0:
+            return []
+        if label:
+            label_pat = f"(n:{label})"
+        else:
+            label_pat = "(n)"
         cypher = f"""
             MATCH {label_pat}
             OPTIONAL MATCH (n)-[r]->(m)
@@ -418,21 +429,22 @@ class Runtime:
                    coalesce(r.weight, 0.5), coalesce(r.cosine, 0.5)
             LIMIT {int(limit)}
         """
-        async with self.pool.acquire() as conn:
-            await self.store.load_age(conn)
-            sp = savepoint_name("g3d", 0)
-            async with conn.transaction():
-                await conn.execute(f"SAVEPOINT {sp}")
-                try:
-                    rows = await conn.fetch(
-                        f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS "
-                        f"(n agtype, rel agtype, m agtype, nid agtype, mid agtype, w agtype, c agtype)"
-                    )
-                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                except Exception:
-                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                    logger.warning("graph/3d cypher failed", exc_info=True)
-                    rows = []
+        sp = savepoint_name("g3d", 0 if not label else 1)
+        async with conn.transaction():
+            await conn.execute(f"SAVEPOINT {sp}")
+            try:
+                rows = await conn.fetch(
+                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS "
+                    f"(n agtype, rel agtype, m agtype, nid agtype, mid agtype, w agtype, c agtype)"
+                )
+                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                return rows
+            except Exception:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                logger.warning("graph/3d cypher failed label=%s", label, exc_info=True)
+                return []
+
+    def _assemble_3d(self, rows, limit: int, label: Optional[str]) -> Dict[str, Any]:
         nodes: Dict[str, Dict[str, Any]] = {}
         links: List[Dict[str, Any]] = []
         degree: Dict[str, int] = {}
@@ -474,6 +486,20 @@ class Runtime:
                 "edges": len(links),
             },
         }
+
+    async def _agraph_3d(self, label: Optional[str], limit: int) -> Dict[str, Any]:
+        assert self.store is not None and self.pool is not None
+        graph = self.store.graph_name
+        async with self.pool.acquire() as conn:
+            await self.store.load_age(conn)
+            if label:
+                rows = await self._fetch_3d_rows(conn, graph, label, limit)
+            else:
+                convo_n, other_n = conversation_first_budget(limit)
+                convo = await self._fetch_3d_rows(conn, graph, "Turn", convo_n)
+                other = await self._fetch_3d_rows(conn, graph, "File", other_n)
+                rows = list(convo) + list(other)
+        return self._assemble_3d(rows, limit, label)
 
     def chunks(self, file_path: str, limit: int) -> Dict[str, Any]:
         assert self.store is not None
