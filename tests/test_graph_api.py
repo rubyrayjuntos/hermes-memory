@@ -12,6 +12,7 @@ from hermes_memory.graph_api import (
     preview_embedding,
     safe_label,
     stringify_id,
+    validate_bind_host,
 )
 
 
@@ -69,6 +70,15 @@ def test_preview_embedding():
     assert preview == [0.1, 0.5]
     assert stats["min"] == -0.2
     assert stats["max"] == 0.5
+
+
+def test_validate_bind_host_loopback_only():
+    assert validate_bind_host("127.0.0.1") == "127.0.0.1"
+    assert validate_bind_host("localhost") == "127.0.0.1"
+    with pytest.raises(ValueError):
+        validate_bind_host("0.0.0.0")
+    with pytest.raises(ValueError):
+        validate_bind_host("192.168.1.10")
 
 
 def test_routes_read_and_mutations():

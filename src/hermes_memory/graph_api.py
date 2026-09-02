@@ -27,6 +27,7 @@ logger = logging.getLogger("hermes_memory.graph_api")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7890
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_LIMIT = 2000
 DEFAULT_LIMIT = 250
 PID_PATH = Path.home() / ".hermes" / "run" / "hermes-memory-api.pid"
@@ -106,6 +107,18 @@ def parse_agtype_number(raw: Any, default: float = 0.5) -> float:
         return float(s)
     except (TypeError, ValueError):
         return default
+
+
+def validate_bind_host(host: str) -> str:
+    """Loopback only. 0.0.0.0 / wildcard / LAN addresses are rejected."""
+    h = (host or "").strip().lower()
+    if h in ("", "0.0.0.0", "::", "*", "[::]"):
+        raise ValueError("graph api binds loopback only")
+    if h not in LOOPBACK_HOSTS:
+        raise ValueError(f"refusing non-loopback bind {host!r}")
+    if h == "localhost":
+        return "127.0.0.1"
+    return host
 
 
 def clamp_limit(raw: Any, default: int = DEFAULT_LIMIT) -> int:
@@ -216,7 +229,7 @@ def find_pane_dir() -> Optional[Path]:
 class _LoopThread:
     def __init__(self) -> None:
         self.loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._run, name="graph-api-loop", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="graph-api-loop", daemon=False)
         self._thread.start()
 
     def _run(self) -> None:
@@ -228,7 +241,18 @@ class _LoopThread:
         return fut.result(timeout=timeout)
 
     def stop(self) -> None:
-        self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.loop.is_closed():
+            return
+        try:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        except RuntimeError:
+            return
+        self._thread.join(timeout=5.0)
+        if not self.loop.is_closed():
+            try:
+                self.loop.close()
+            except Exception:
+                logger.debug("loop close failed", exc_info=True)
 
 
 def _load_dotenv_files() -> None:
@@ -858,12 +882,11 @@ def stop_daemon() -> bool:
             time.sleep(0.1)
         if pid_is_alive(pid):
             os.kill(pid, signal.SIGKILL)
-    # leftover name from install_cli
+    # Only the serve listener — never pkill start/stop/status argv.
     try:
         import subprocess
 
         subprocess.run(["pkill", "-f", "hermes_memory.graph_api serve"], capture_output=True)
-        subprocess.run(["pkill", "-f", "scripts/graph_api.py"], capture_output=True)
     except Exception:
         pass
     try:
@@ -875,6 +898,7 @@ def stop_daemon() -> bool:
 
 def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     global RUNTIME
+    host = validate_bind_host(host)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     RUNTIME = Runtime()
     httpd = ThreadingHTTPServer((host, port), Handler)
@@ -901,6 +925,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
 
 def start_daemon(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     """Detach a listener. Used by hermes-memory-install after pip install -e."""
+    host = validate_bind_host(host)
     if wait_ready(host, port, timeout=1.0):
         logger.info("graph api already up")
         return
@@ -936,10 +961,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     if cmd == "serve":
         host = getattr(args, "host", DEFAULT_HOST)
         port = getattr(args, "port", DEFAULT_PORT)
+        try:
+            host = validate_bind_host(host)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         serve(host, port)
         return 0
     if cmd == "start":
-        start_daemon(args.host, args.port)
+        try:
+            host = validate_bind_host(args.host)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        start_daemon(host, args.port)
         if wait_ready(args.host, args.port, timeout=8.0):
             print(f"graph api up on http://{args.host}:{args.port}")
             return 0
