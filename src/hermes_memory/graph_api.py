@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -119,6 +120,30 @@ def validate_bind_host(host: str) -> str:
     if h == "localhost":
         return "127.0.0.1"
     return host
+
+
+def human_turn_title(content: Any, fallback: str = "Turn") -> str:
+    """First line of the message, not turn_472 or an AGE id."""
+    text = str(content or "").strip()
+    if not text:
+        return fallback
+    line = text.split("\n", 1)[0]
+    line = re.sub(r"[#*_`]+", "", line).strip()
+    if len(line) > 80:
+        line = line[:77] + "…"
+    return line or fallback
+
+
+def humanize_node(n: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not n:
+        return n
+    props = n.get("props") or {}
+    if n.get("label") == "Turn":
+        title = human_turn_title(props.get("content"), n.get("name") or "Turn")
+        n["name"] = title
+        n["title"] = title
+        n["snippet"] = str(props.get("content") or "")[:280]
+    return n
 
 
 def is_verify_session(session_id: Any) -> bool:
@@ -456,7 +481,7 @@ class Runtime:
         links: List[Dict[str, Any]] = []
         degree: Dict[str, int] = {}
         for row in rows:
-            src = parse_vertex(row["n"])
+            src = humanize_node(parse_vertex(row["n"]))
             if src and is_verify_session((src.get("props") or {}).get("session_id")):
                 continue
             if src:
@@ -466,7 +491,7 @@ class Runtime:
             rel_s = None if rel is None else str(rel).strip().strip('"')
             if rel_s in ("", "null", "None"):
                 rel_s = None
-            dst = parse_vertex(row["m"]) if row["m"] is not None else None
+            dst = humanize_node(parse_vertex(row["m"])) if row["m"] is not None else None
             if dst:
                 nodes[dst["id"]] = dst
                 degree[dst["id"]] = degree.get(dst["id"], 0)
@@ -671,13 +696,15 @@ class Runtime:
                     await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
                     logger.debug("node fetch failed", exc_info=True)
                     return {"error": "not found", "id": str(vid)}
-        parsed = parse_vertex(row["n"]) if row else None
+        parsed = humanize_node(parse_vertex(row["n"]) if row else None)
         if not parsed:
             return {"error": "not found", "id": str(vid)}
         return {
             "id": parsed["id"],
             "label": parsed["label"],
             "name": parsed["name"],
+            "title": parsed.get("title") or parsed["name"],
+            "snippet": parsed.get("snippet") or "",
             "properties": parsed["props"],
         }
 

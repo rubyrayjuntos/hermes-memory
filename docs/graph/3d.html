@@ -116,7 +116,7 @@ const CONFIG = {
   // same-origin when served from Flask /api/librarian/pane — otherwise use explicit host
   API_BASE: location.port === '7890' ? '' : 'http://127.0.0.1:7890',
   PATH_3D: '/api/librarian/graph/3d',
-  FALLBACK_TO_DEMO: true,
+  FALLBACK_TO_DEMO: false,
 };
 const COLORS = {
   Person:'#a78bfa', Project:'#60a5fa', Technology:'#34d399', Organization:'#f87171',

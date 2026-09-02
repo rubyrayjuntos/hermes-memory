@@ -8,6 +8,7 @@ import pytest
 from hermes_memory.graph_api import (
     clamp_limit,
     conversation_first_budget,
+    human_turn_title,
     is_verify_session,
     match_route,
     parse_vertex,
@@ -72,6 +73,12 @@ def test_preview_embedding():
     assert preview == [0.1, 0.5]
     assert stats["min"] == -0.2
     assert stats["max"] == 0.5
+
+
+def test_human_turn_title():
+    assert human_turn_title("You're right. That hub is verify.", "turn_1") == "You're right. That hub is verify."
+    assert "turn_472" not in human_turn_title("**Hello** world\nmore", "turn_472")
+    assert human_turn_title("", "turn_9") == "turn_9"
 
 
 def test_is_verify_session():

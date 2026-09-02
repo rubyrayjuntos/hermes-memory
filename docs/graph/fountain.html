@@ -389,20 +389,18 @@ function nodeName(n) {
 
 function selectNode(n) {
   selected = n;
-  document.getElementById('sel-meta').textContent = n.id.slice(0, 10) + '… · ' + (n.label || '');
+  const props = n.props || n.properties || {};
+  const snippet = n.snippet || props.content || '';
+  document.getElementById('sel-meta').textContent = (n.label || 'Turn') + (props.session_id ? ' · ' + props.session_id : '');
   const nbr = raw.links.filter(l => sid(l.source) === n.id || sid(l.target) === n.id);
   const lines = [];
-  lines.push(`// LIVE AGE — ${nodeName(n)} (${n.label || n.group || '?'})`);
-  lines.push(`id: "${n.id}"`);
-  lines.push(`gem: ${gemKind(n)}`);
-  if (n._hop != null) lines.push(`hop_from_seed: ${n._hop}`);
-  if (n._searchSeed) lines.push(`role: VECTOR_SEED  score=${n._seed_score ?? '?'}`);
-  else if (n._searchExpanded) lines.push('role: GRAPH_EXPANDED');
-  lines.push(`degree_in_view: ${nbr.length}`);
-  nbr.slice(0, 12).forEach(l => {
+  lines.push(nodeName(n));
+  if (snippet) lines.push('', snippet);
+  if (props.session_id) lines.push('', 'session ' + props.session_id);
+  nbr.slice(0, 8).forEach(l => {
     const other = sid(l.source) === n.id ? sid(l.target) : sid(l.source);
     const on = raw.nodes.find(x => x.id === other);
-    lines.push(`  -[:${l.label || 'REL'}]- ${on ? nodeName(on) : other}`);
+    lines.push(`  ${l.label || 'REL'} → ${on ? nodeName(on) : other}`);
   });
   document.getElementById('hook').textContent = lines.join('\n');
   [...document.querySelectorAll('#nodelist button')].forEach(b => {
@@ -514,7 +512,7 @@ function applySearch(res) {
 
 async function loadCatalog() {
   const [g3d, stats] = await Promise.all([
-    safeFetch(`${API}/api/librarian/graph/3d?limit=250&fresh=1`),
+    safeFetch(`${API}/api/librarian/graph/3d?label=Turn&limit=250&fresh=1`),
     safeFetch(`${API}/api/librarian/graph/stats?fresh=1`)
   ]);
   if (!g3d) return;
@@ -547,10 +545,7 @@ document.getElementById('btn-catalog').onclick = loadCatalog;
 if (location.protocol === 'file:') document.getElementById('filewarn').style.display = 'block';
 
 initThree();
-loadCatalog().then(() => {
-  // default: show the injection manifold that actually feeds the model
-  dissolve();
-});
+loadCatalog();
 </script>
 </body>
 </html>
