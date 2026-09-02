@@ -168,6 +168,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._max_turns = 6
         self._last_recall_count = 0
         self._unavailable_reason = ""
+        self._concept_emb: Dict[str, list[float]] = {}
 
     # -- identity -------------------------------------------------------------
 
@@ -433,6 +434,46 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     self._agent_identity, target, content,
                 )
 
+    async def _about_existing_concepts(
+        self,
+        store: Store,
+        embedder: Embedder,
+        turn_vec: list[float] | None,
+        scored: list[tuple[str, float]],
+        max_extra: int = 4,
+        min_cos: float = 0.58,
+    ) -> list[tuple[str, float]]:
+        """Hook this turn to Concepts already in the graph (cross-session hubs)."""
+        if not turn_vec:
+            return scored
+        try:
+            existing = await store.fetch_concepts()
+        except Exception:
+            return scored
+        existing.sort(key=lambda c: -int(c.get("degree") or 0))
+        already = {n for n, _ in scored}
+        extra: list[tuple[str, float]] = []
+        for c in existing[:40]:
+            name = (c.get("name") or "").strip()
+            if not name or name in already:
+                continue
+            vec = self._concept_emb.get(name)
+            if vec is None:
+                try:
+                    vec = await embedder.embed_text(name)
+                except Exception:
+                    vec = None
+                if vec:
+                    self._concept_emb[name] = vec
+            cos = _cosine_similarity(turn_vec, vec)
+            if cos is None or cos < min_cos:
+                continue
+            extra.append((name, float(cos)))
+            already.add(name)
+            if len(extra) >= max_extra:
+                break
+        return scored + extra
+
     async def _link_turn_concepts(
         self, store: Store, embedder: Embedder, conv_id: int,
         session_id: str, content: str, turn_vec: list[float] | None,
@@ -452,6 +493,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             if cos < 0.55:
                 continue
             scored.append((concept, cos))
+        scored = await self._about_existing_concepts(store, embedder, turn_vec, scored)
         # Always MERGE the Turn vertex + bridge, even with zero ABOUT edges.
         # Title-case extraction missing used to skip the vertex entirely, so
         # live chats never appeared on the graph (only C5 verify synthetics).
