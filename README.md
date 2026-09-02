@@ -237,10 +237,11 @@ until re-tested.
 
 | Command | What it does |
 |---|---|
-| `hermes-memory-install` | Full first‑time setup: docker compose, plugin copy, pip install, config.yaml `hybrid_age` block, 7890 restart, verify. |
+| `hermes-memory-install` | Full first‑time setup: docker compose, plugin copy (default + librarian profile), pip install, `memory.provider=hybrid-age`, `hybrid_age` block, `hermes-memory-api` on 127.0.0.1:7890, verify. |
 | `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
 | `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
-| `hermes-memory-uninstall` | Disable hybrid‑age, drop hermes_memory DB, remove plugin dir, fall back to built‑in MEMORY.md/USER.md. |
+| `hermes-memory-uninstall` | Stop viz API, disable hybrid‑age, drop hermes_memory DB (unless `--keep-db`), remove plugin dirs, fall back to built‑in MEMORY.md/USER.md. |
+| `hermes-memory-api` | Read-only viz API (`start`/`stop`/`status`/`serve`) on 127.0.0.1:7890. Pane: `http://127.0.0.1:7890/api/librarian/pane`. |
 
 ### Backup & restore
 

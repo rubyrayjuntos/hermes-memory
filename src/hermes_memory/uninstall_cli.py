@@ -49,6 +49,15 @@ def main():
             print("Uninstall cancelled.")
             sys.exit(0)
 
+    # 0. Stop viz API
+    print("[0/5] Stopping graph API...")
+    try:
+        from hermes_memory.graph_api import stop_daemon
+        stop_daemon()
+        print("    graph API stopped.")
+    except Exception as e:
+        print(f"    graph API stop skipped: {e}")
+
     # 1. Set provider to built-in in config
     print("[1/5] Setting provider to built-in...")
     hermes_bin = shutil.which("hermes") or "hermes"
@@ -93,15 +102,18 @@ def main():
     else:
         print("    Keeping hermes_memory database (--keep-db).")
 
-    # 3. Remove plugin dir if requested
+    # 3. Remove plugin dirs if requested (default + librarian profile)
     if args.remove_plugin:
         print("[3/5] Removing plugin directory...")
-        plugin_dir = HERMES_HOME / "plugins" / "hybrid-age"
-        if plugin_dir.exists():
-            shutil.rmtree(str(plugin_dir))
-            print(f"    Removed {plugin_dir}")
-        else:
-            print(f"    {plugin_dir} does not exist.")
+        for plugin_dir in (
+            HERMES_HOME / "plugins" / "hybrid-age",
+            HERMES_HOME / "profiles" / "librarian" / "plugins" / "hybrid-age",
+        ):
+            if plugin_dir.exists():
+                shutil.rmtree(str(plugin_dir))
+                print(f"    Removed {plugin_dir}")
+            else:
+                print(f"    {plugin_dir} does not exist.")
 
     # 4. Restart Hermes so built-in provider becomes active
     print("[4/5] Restarting Hermes...")

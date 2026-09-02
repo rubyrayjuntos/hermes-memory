@@ -2,6 +2,7 @@
 """hermes-memory-install — First-time installation CLI."""
 
 import argparse
+import os
 import time
 import re
 import shutil
@@ -11,6 +12,62 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_HOME = Path.home() / ".hermes"
+
+PLUGIN_DIRS = (
+    HERMES_HOME / "plugins" / "hybrid-age",
+    HERMES_HOME / "profiles" / "librarian" / "plugins" / "hybrid-age",
+)
+CONFIG_PATHS = (
+    HERMES_HOME / "config.yaml",
+    HERMES_HOME / "profiles" / "librarian" / "config.yaml",
+)
+
+
+def write_hybrid_age_block(config_path: Path, embed_model: str, graph: str) -> None:
+    new_block_dict = {
+        "dsn_env": "HYBRID_AGE_DSN",
+        "embed_url_env": "HYBRID_AGE_EMBED_URL",
+        "embed_model": embed_model,
+        "graph": graph,
+        "vector_k": 12,
+        "min_similarity": 0.55,
+        "max_tokens": 1200,
+    }
+    block_text = (
+        f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n"
+        f"  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n"
+        f"  min_similarity: 0.55\n  max_tokens: 1200\n"
+    )
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import yaml  # type: ignore
+        if config_path.exists():
+            cfg = yaml.safe_load(config_path.read_text()) or {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+        else:
+            cfg = {}
+        cfg["hybrid_age"] = new_block_dict
+        if "memory" not in cfg or not isinstance(cfg.get("memory"), dict):
+            cfg["memory"] = {}
+        cfg["memory"]["provider"] = "hybrid-age"
+        config_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        return
+    except Exception:
+        pass
+    if config_path.exists():
+        config_text = config_path.read_text()
+        if "hybrid_age:" in config_text:
+            config_text = re.sub(
+                r"^hybrid_age:.*?(?=^\w|\Z)",
+                block_text,
+                config_text, flags=re.DOTALL | re.MULTILINE,
+            )
+        else:
+            config_text = config_text.rstrip() + "\n" + block_text
+        config_path.write_text(config_text)
+    else:
+        config_path.write_text(block_text)
 
 
 def get_env_files():
@@ -93,8 +150,24 @@ def main():
                         help="Assume yes to all prompts")
     args = parser.parse_args()
 
-    dsn = args.dsn or input("HYBRID_AGE_DSN: ").strip() or None
+    dsn = args.dsn or os.environ.get("HYBRID_AGE_DSN")
+    if not dsn:
+        for env_path in get_env_files():
+            try:
+                for line in env_path.read_text().splitlines():
+                    if line.startswith("HYBRID_AGE_DSN="):
+                        dsn = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+            except OSError:
+                continue
+            if dsn:
+                break
+    if not dsn and not args.yes:
+        dsn = input("HYBRID_AGE_DSN: ").strip() or None
     if not dsn or "***" in dsn:
+        if args.yes:
+            print("ERROR: --yes requires --dsn or HYBRID_AGE_DSN with a real password.", file=sys.stderr)
+            sys.exit(1)
         # Prompt for real password instead of storing placeholder
         import getpass
         pw = getpass.getpass("HYBRID_AGE_DSN password (will be embedded in DSN): ").strip()
@@ -114,11 +187,13 @@ def main():
             except OSError:
                 pass
             merge_env_file(env_path, {"HERMES_PG_PASSWORD": pw}) if pw else None
-    embed_url = args.embed_url or input("HYBRID_AGE_EMBED_URL: ").strip() or \
-        "http://localhost:11434/v1"
-    embed_model = args.embed_model or input("HYBRID_AGE_EMBED_MODEL: ").strip() or \
-        "nomic-embed-text"
-    graph = args.graph or input("HYBRID_AGE_GRAPH: ").strip() or "hermes_knowledge"
+    def _prompt(label, default, env_name):
+        if args.yes:
+            return os.environ.get(env_name) or default
+        return input(f"{label}: ").strip() or default
+    embed_url = args.embed_url or _prompt("HYBRID_AGE_EMBED_URL", "http://localhost:11434/v1", "HYBRID_AGE_EMBED_URL")
+    embed_model = args.embed_model or _prompt("HYBRID_AGE_EMBED_MODEL", "nomic-embed-text", "HYBRID_AGE_EMBED_MODEL")
+    graph = args.graph or _prompt("HYBRID_AGE_GRAPH", "hermes_knowledge", "HYBRID_AGE_GRAPH")
 
     # Write env files — merge, do not truncate unrelated keys
     updates = {
@@ -129,22 +204,22 @@ def main():
     }
     for env_path in get_env_files():
         merge_env_file(env_path, updates)
+    os.environ["HYBRID_AGE_DSN"] = dsn
+    os.environ.setdefault("HYBRID_AGE_EMBED_URL", embed_url)
+    os.environ.setdefault("HYBRID_AGE_EMBED_MODEL", embed_model)
+    os.environ.setdefault("HYBRID_AGE_GRAPH", graph)
 
-    # 1. Install plugins
+    # 1. Install plugins (default home + librarian profile)
     print("[1/7] Installing hybrid-age plugin...")
-    plugin_dir = HERMES_HOME / "plugins" / "hybrid-age"
-    plugin_dir.mkdir(parents=True, exist_ok=True)
     src_dir = REPO_ROOT / "src" / "hermes_memory"
-    for f in src_dir.glob("*.py"):
-        shutil.copy2(str(f), str(plugin_dir / f.name))
-    init_src = src_dir / "__init__.py"
-    init_dst = plugin_dir / "__init__.py"
-    if init_src.exists():
-        shutil.copy2(str(init_src), str(init_dst))
-    pc = plugin_dir / "__pycache__"
-    if pc.exists():
-        shutil.rmtree(str(pc))
-    print(f"    Plugin dir: {plugin_dir}")
+    for plugin_dir in PLUGIN_DIRS:
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        for f in src_dir.glob("*.py"):
+            shutil.copy2(str(f), str(plugin_dir / f.name))
+        pc = plugin_dir / "__pycache__"
+        if pc.exists():
+            shutil.rmtree(str(pc))
+        print(f"    Plugin dir: {plugin_dir}")
 
     # 2. Pip install
     print("[2/7] Installing package with pip...")
@@ -177,68 +252,24 @@ def main():
         print(f"    hermes config set failed: {result.stderr}")
     else:
         print("    plugins.disabled set.")
-
-    # 4. Write hybrid_age block to config.yaml — parse YAML if available
-    print("[4/7] Writing hybrid_age block to config.yaml...")
-    config_path = HERMES_HOME / "config.yaml"
-    new_block_dict = {
-        "dsn_env": "HYBRID_AGE_DSN",
-        "embed_url_env": "HYBRID_AGE_EMBED_URL",
-        "embed_model": embed_model,
-        "graph": graph,
-        "vector_k": 12,
-        "min_similarity": 0.55,
-        "max_tokens": 1200,
-    }
-    try:
-        import yaml  # type: ignore
-        has_yaml = True
-    except ImportError:
-        has_yaml = False
-    if config_path.exists():
-        if has_yaml:
-            try:
-                with open(config_path, 'r') as f:
-                    cfg = yaml.safe_load(f) or {}
-                cfg["hybrid_age"] = new_block_dict
-                with open(config_path, 'w') as f:
-                    yaml.safe_dump(cfg, f, sort_keys=False)
-            except Exception as e:
-                print(f"    WARNING: YAML update failed ({e}), falling back to text append")
-                has_yaml = False
-        if not has_yaml:
-            with open(config_path, 'r') as f:
-                config_text = f.read()
-            if "hybrid_age:" in config_text:
-                # Replace through next top-level key or EOF (properly)
-                config_text = re.sub(
-                    r"^hybrid_age:.*?(?=^\w|\Z)",
-                    lambda m: f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n",
-                    config_text, flags=re.DOTALL | re.MULTILINE
-                )
-                # If regex didn't consume old indented values (fallback), ensure single block
-                if config_text.count("hybrid_age:") > 1:
-                    # keep first occurrence, remove duplicates
-                    parts = config_text.split("hybrid_age:")
-                    config_text = parts[0] + "hybrid_age:" + parts[1].split("\nhybrid_age:")[0]
-                    # rebuild with correct block if needed
-                    if f"graph: {graph}" not in config_text:
-                        config_text = re.sub(r"^hybrid_age:.*?(?=^\w|\Z)",
-                                             f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n",
-                                             config_text, flags=re.DOTALL | re.MULTILINE)
-            else:
-                config_text = config_text.rstrip() + f"\nhybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n"
-            if not has_yaml:
-                with open(config_path, 'w') as f:
-                    f.write(config_text)
-    else:
-        if has_yaml:
-            with open(config_path, 'w') as f:
-                yaml.safe_dump({"hybrid_age": new_block_dict}, f, sort_keys=False)
+    for profile_args, label in (
+        ([], "default"),
+        (["--profile", "librarian"], "librarian"),
+    ):
+        result = subprocess.run(
+            [hermes_bin, *profile_args, "config", "set", "memory.provider", "hybrid-age"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"    memory.provider ({label}) via hermes CLI failed: {result.stderr.strip()[:200]}")
         else:
-            with open(config_path, 'w') as f:
-                f.write(f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n  min_similarity: 0.55\n  max_tokens: 1200\n")
-    print("    config.yaml updated.")
+            print(f"    memory.provider=hybrid-age ({label})")
+
+    # 4. Write hybrid_age block to default + librarian config.yaml
+    print("[4/7] Writing hybrid_age block to config.yaml...")
+    for config_path in CONFIG_PATHS:
+        write_hybrid_age_block(config_path, embed_model, graph)
+        print(f"    updated {config_path}")
 
     # 5. Start Docker compose
     print("[5/7] Starting Docker compose...")
@@ -275,31 +306,17 @@ def main():
         print(f"    WARNING: PostgreSQL not healthy after {max_wait}s. "
                "Continuing anyway.")
 
-    # 6. Restart Flask 7890 API
-    print("[6/7] Restarting Flask API (7890)...")
-    subprocess.run(["pkill", "-f", "graph_api.py"], capture_output=True)
-    time.sleep(1)
-    api_script = REPO_ROOT / "scripts" / "graph_api.py"
+    # 6. Restart viz API on 127.0.0.1:7890
+    print("[6/7] Restarting graph API (7890)...")
     try:
-        log_path = Path("/tmp/librarian_api.log")
-        # Use Popen with absolute python, not shell redirection literals
-        subprocess.Popen(
-            [sys.executable, str(api_script)],
-            stdout=open(log_path, "ab"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        from hermes_memory.graph_api import start_daemon, wait_ready
+        start_daemon()
+        if wait_ready(timeout=8.0):
+            print("    graph API is up and serving.")
+        else:
+            print("    graph API may not be up yet. Log: /tmp/librarian_api.log")
     except Exception as e:
         print(f"    API start failed: {e}")
-    print("    API startup initiated.")
-    time.sleep(3)
-    result = subprocess.run(["curl", "-s",
-                            "http://127.0.0.1:7890/api/librarian/graph/stats?fresh=1"],
-                            capture_output=True, text=True)
-    if result.returncode == 0 and len(result.stdout) > 100:
-        print("    Flask API is up and serving.")
-    else:
-        print(f"    Flask API may not be up yet. Log: {result.stdout[:200]}")
 
     # 7. Run verification — use python -m to be cwd-independent
     print("[7/7] Running hermes-memory-verify...")
