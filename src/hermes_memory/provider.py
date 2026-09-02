@@ -34,6 +34,7 @@ except ImportError:  # running outside the Hermes runtime (tests, CI)
 
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config
 from .embed import Embedder, vec_to_literal
+from .graph_api import classify_session_kind
 from .store import Store
 
 logger = logging.getLogger("hybrid_age")
@@ -397,6 +398,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             conv_id = await store.insert_turn(
                 item["session_id"], self._agent_identity,
                 item["role"], item["content"], vec_literal,
+                metadata={"kind": classify_session_kind(item["session_id"])},
             )
             # Turn->ABOUT->Concept linker (real cosine, SAVEPOINT-guarded, never poison txn)
             if conv_id is not None:
@@ -475,7 +477,11 @@ class HybridAgeMemoryProvider(MemoryProvider):
         if session_id:
             try:
                 sess_vids = await store.merge_vertices_batched(
-                    [("Session", {"name": session_id, "created_at": now_iso})]
+                    [("Session", {
+                        "name": session_id,
+                        "kind": classify_session_kind(session_id),
+                        "created_at": now_iso,
+                    })]
                 )
                 sess_vid = int(sess_vids[0]) if sess_vids and sess_vids[0] else None
                 if sess_vid:

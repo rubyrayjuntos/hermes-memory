@@ -579,6 +579,7 @@ class Store:
                      'conversation'::text AS src
                 FROM conversations
                WHERE embedding IS NOT NULL
+                 AND coalesce(metadata->>'kind', 'interactive') = 'interactive'
                  AND coalesce(session_id, '') NOT LIKE 'verify-c5%'
                  AND coalesce(session_id, '') NOT LIKE 'bench-%'
             ) u

@@ -10,7 +10,7 @@ import os
 import sys
 from typing import Optional
 
-from .graph_api import is_synthetic_session
+from .graph_api import classify_session_kind, is_synthetic_session
 from .store import Store
 
 
@@ -41,6 +41,24 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
          ORDER BY c.id
     """
     async with pool.acquire() as conn:
+        sessions = await conn.fetch("SELECT DISTINCT session_id FROM conversations")
+        for srow in sessions:
+            kind = classify_session_kind(srow["session_id"])
+            await conn.execute(
+                """
+                UPDATE conversations
+                   SET metadata = jsonb_set(
+                         coalesce(metadata, '{}'::jsonb),
+                         '{kind}',
+                         to_jsonb($2::text),
+                         true
+                       )
+                 WHERE session_id = $1
+                   AND coalesce(metadata->>'kind', '') = ''
+                """,
+                srow["session_id"],
+                kind,
+            )
         rows = await conn.fetch(sql)
     linked = 0
     skipped = 0

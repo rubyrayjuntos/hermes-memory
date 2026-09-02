@@ -6,6 +6,7 @@ import json
 import pytest
 
 from hermes_memory.graph_api import (
+    classify_session_kind,
     clamp_limit,
     conversation_first_budget,
     human_turn_title,
@@ -74,6 +75,14 @@ def test_preview_embedding():
     assert preview == [0.1, 0.5]
     assert stats["min"] == -0.2
     assert stats["max"] == 0.5
+
+
+def test_classify_session_kind():
+    assert classify_session_kind("20260902_094854_3c01ca") == "interactive"
+    assert classify_session_kind("bench-throughput-1") == "benchmark"
+    assert classify_session_kind("verify-c5-verify-1") == "system_test"
+    assert classify_session_kind("x", explicit="benchmark") == "benchmark"
+    assert classify_session_kind("x", explicit="nope") == "interactive"
 
 
 def test_human_turn_title():
