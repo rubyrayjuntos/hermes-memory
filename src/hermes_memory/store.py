@@ -603,6 +603,24 @@ class Store:
             )
         return [r["vid"] for r in rows]
 
+    async def bridge_map(self, chunk_ids: Sequence[str]) -> Dict[str, List[str]]:
+        """chunk_id -> vertex id strings (AGE bigint as text)."""
+        if not chunk_ids:
+            return {}
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT chunk_id, vertex_id::text AS vid
+                  FROM memory_chunk_nodes
+                 WHERE chunk_id = ANY($1::text[])
+                """,
+                list(chunk_ids),
+            )
+        out: Dict[str, List[str]] = {}
+        for r in rows:
+            out.setdefault(str(r["chunk_id"]), []).append(str(r["vid"]))
+        return out
+
     # -- Graph expansion (SAVEPOINT-wrapped Cypher) -----------------------------
 
     async def expand_graph(

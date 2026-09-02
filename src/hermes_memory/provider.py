@@ -105,6 +105,18 @@ def is_one_word_concept(name: str, keep: frozenset[str] = ONE_WORD_KEEP) -> bool
     return len(n.split()) == 1
 
 
+C5_CONCEPT_NAMES = frozenset({"project zephyr", "atlas vault engine"})
+
+
+def should_purge_concept(name: str) -> bool:
+    n = (name or "").strip()
+    if not n:
+        return False
+    if n.lower() in C5_CONCEPT_NAMES:
+        return True
+    return is_one_word_concept(n)
+
+
 def _cosine_similarity(a: list[float] | None, b: list[float] | None) -> float | None:
     """Pure-python cosine: dot/(||a||*||b||). None if inputs invalid."""
     if not a or not b or len(a) != len(b):
@@ -613,35 +625,39 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 seeds = await self.store.vector_search(vec_to_literal(emb), self.config.vector_k) \
                     if (emb and self.store) else []
                 t_vec = time.perf_counter()
-                graph_lines = await self._expand_graph(seeds)
+                kept_seeds = []
+                for s in seeds:
+                    if s["similarity"] < self.config.min_similarity:
+                        continue
+                    if SECRET_RE.search(s["content"] or ""):
+                        continue
+                    kept_seeds.append(s)
+                paths = await self._expand_paths(kept_seeds)
                 t_graph = time.perf_counter()
         except TimeoutError:
             logger.warning("prefetch timeout query=%r", query[:80])
             return ""
 
-        items: List[dict] = []
-        kept = 0
-        for s in seeds:
-            if s["similarity"] < self.config.min_similarity:
-                continue
-            if SECRET_RE.search(s["content"] or ""):
-                continue
-            items.append({"text": (s["content"] or "").strip(),
-                          "score": s["similarity"], "kind": "fact"})
-            kept += 1
-        for line in graph_lines:
-            if SECRET_RE.search(line or ""):
-                continue
-            items.append({"text": line, "score": 0.69, "kind": "graph"})
+        from .provider_helpers import format_injection
 
-        items.sort(key=lambda x: x["score"], reverse=True)
-        selected = self._budget(items)
+        seed_payload = []
+        for s in kept_seeds:
+            vids = {str(v) for v in (s.get("vertex_ids") or [])}
+            attached = [p for p in paths if str(p.get("from_vid")) in vids]
+            seed_payload.append({
+                "score": s["similarity"],
+                "content": (s.get("content") or "").strip(),
+                "paths": attached[:3],
+            })
+        seed_payload.sort(key=lambda x: x["score"], reverse=True)
+        selected = self._budget_seeds(seed_payload)
         self._last_recall_count = len(selected)
-        block = self._format(selected)
+        block = format_injection(selected)
+        graph_n = sum(len(s.get("paths") or []) for s in selected)
         logger.info(
             "prefetch seeds=%d graph=%d kept=%d chars=%d "
             "embed_ms=%.0f vector_ms=%.0f graph_ms=%.0f total_ms=%.0f",
-            len(seeds), len(graph_lines), len(selected), len(block),
+            len(seeds), graph_n, len(selected), len(block),
             (t_embed - t0) * 1000, (t_vec - t_embed) * 1000,
             (t_graph - t_vec) * 1000, (time.perf_counter() - t0) * 1000,
         )
@@ -655,8 +671,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             parts.append("Recent: " + self._recent_turns[-1][:150])
         return " | ".join(parts)
 
-    async def _expand_graph(self, seeds: List[dict]) -> List[str]:
-        from .provider_helpers import format_triple  # noqa: F401
+    async def _expand_paths(self, seeds: List[dict]) -> List[dict]:
+        from .provider_helpers import format_triple, parse_agtype_vertex
 
         if not seeds or self.store is None:
             return []
@@ -666,37 +682,63 @@ class HybridAgeMemoryProvider(MemoryProvider):
             chunk_ids.append(i)
             chunk_ids.append(f"conv_{i}")
         chunk_ids = list(dict.fromkeys(chunk_ids))
-        vids_raw = await self.store.bridge_vertex_ids(chunk_ids)
+        bmap = await self.store.bridge_map(chunk_ids)
+        for s in seeds:
+            i = str(s["id"])
+            vids = list(bmap.get(i) or []) + list(bmap.get(f"conv_{i}") or [])
+            s["vertex_ids"] = vids
         seed_ids: List[int] = []
-        for vid in vids_raw:
-            try:
-                seed_ids.append(int(str(vid).strip('"')))
-            except (ValueError, TypeError):
-                continue
+        for vids in (s.get("vertex_ids") or [] for s in seeds):
+            for vid in vids:
+                try:
+                    seed_ids.append(int(str(vid).strip('"')))
+                except (ValueError, TypeError):
+                    continue
+        seed_ids = list(dict.fromkeys(seed_ids))
         if not seed_ids:
             return []
-
         rows = await self.store.expand_graph(
             seed_ids,
-            [],  # dynamic weighted walk — score by weight×cosine×recency, not whitelist
+            [],
             limit=40,
             decay_half_life_days=getattr(self.config, "decay_half_life_days", 30.0),
         )
-
-        lines: List[str] = []
+        paths: List[dict] = []
         seen: set[str] = set()
         for row in rows:
             n, rel, m = row[0], row[1], row[2]
             w = float(row[3]) if len(row) > 3 else 0.5
             c = float(row[4]) if len(row) > 4 else 0.5
-            line = format_triple(n, rel, m)
-            if not line:
+            triple = format_triple(n, rel, m)
+            if not triple or "->" not in triple:
                 continue
-            line = f"{line} w={w:.2f} c={c:.2f}"
-            if line not in seen:
-                seen.add(line)
-                lines.append(line)
-        return lines[:8]
+            triple = f"{triple} w={w:.2f} c={c:.2f}"
+            if triple in seen:
+                continue
+            seen.add(triple)
+            src = parse_agtype_vertex(n) or {}
+            paths.append({
+                "from_vid": str(src.get("id") or ""),
+                "triple": triple,
+                "rel": "" if rel is None else str(rel).strip('"'),
+                "weight": w,
+                "cosine": c,
+            })
+        return paths[:16]
+
+    def _budget_seeds(self, seeds: List[dict]) -> List[dict]:
+        out: List[dict] = []
+        used = 40
+        cap = min(self.config.max_tokens, 1200)
+        for s in seeds:
+            excerpt = (s.get("content") or "")[:220]
+            paths = s.get("paths") or []
+            est = (len(excerpt) + sum(len(p.get("triple") or "") for p in paths)) // 4 + 8
+            if used + est > cap:
+                continue
+            out.append(s)
+            used += est
+        return out
 
     def _budget(self, items: List[dict]) -> List[dict]:
         out: List[dict] = []
