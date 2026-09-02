@@ -702,7 +702,7 @@ class Store:
                 scored.sort(key=lambda x: x[0], reverse=True)
                 # Trim to requested limit
                 trimmed = scored[: int(limit)] if int(limit) > 0 else scored
-                out: List[Tuple[Any, Optional[str], Any, float, float]] = []
+                out: List[Tuple[Any, Optional[str], Any, float, float, float, float]] = []
                 for _score, row in trimmed:
                     try:
                         raw_w = row["w"]
@@ -714,8 +714,13 @@ class Store:
                         c = float(str(raw_c).strip('"')) if raw_c is not None and str(raw_c).strip('"') != "null" else 0.5
                     except Exception:
                         c = 0.5
-                    out.append((row["n"], row["rel"], row["m"], w, c))
-                return out
+                    # decay/score already computed in scored; recompute for return
+                    edge_ca = _parse_created_at(row["r_created"]) if "r_created" in row else None
+                    vert_ca = _parse_created_at(row["m_created"]) if "m_created" in row else None
+                    decay = recency_decay_for_edge(edge_ca, vert_ca, decay_half_life_days)
+                    score = 0.5 * c + 0.3 * w + 0.2 * decay
+                    out.append((row["n"], row["rel"], row["m"], w, c, decay, score))
+                return out  # type: ignore[return-value]  # 7-tuple superset of legacy 5-tuple
             except Exception:
                 logger.debug("expand_graph transaction error", exc_info=True)
                 return []

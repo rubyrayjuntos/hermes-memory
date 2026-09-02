@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -373,6 +374,8 @@ def match_route(method: str, path: str) -> Tuple[str, Dict[str, str]]:
         return "stats", {}
     if method == "GET" and path in ("/api/librarian/graph/3d", "/api/librarian/graph"):
         return "graph_3d", {}
+    if method == "GET" and path in ("/api/librarian/graph/ghost",):
+        return "ghost", {}
     if method == "GET" and path in ("/api/librarian/chunks",):
         return "chunks", {}
     if method == "GET" and path in ("/api/librarian/search",):
@@ -694,6 +697,237 @@ class Runtime:
                 rows = list(convo) + list(other)
         return self._assemble_3d(rows, limit, label)
 
+    def ghost(self, k: int = 5, threshold: float = 0.70, limit: int = 200) -> Dict[str, Any]:
+        assert self.store is not None
+        return self.loop.call(self._aghost(k, threshold, limit))
+
+    async def _aghost(self, k: int, threshold: float, limit: int) -> Dict[str, Any]:
+        """Ghost kNN: render-time vector proximity, never persisted.
+        For the visible Turn catalog (limit), fetch conversation embeddings and
+        return up to k ghost edges per Turn above threshold. No AGE writes.
+        """
+        assert self.store is not None and self.pool is not None
+        k = max(1, min(int(k), 8))
+        threshold = max(0.0, min(float(threshold), 0.99))
+        limit = max(10, min(int(limit), 400))
+        graph = self.store.graph_name
+        async with self.pool.acquire() as conn:
+            await self.store.load_age(conn)
+            rows = await self._fetch_3d_rows(conn, graph, "Turn", limit)
+        # Parse visible Turns -> turn_id + vid
+        vids: List[str] = []
+        turn_ids: List[int] = []
+        vid_by_tid: Dict[int, str] = {}
+        tid_by_vid: Dict[str, int] = {}
+        for r in rows:
+            parsed = parse_vertex(r["n"])
+            if not parsed or parsed.get("label") != "Turn":
+                continue
+            props = parsed.get("props") or {}
+            tid = props.get("turn_id")
+            if tid is None:
+                name = str(props.get("name") or parsed.get("name") or "")
+                if name.startswith("turn_"):
+                    try:
+                        tid = int(name.split("_", 1)[1])
+                    except Exception:
+                        tid = None
+            if tid is None:
+                continue
+            try:
+                tid = int(tid)
+            except Exception:
+                continue
+            vid = str(parsed["id"])
+            vids.append(vid)
+            turn_ids.append(tid)
+            vid_by_tid[tid] = vid
+            tid_by_vid[vid] = tid
+        if not turn_ids:
+            return {"nodes": [], "ghost_edges": [], "ghost_links": [], "meta": {"k": k, "threshold": threshold, "visible": 0, "edges": 0}}
+        # Fetch embeddings for those turn_ids
+        async with self.pool.acquire() as conn:
+            crows = await conn.fetch(
+                "SELECT id, embedding::text AS emb FROM conversations WHERE id = ANY($1::int[]) AND embedding IS NOT NULL",
+                turn_ids,
+            )
+        emb_by_tid: Dict[int, List[float]] = {}
+        for cr in crows:
+            tid = int(cr["id"])
+            txt = cr["emb"]
+            if not txt:
+                continue
+            s = str(txt).strip()
+            if s.startswith("[") and s.endswith("]"):
+                s = s[1:-1]
+            try:
+                vec = [float(x) for x in s.split(",") if x.strip()]
+            except Exception:
+                continue
+            if vec:
+                emb_by_tid[tid] = vec
+        # Cosine helper
+        def _cos(a: List[float], b: List[float]) -> float:
+            if not a or not b or len(a) != len(b):
+                return -1.0
+            dot = 0.0
+            na = 0.0
+            nb = 0.0
+            for x, y in zip(a, b):
+                dot += x * y
+                na += x * x
+                nb += y * y
+            if na == 0 or nb == 0:
+                return -1.0
+            return dot / (math.sqrt(na) * math.sqrt(nb))
+        # Build pairwise Turn↔Turn
+        tids_with_emb = [tid for tid in turn_ids if tid in emb_by_tid]
+        ghost_edges: List[Dict[str, Any]] = []
+        for tid in tids_with_emb:
+            src_vid = vid_by_tid.get(tid)
+            src_vec = emb_by_tid.get(tid)
+            if not src_vid or not src_vec:
+                continue
+            scored: List[Tuple[float, int]] = []
+            for otid in tids_with_emb:
+                if otid == tid:
+                    continue
+                c = _cos(src_vec, emb_by_tid[otid])
+                if c >= threshold:
+                    scored.append((c, otid))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            for c, otid in scored[:k]:
+                dst_vid = vid_by_tid.get(otid)
+                if not dst_vid:
+                    continue
+                # dedupe undirected: only emit src < dst once
+                if src_vid >= dst_vid:
+                    continue
+                ghost_edges.append({
+                    "source": src_vid,
+                    "target": dst_vid,
+                    "from": src_vid,
+                    "to": dst_vid,
+                    "label": "GHOST_KNN",
+                    "weight": 0.35,
+                    "cosine": round(float(c), 4),
+                })
+        # --- Turn→Concept ghost bridging (runtime, never persisted) ---
+        # Fetch Concept vertices (id + name) and embed names via embedder
+        concept_vids: Dict[str, str] = {}  # name -> vid
+        concept_rows: List[Any] = []
+        try:
+            async with self.pool.acquire() as conn:
+                await self.store.load_age(conn)
+                # Reuse SAVEPOINT pattern
+                sp = "ghost_conc"
+                async with conn.transaction():
+                    await conn.execute(f"SAVEPOINT {sp}")
+                    try:
+                        crows2 = await conn.fetch(
+                            f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) RETURN id(c), c.name $$) AS (cid agtype, cname agtype)"
+                        )
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        concept_rows = list(crows2)
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        concept_rows = []
+        except Exception:
+            concept_rows = []
+        for cr in concept_rows:
+            try:
+                cid_raw = cr["cid"]
+                cname_raw = cr["cname"]
+                cid = str(cid_raw).strip().strip('"')
+                # cid may be \"123\" string; normalize to int string
+                try:
+                    cid = str(int(float(cid.strip('"')))) if cid else ""
+                except Exception:
+                    cid = str(cid_raw).strip().strip('"')
+                # Use same stringify helper
+                try:
+                    cid = stringify_id(cid_raw)
+                except Exception:
+                    pass
+                cname = str(cname_raw).strip().strip('"') if cname_raw is not None else ""
+                if not cname or cname in ("null", "None", ""):
+                    continue
+                # AGE returns json-encoded string "\"Hermes Agent\""
+                try:
+                    cname = json.loads(cname) if cname.startswith('"') else cname
+                except Exception:
+                    pass
+                cname = str(cname).strip().strip('"')
+                if cname:
+                    concept_vids[cname] = cid
+            except Exception:
+                continue
+        # Embed concept names (cache on Runtime)
+        if concept_vids and self.embedder is not None:
+            if not hasattr(self, "_ghost_concept_emb"):
+                self._ghost_concept_emb: Dict[str, List[float]] = {}
+            concept_emb: Dict[str, List[float]] = {}
+            for cname, cid in concept_vids.items():
+                if not cname or not cid:
+                    continue
+                vec = self._ghost_concept_emb.get(cname)
+                if vec is None:
+                    try:
+                        vec = await self.embedder.embed_text(cname)
+                    except Exception:
+                        vec = None
+                    if vec:
+                        self._ghost_concept_emb[cname] = list(vec)
+                        concept_emb[cname] = list(vec)
+                    else:
+                        continue
+                else:
+                    concept_emb[cname] = vec
+            # For each Turn, score vs concepts, keep top 2 above lower threshold
+            # Concept names are short — cosine sits 0.45-0.65 vs 0.70 for Turn↔Turn, so gate lower
+            concept_thr = max(0.42, float(threshold) - 0.20)
+            for tid in tids_with_emb:
+                src_vid = vid_by_tid.get(tid)
+                src_vec = emb_by_tid.get(tid)
+                if not src_vid or not src_vec:
+                    continue
+                scored_c: List[Tuple[float, str]] = []
+                for cname, cvec in concept_emb.items():
+                    c = _cos(src_vec, cvec)
+                    if c >= concept_thr:
+                        scored_c.append((c, cname))
+                scored_c.sort(key=lambda x: x[0], reverse=True)
+                for c, cname in scored_c[:2]:
+                    cid = concept_vids.get(cname)
+                    if not cid:
+                        continue
+                    ghost_edges.append({
+                        "source": src_vid,
+                        "target": cid,
+                        "from": src_vid,
+                        "to": cid,
+                        "label": "GHOST_KNN",
+                        "weight": 0.55,
+                        "cosine": round(float(c), 4),
+                    })
+        # Also dedupe exact duplicates (if both sides emitted)
+        seen = set()
+        uniq: List[Dict[str, Any]] = []
+        for e in ghost_edges:
+            key = (e["source"], e["target"])
+            if key not in seen:
+                seen.add(key)
+                uniq.append(e)
+        # split meta for UI
+        turn_turn = sum(1 for e in uniq if e["target"] in tid_by_vid)
+        turn_concept = len(uniq) - turn_turn
+        return {
+            "ghost_edges": uniq,
+            "ghost_links": uniq,
+            "edges": uniq,
+            "meta": {"k": k, "threshold": threshold, "visible": len(tids_with_emb), "edges": len(uniq), "turn_turn": turn_turn, "turn_concept": turn_concept, "concepts": len(concept_vids), "limit": limit},
+        }
+
     def chunks(self, file_path: str, limit: int) -> Dict[str, Any]:
         assert self.store is not None
         return self.loop.call(self._achunks(file_path, limit))
@@ -989,6 +1223,16 @@ class Handler(BaseHTTPRequestHandler):
                 label = safe_label((qs.get("label") or [""])[0])
                 limit = clamp_limit((qs.get("limit") or [DEFAULT_LIMIT])[0])
                 self._json(200, rt.graph_3d(label, limit))
+                return
+            if route == "ghost":
+                k = clamp_limit((qs.get("k") or [5])[0], default=5)
+                # threshold is 0..0.99 float, not a limit clamp
+                try:
+                    thr = float((qs.get("threshold") or ["0.70"])[0])
+                except Exception:
+                    thr = 0.70
+                lim = clamp_limit((qs.get("limit") or [200])[0], default=200)
+                self._json(200, rt.ghost(k, thr, lim))
                 return
             if route == "chunks":
                 fp = (qs.get("file_path") or [""])[0]

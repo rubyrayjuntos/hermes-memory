@@ -25,6 +25,7 @@
       --ink: #1E2D45;
       --seed: #d946a6;
       --about: #7c3aed;
+      --ghost: #94A3B8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; background: var(--parchment); color: var(--ink);
@@ -71,6 +72,9 @@
     }
     button.ghost { background: #DCE8FA; color: #1E3A5F; }
     button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: .45; cursor: default; filter: none; }
+    input[type=range] { accent-color: #1E3A5F; vertical-align: middle; }
+    input[type=checkbox] { accent-color: #1E3A5F; vertical-align: middle; margin-right: 4px; }
     .banner { font-family: "JetBrains Mono", monospace; font-size: 10px; padding: 8px 10px; border-radius: 10px; }
     .banner.good { background: #0F2340; color: #86efac; }
     .banner.weak { background: #0F2340; color: #fde047; }
@@ -97,6 +101,7 @@
       <span><i class="gem" style="background:#C9943F"></i> SESSION</span>
       <span><i class="gem" style="background:#EAE3D6;border:1px solid #fff"></i> TURN</span>
       <span><i class="gem" style="background:#2F8F8A"></i> NEXT</span>
+      <span><i class="gem" style="background:#94A3B8;opacity:0.55"></i> GHOST</span>
     </div>
     <div class="status"><span class="dot" id="dot"></span><span id="api-status">connecting</span></div>
   </header>
@@ -105,6 +110,10 @@
       <div class="row"><h2>MANIFOLD METRICS</h2><span class="mono" id="mode-tag">CATALOG</span></div>
       <div class="metrics" id="metrics"></div>
       <div class="banner weak" id="contrib" style="margin-top:8px">awaiting hybrid retrieval</div>
+      <div class="row" style="margin-top:8px"><span class="mono" id="ghost-meta" style="color:#7A92B1">ghost off — vector kNN hidden</span><button class="ghost" id="btn-ghost" type="button">GHOST OFF</button></div>
+      <div class="row" style="margin-top:6px;gap:6px;flex-wrap:wrap"><label class="mono" style="color:#7A92B1">k <input id="ghost-k" type="range" min="1" max="8" value="5" style="width:64px"></label><span class="mono" id="ghost-k-val">5</span><label class="mono" style="color:#7A92B1">thr <input id="ghost-thr" type="range" min="0.40" max="0.85" step="0.05" value="0.70" style="width:72px"></label><span class="mono" id="ghost-thr-val">0.70</span></div>
+      <div class="row" style="margin-top:4px"><label class="mono" style="color:#7A92B1"><input type="checkbox" id="hide-bench" checked> hide bench/verify</label><span class="mono" id="live-persisted" style="color:#1E3A5F">persisted —</span></div>
+      <div class="mono" id="edge-tip" style="display:none;position:fixed;z-index:40;background:#0F2340;color:#8ED8E8;padding:8px 10px;border-radius:10px;max-width:380px;pointer-events:none;font-size:11px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,.28)"></div>
     </div>
     <div class="panel">
       <h2>ACTIVE PROMPT INJECTION</h2>
@@ -128,7 +137,7 @@
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint">Drag to orbit · tubes = weight×cosine · DISSOLVE lists seed → rel → dest paths</div>
+  <div class="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths</div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -147,7 +156,7 @@ const LABEL_GEM = {
   Project: 'amber', Technology: 'amber', Tool: 'amber', Skill: 'amber',
   Organization: 'amber', Domain: 'amber', Repo: 'amber'
 };
-const EDGE_COLOR = { IMPORTS: 0x2A5DB0, ABOUT: 0x7c3aed, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F };
+const EDGE_COLOR = { IMPORTS: 0x2A5DB0, ABOUT: 0x7c3aed, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F, GHOST_KNN: 0x94A3B8 };
 
 let raw = { nodes: [], links: [] };
 let hops = new Map();
@@ -156,7 +165,27 @@ let highlighted = new Set();
 let selected = null;
 let lastStats = null;
 let scene, camera, renderer, controls, graphGroup, clock;
+let ghostEnabled = false;
+let ghostEdges = [];
+let ghostMeta = null;
+let ghostK = 5;
+let ghostThr = 0.70;
+let hideBench = true;
 
+function isBenchNode(n) {
+  const sid_ = (n.props || n.properties || {}).session_id || n.session_id || '';
+  return sid_.startsWith('bench-') || sid_.startsWith('verify-c5');
+}
+function filteredCatalog(payload) {
+  if (!hideBench) return payload;
+  const keep = new Set(payload.nodes.filter(n => !isBenchNode(n)).map(n => sid(n.id)));
+  // keep Session/Concept even if no Turns filtered
+  payload.nodes.forEach(n => { if (n.label === 'Session' || n.label === 'Concept') keep.add(sid(n.id)); });
+  return {
+    nodes: payload.nodes.filter(n => keep.has(sid(n.id))),
+    links: (payload.links || payload.edges || []).filter(l => keep.has(sid(l.source||l.from)) && keep.has(sid(l.target||l.to)))
+  };
+}
 function sid(x) { return String(x); }
 function escapeHTML(s) {
   return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -212,10 +241,10 @@ function hash01(s) {
 }
 
 function massOf(n) {
-  if (n.label === 'Session') return 12;
-  if (n.label === 'Concept') return 6 + Math.min(10, Number(n.val || 1) * 0.45);
-  if (n._searchSeed) return 4;
-  return 1.15;
+  if (n.label === 'Session') return 14;
+  if (n.label === 'Concept') return 8 + Math.min(10, Number(n.val || 1) * 0.45);
+  if (n._searchSeed) return 5;
+  return 3.2;
 }
 
 function forceLayout(nodes, links, steps) {
@@ -224,9 +253,10 @@ function forceLayout(nodes, links, steps) {
   nodes.forEach((node, i) => {
     const t = (i / n) * Math.PI * 2 + hash01(node.id);
     const base = node.label === 'Concept' ? 5 : node.label === 'Session' ? 11 : 15;
+    const yStrata = node.label === 'Session' ? 6.0 : node.label === 'Concept' ? 1.6 : (hash01(node.id + 'y') - 0.52) * 6;
     node.pos = [
       Math.cos(t) * base,
-      (hash01(node.id + 'y') - 0.5) * 10,
+      yStrata + (hash01(node.id + 'yy') - 0.5) * 1.2,
       Math.sin(t) * base
     ];
     node.vel = [0, 0, 0];
@@ -240,7 +270,7 @@ function forceLayout(nodes, links, steps) {
         const a = nodes[i], b = nodes[j];
         let dx = a.pos[0] - b.pos[0], dy = a.pos[1] - b.pos[1], dz = a.pos[2] - b.pos[2];
         const d2 = dx * dx + dy * dy + dz * dz + 0.2;
-        const f = 16 / d2;
+        const f = 28 / d2;
         const s = f / Math.sqrt(d2);
         const ma = massOf(a), mb = massOf(b);
         a.vel[0] += dx * s / ma; a.vel[1] += dy * s / ma; a.vel[2] += dz * s / ma;
@@ -254,10 +284,16 @@ function forceLayout(nodes, links, steps) {
       const c = Number(l.cosine != null ? l.cosine : 0.5);
       const force = Math.max(0.08, Math.min(1, 0.6 * w + 0.4 * c));
       let rest = 7;
-      if (l.label === 'NEXT') rest = 2.3;
+      let k = 0.07 + force * 0.32;
+      if (l.label === 'GHOST_KNN') {
+        // ghost: elevated thematic spring — now strong enough to distort session rings
+        // Turn→Concept (weight 0.55) pulls harder than Turn↔Turn (0.35)
+        const isConcept = (raw.nodes.find(n => n.id === sid(l.target))?.label === 'Concept') || (raw.nodes.find(n => n.id === sid(l.source))?.label === 'Concept');
+        rest = isConcept ? (3.0 + (1 - c) * 4.0) : (3.8 + (1 - c) * 4.5);
+        k = isConcept ? (0.075 + c * 0.055) : (0.065 + c * 0.040);
+      } else if (l.label === 'NEXT') rest = 2.3;
       else if (l.label === 'IN_SESSION') rest = 4.0;
       else if (l.label === 'ABOUT') rest = 3.0 + (1 - force) * 5.5;
-      const k = 0.07 + force * 0.32;
       const dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
       const dist = Math.hypot(dx, dy, dz) || 0.01;
       const s = ((dist - rest) * k) / dist;
@@ -317,21 +353,25 @@ function rebuildScene() {
     const c = Number(l.cosine != null ? l.cosine : 0.5);
     const force = Math.max(0.05, Math.min(1, 0.6 * w + 0.4 * c));
     const kind = l.label;
-    let radius = 0.016 + force * 0.02;
+    let radius = 0.010 + force * 0.012;
     let sag = 0.6;
     let segs = 8;
     if (kind === 'ABOUT') {
-      radius = 0.030 + force * 0.08;
+      radius = 0.012 + force * 0.028;
       sag = 1.8 + (1 - force) * 3.2;
       segs = 18;
     } else if (kind === 'IN_SESSION') {
-      radius = 0.024 + w * 0.03;
+      radius = 0.009 + w * 0.012;
       sag = 0.45;
       segs = 10;
     } else if (kind === 'NEXT') {
-      radius = 0.018 + w * 0.025;
+      radius = 0.007 + w * 0.010;
       sag = 0.12;
       segs = 8;
+    } else if (kind === 'GHOST_KNN') {
+      radius = 0.006 + c * 0.010;
+      sag = 0.35 + (1 - c) * 0.9;
+      segs = 6;
     }
     const lit = highlighted.has(sid(l.source) + '|' + (l.label || '') + '|' + sid(l.target));
     if (lit) {
@@ -348,10 +388,10 @@ function rebuildScene() {
     const geo = new THREE.TubeGeometry(curve, segs, radius, 6, false);
     const mat = new THREE.MeshPhysicalMaterial({
       color: EDGE_COLOR[kind] || 0x2A5DB0,
-      roughness: 0.32,
-      metalness: kind === 'ABOUT' ? 0.35 : 0.12,
+      roughness: kind === 'GHOST_KNN' ? 0.52 : 0.32,
+      metalness: kind === 'ABOUT' ? 0.35 : kind === 'GHOST_KNN' ? 0.02 : 0.12,
       transparent: true,
-      opacity: 0.38 + force * 0.55,
+      opacity: kind === 'GHOST_KNN' ? (0.10 + c * 0.06) : (0.38 + force * 0.55),
       transmission: kind === 'ABOUT' ? 0.12 : 0,
       thickness: 0.2,
       emissive: lit ? 0xffffff : 0x000000,
@@ -360,6 +400,7 @@ function rebuildScene() {
     const tube = new THREE.Mesh(geo, mat);
     tube.userData.edge = l;
     graphGroup.add(tube);
+    if (kind === 'GHOST_KNN') return;
     const tangent = curve.getTangent(0.84).normalize();
     const cone = new THREE.Mesh(
       new THREE.ConeGeometry(radius * 2.4, radius * 7.5, 8),
@@ -374,20 +415,22 @@ function rebuildScene() {
     if (!n.pos) return;
     const kind = gemKind(n);
     const deg = Number(n.val || 1);
-    const radius = n.label === 'Session' ? 0.55
-      : n.label === 'Concept' ? 0.28 + Math.min(0.40, deg * 0.04)
-      : n._searchSeed ? 0.32
-      : 0.14 + Math.min(0.10, deg * 0.01);
-    const geo = new THREE.IcosahedronGeometry(radius, 0);
+    const isSeed = !!n._searchSeed;
+    const radius = n.label === 'Session' ? 1.15
+      : n.label === 'Concept' ? 0.78 + Math.min(0.30, deg * 0.06)
+      : isSeed ? 0.72
+      : 0.52 + Math.min(0.10, deg * 0.012);
+    const detail = (n.label === 'Session' || n.label === 'Concept') ? 1 : 0;
+    const geo = new THREE.IcosahedronGeometry(radius, detail);
     const mesh = new THREE.Mesh(geo, materialFor(kind, n._searchSeed));
     mesh.position.set(...n.pos);
     mesh.userData.node = n;
     mesh.castShadow = true;
     const glow = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(radius, 1),
-      new THREE.MeshBasicMaterial({ color: MAT[kind].color, transparent: true, opacity: n._searchSeed ? 0.22 : 0.06, depthWrite: false })
+      new THREE.IcosahedronGeometry(radius, detail),
+      new THREE.MeshBasicMaterial({ color: MAT[kind].color, transparent: true, opacity: isSeed ? 0.26 : (n.label === 'Session' ? 0.13 : n.label === 'Concept' ? 0.11 : 0.09), depthWrite: false })
     );
-    glow.scale.setScalar(1.4);
+    glow.scale.setScalar(isSeed ? 1.68 : n.label === 'Session' ? 1.62 : n.label === 'Concept' ? 1.58 : 1.50);
     mesh.add(glow);
     graphGroup.add(mesh);
   });
@@ -399,7 +442,7 @@ function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xE9E3D4);
   camera = new THREE.PerspectiveCamera(42, el.clientWidth / el.clientHeight, 0.1, 200);
-  camera.position.set(22, 42, 48);
+  camera.position.set(24, 36, 42);
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(el.clientWidth, el.clientHeight);
@@ -438,6 +481,31 @@ function initThree() {
 
   const ray = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
+  let hoverEdge = null;
+  const tip = document.getElementById('edge-tip');
+  function showEdgeTip(l, ev) {
+    const w = Number(l.weight ?? 0.5), c = Number(l.cosine ?? 0.5);
+    const dec = l.decay != null ? Number(l.decay) : 0.5;
+    const sc = 0.5*c + 0.3*w + 0.2*dec;
+    const a = raw.nodes.find(n=>sid(n.id)===sid(l.source));
+    const b = raw.nodes.find(n=>sid(n.id)===sid(l.target));
+    tip.innerHTML = `<b>${escapeHTML(l.label||'REL')}</b> ${escapeHTML(a?nodeName(a):String(l.source))} → ${escapeHTML(b?nodeName(b):String(l.target))}<br>w=${w.toFixed(2)} c=${c.toFixed(2)} decay=${dec.toFixed(2)} → <b>score ${sc.toFixed(2)}</b> = 0.5*${c.toFixed(2)}+0.3*${w.toFixed(2)}+0.2*${dec.toFixed(2)}<br><span style="opacity:.8">force ${(0.6*w+0.4*c).toFixed(2)} · sag ${l.label==='ABOUT' ? (1.8+(1-Math.max(0.08,Math.min(1,0.6*w+0.4*c)))*3.2).toFixed(1) : '—'}</span>`;
+    tip.style.left = (ev.clientX + 14) + 'px';
+    tip.style.top = (ev.clientY + 10) + 'px';
+    tip.style.display = 'block';
+  }
+  function hideEdgeTip(){ hoverEdge=null; if(tip) tip.style.display='none'; }
+  renderer.domElement.addEventListener('pointermove', ev => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    ray.setFromCamera(mouse, camera);
+    const hits = ray.intersectObjects(graphGroup ? graphGroup.children : [], false);
+    const hit = hits.find(h => h.object.userData.edge);
+    if (hit) { hoverEdge = hit.object.userData.edge; showEdgeTip(hoverEdge, ev); }
+    else hideEdgeTip();
+  });
+  renderer.domElement.addEventListener('pointerleave', hideEdgeTip);
   renderer.domElement.addEventListener('pointerdown', ev => {
     const rect = renderer.domElement.getBoundingClientRect();
     mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
@@ -458,6 +526,12 @@ function initThree() {
         if (!n || !n.pos) return;
         obj.position.y = n.pos[1] + Math.sin(t * 0.32 + n.offset) * 0.08;
         obj.rotation.y += 0.002;
+        // seed pulse — pink halo breathes
+        if (n._searchSeed && obj.children[0]) {
+          const s = 1.68 + Math.sin(t * 1.8) * 0.07;
+          obj.children[0].scale.setScalar(s);
+          obj.children[0].material.opacity = 0.26 + Math.sin(t * 1.8) * 0.05;
+        }
       });
     }
     controls.update();
@@ -520,15 +594,22 @@ function setMetrics(stats, extra) {
   const elabs = {};
   raw.nodes.forEach(n => { const k = n.label || ''; labels[k] = (labels[k] || 0) + 1; });
   raw.links.forEach(l => { const k = l.label || ''; elabs[k] = (elabs[k] || 0) + 1; });
+  const benchFiltered = hideBench ? ' · bench hidden' : '';
   const cells = [
-    ['VERTICES', extra?.verts ?? raw.nodes.length, `${labels.Turn||0} Turn · ${labels.Session||0} Session · ${labels.Concept||0} Concept`],
-    ['EDGES', extra?.edges ?? raw.links.length, `${elabs.NEXT||0} NEXT · ${elabs.IN_SESSION||0} IN_SESSION · ${elabs.ABOUT||0} ABOUT`],
+    ['VERTICES', extra?.verts ?? raw.nodes.length, `${labels.Turn||0} Turn · ${labels.Session||0} Session · ${labels.Concept||0} Concept${benchFiltered}`],
+    ['EDGES', extra?.edges ?? raw.links.length, `${elabs.NEXT||0} NEXT · ${elabs.IN_SESSION||0} IN_SESSION · ${elabs.ABOUT||0} ABOUT${ghostEnabled && ghostMeta ? ` · ${ghostMeta.edges} ghost` : ''}`],
     ['BRIDGE', b.rows ?? '—', `${b.vertices_bridged||0} verts bridged · graph ${v.total??'—'}v`],
-    ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'}`],
+    ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'} · score 0.5c+0.3w+0.2decay`],
   ];
   document.getElementById('metrics').innerHTML = cells.map(([k,val,sub]) =>
     `<div class="metric"><span class="k">${k}</span><span class="v">${val}</span><span class="s">${sub}</span></div>`).join('');
   if (i.healthy === false) setStatus('warn', `live · drifted ${i.drifted} · isolated ${i.isolated_files}`);
+  const live = document.getElementById('live-persisted');
+  if (live) {
+    const pv = v.total ?? '—';
+    const pe = stats?.edges?.total ?? extra?.persistedEdges ?? '—';
+    live.textContent = `persisted ${pv}v ${pe}e · live`;
+  }
 }
 
 function reconstructInjection(res) {
@@ -536,10 +617,20 @@ function reconstructInjection(res) {
   const paths = res.paths || [];
   const ret = res.retrieval || {};
   let out = '';
-  seeds.forEach((s, i) => { out += `[SEED V${i+1} ${((s.score||0)*100|0)}%] ${(s.excerpt||s.file_path||'').slice(0,160)}\n\n`; });
+  seeds.forEach((s, i) => {
+    const sc = s.score != null ? (s.score*100|0)+'%' : '—';
+    const w = s.best_weight ?? paths.find(p=>p.from && (s.vertex_ids||[]).includes(String(p.from)))?.weight;
+    const c = s.best_cosine ?? paths.find(p=>p.from && (s.vertex_ids||[]).includes(String(p.from)))?.cosine;
+    const dec = s.best_decay ?? paths.find(p=>p.from && (s.vertex_ids||[]).includes(String(p.from)))?.decay;
+    let decomp = '';
+    if (w!=null && c!=null) decomp = ` w=${Number(w).toFixed(2)} c=${Number(c).toFixed(2)}` + (dec!=null ? ` decay=${Number(dec).toFixed(2)}` : '');
+    out += `[SEED V${i+1} ${sc}${decomp}] ${(s.excerpt||s.file_path||'').slice(0,160)}\n\n`;
+  });
   paths.slice(0, 8).forEach((p, i) => {
     const tag = p.seed ? 'SEED' : ('H' + (p.hop || 1));
-    out += `[PATH ${tag}] ${p.from_name} -[:${p.rel} w=${Number(p.weight||0).toFixed(2)} c=${Number(p.cosine||0).toFixed(2)}]-> ${p.to_name}\n`;
+    const dec = p.decay!=null ? ` decay=${Number(p.decay).toFixed(2)}` : '';
+    const sc = p.score!=null ? ` score=${Number(p.score).toFixed(2)}` : '';
+    out += `[PATH ${tag}] ${p.from_name} -[:${p.rel} w=${Number(p.weight||0).toFixed(2)} c=${Number(p.cosine||0).toFixed(2)}${dec}${sc}]-> ${p.to_name}\n`;
   });
   document.getElementById('injection').textContent = out || '(empty retrieval — graph ADDED LITTLE)';
   const seedC = ret.seeds ?? seeds.length;
@@ -591,22 +682,25 @@ function focusPath(p) {
 
 function applyCatalog(payload) {
   seedIds = new Set();
-  raw.nodes = (payload.nodes || []).map(n => ({
+  const filt = filteredCatalog(payload);
+  raw.nodes = (filt.nodes || []).map(n => ({
     ...n, id: sid(n.id),
     name: n.name || n.title || n.label,
     label: n.label || n.group,
     _searchSeed: false, _searchExpanded: false
   }));
-  raw.links = (payload.links || payload.edges || []).map(l => ({
+  const baseLinks = (filt.links || filt.edges || []).map(l => ({
     ...l, source: sid(l.source || l.from), target: sid(l.target || l.to), label: l.label
   }));
+  const allLinks = ghostEnabled && ghostEdges.length ? [...baseLinks, ...ghostEdges] : baseLinks;
+  raw.links = allLinks;
   layout(raw.nodes, raw.links, seedIds, 'catalog');
-  document.getElementById('mode-tag').textContent = 'CATALOG';
+  document.getElementById('mode-tag').textContent = ghostEnabled ? 'CATALOG+GHOST' : 'CATALOG';
   highlighted = new Set();
   rebuildScene();
   renderList();
   document.getElementById('contrib').className = 'banner weak';
-  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · ${raw.links.length} threads · force = weight×cosine`;
+  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · ${raw.links.length} threads · force = 0.6w+0.4c${hideBench ? ' · bench hidden' : ''}`;
   const topo = document.getElementById('topo-list');
   if (topo) {
     document.getElementById('topo-meta').textContent = 'catalog';
@@ -655,8 +749,71 @@ async function loadCatalog() {
   applyCatalog(g3d);
   if (stats) {
     lastStats = stats;
-    setMetrics(stats, { verts: g3d.nodes.length, edges: (g3d.links||[]).length });
+    setMetrics(stats, { verts: g3d.nodes.length, edges: (g3d.links||[]).length, persistedEdges: stats.edges?.total });
     setStatus(true, `catalog ${g3d.nodes.length}v / graph ${stats.vertices?.total||'?'}v`);
+  }
+  if (ghostEnabled) await refreshGhost();
+  else updateGhostMeta();
+}
+
+function updateGhostMeta() {
+  const el = document.getElementById('ghost-meta');
+  const btn = document.getElementById('btn-ghost');
+  if (!el || !btn) return;
+  document.getElementById('ghost-k-val').textContent = String(ghostK);
+  document.getElementById('ghost-thr-val').textContent = ghostThr.toFixed(2);
+  if (!ghostEnabled) {
+    el.textContent = `ghost off — vector kNN hidden · k=${ghostK} thr=${ghostThr.toFixed(2)}`;
+    btn.textContent = 'GHOST OFF';
+    btn.classList.add('ghost');
+    btn.style.background = '#DCE8FA';
+    btn.style.color = '#1E3A5F';
+  } else if (!ghostMeta) {
+    el.textContent = `ghost on — fetching k=${ghostK} thr=${ghostThr.toFixed(2)}…`;
+    btn.textContent = 'GHOST ON';
+  } else {
+    const tc = ghostMeta.turn_concept ?? 0;
+    const tt = ghostMeta.turn_turn ?? ghostMeta.edges;
+    el.textContent = `ghost on — ${ghostMeta.edges} threads (${tt} Turn↔Turn + ${tc} Turn→Concept) · k=${ghostK} thr=${ghostThr.toFixed(2)} · ${ghostMeta.visible} Turns, ${ghostMeta.concepts ?? '?'} Concepts`;
+    btn.textContent = `GHOST ON · ${ghostMeta.edges}`;
+    btn.classList.remove('ghost');
+    btn.style.background = '#1E3A5F';
+    btn.style.color = '#fff';
+  }
+}
+
+async function refreshGhost() {
+  const res = await safeFetch(`${API}/api/librarian/graph/ghost?k=${ghostK}&threshold=${ghostThr.toFixed(2)}&limit=250&fresh=1`);
+  if (!res) { ghostEdges = []; ghostMeta = null; updateGhostMeta(); return; }
+  ghostEdges = (res.ghost_edges || res.edges || []).map(l => ({ ...l, source: sid(l.source), target: sid(l.target), label: 'GHOST_KNN' }));
+  ghostMeta = res.meta || { edges: ghostEdges.length };
+  // re-apply to current raw with layout
+  if (raw.nodes.length) {
+    // re-run catalog layout with ghost springs included (no refetch)
+    const base = raw.links.filter(l => l.label !== 'GHOST_KNN');
+    const all = [...base, ...ghostEdges];
+    raw.links = all;
+    layout(raw.nodes, raw.links, seedIds, 'catalog');
+    document.getElementById('mode-tag').textContent = 'CATALOG+GHOST';
+    rebuildScene();
+  }
+  updateGhostMeta();
+  if (lastStats) setMetrics(lastStats, { verts: raw.nodes.length, edges: raw.links.length, persistedEdges: lastStats.edges?.total });
+}
+
+async function toggleGhost() {
+  ghostEnabled = !ghostEnabled;
+  if (ghostEnabled) {
+    await refreshGhost();
+  } else {
+    ghostEdges = []; ghostMeta = null;
+    raw.links = raw.links.filter(l => l.label !== 'GHOST_KNN');
+    if (raw.nodes.length) {
+      layout(raw.nodes, raw.links, seedIds, ghostEnabled ? 'catalog' : 'catalog');
+      document.getElementById('mode-tag').textContent = 'CATALOG';
+      rebuildScene();
+    }
+    updateGhostMeta();
   }
 }
 
@@ -677,6 +834,10 @@ async function dissolve() {
 
 document.getElementById('btn-dissolve').onclick = dissolve;
 document.getElementById('btn-catalog').onclick = loadCatalog;
+document.getElementById('btn-ghost').onclick = toggleGhost;
+document.getElementById('ghost-k').addEventListener('input', e => { ghostK = parseInt(e.target.value,10)||5; document.getElementById('ghost-k-val').textContent=String(ghostK); updateGhostMeta(); if(ghostEnabled) refreshGhost(); });
+document.getElementById('ghost-thr').addEventListener('input', e => { ghostThr = parseFloat(e.target.value)||0.70; document.getElementById('ghost-thr-val').textContent=ghostThr.toFixed(2); updateGhostMeta(); if(ghostEnabled) refreshGhost(); });
+document.getElementById('hide-bench').addEventListener('change', e => { hideBench = e.target.checked; loadCatalog(); });
 
 if (location.protocol === 'file:') document.getElementById('filewarn').style.display = 'block';
 
