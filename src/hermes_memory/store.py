@@ -893,6 +893,36 @@ class Store:
                 continue
         return out
 
+    async def fetch_concept_names(self) -> list[str]:
+        """Names only — no degree walk. Used as ABOUT hub candidates."""
+        graph = self.graph_name
+        cypher = (
+            f"SELECT * FROM cypher('{graph}', $$ "
+            "MATCH (c:Concept) RETURN c.name "
+            "$$) AS (name agtype)"
+        )
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            sp = savepoint_name("fetch_cnames", 0)
+            try:
+                async with conn.transaction():
+                    await conn.execute(f"SAVEPOINT {sp}")
+                    try:
+                        rows = await conn.fetch(cypher)
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        return []
+            except Exception:
+                return []
+        names: list[str] = []
+        for r in rows:
+            raw = r["name"]
+            name = str(raw).strip('"') if raw is not None else ""
+            if name and name != "null":
+                names.append(name)
+        return names
+
     async def find_orphan_concept_ids(self, days: int = 7):
         """Prune candidates: Concept degree==0 and older than days (created_at).
 

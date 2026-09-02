@@ -169,6 +169,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._last_recall_count = 0
         self._unavailable_reason = ""
         self._concept_emb: Dict[str, list[float]] = {}
+        self._concept_names: Optional[list[str]] = None
 
     # -- identity -------------------------------------------------------------
 
@@ -446,16 +447,19 @@ class HybridAgeMemoryProvider(MemoryProvider):
         """Hook this turn to Concepts already in the graph (cross-session hubs)."""
         if not turn_vec:
             return scored
-        try:
-            existing = await store.fetch_concepts()
-        except Exception:
-            return scored
-        existing.sort(key=lambda c: -int(c.get("degree") or 0))
+        names = self._concept_names
+        if names is None:
+            try:
+                names = await store.fetch_concept_names()
+            except Exception:
+                return scored
+            self._concept_names = names
         already = {n for n, _ in scored}
         extra: list[tuple[str, float]] = []
-        for c in existing[:40]:
-            name = (c.get("name") or "").strip()
-            if not name or name in already:
+        skip_hubs = {"Project Zephyr", "Atlas Vault Engine"}
+        for name in names[:40]:
+            name = (name or "").strip()
+            if not name or name in already or name in skip_hubs:
                 continue
             vec = self._concept_emb.get(name)
             if vec is None:
