@@ -95,6 +95,14 @@ def _slug(name: str) -> str:
 
 
 SNAP_COSINE = 0.85
+ONE_WORD_KEEP = frozenset({"zephyr", "atlas"})
+
+
+def is_one_word_concept(name: str, keep: frozenset[str] = ONE_WORD_KEEP) -> bool:
+    n = (name or "").strip()
+    if not n or n.lower() in keep:
+        return False
+    return len(n.split()) == 1
 
 
 def _cosine_similarity(a: list[float] | None, b: list[float] | None) -> float | None:
@@ -448,6 +456,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             key = _slug(canon)
             if not key or key in seen_slug:
                 continue
+            if is_one_word_concept(canon):
+                continue
             seen_slug.add(key)
             resolved.append((canon, cos))
         scored = resolved
@@ -457,6 +467,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         for name in names[:40]:
             name = (name or "").strip()
             if not name or name in already or name in skip_hubs:
+                continue
+            if is_one_word_concept(name):
                 continue
             vec = self._concept_emb.get(name)
             if vec is None:

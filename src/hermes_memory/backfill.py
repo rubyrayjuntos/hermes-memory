@@ -19,7 +19,7 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
 
     from .config import load_config
     from .embed import Embedder
-    from .provider import HybridAgeMemoryProvider, _is_noise
+    from .provider import HybridAgeMemoryProvider, _is_noise, is_one_word_concept
 
     cfg = load_config()
     pw = os.environ.get("HERMES_PG_PASSWORD", "")
@@ -34,6 +34,14 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
     provider = HybridAgeMemoryProvider(config=cfg)
     provider.store = store
     provider.embedder = embedder
+
+    pairs = await store.fetch_concept_id_names()
+    dead = [vid for vid, name in pairs if is_one_word_concept(name)]
+    purged = await store.purge_concept_ids(dead)
+    if purged:
+        print(f"    purged {purged} one-word Concept verts", flush=True)
+    provider._concept_names = None
+    provider._concept_emb = {}
 
     sql = """
         SELECT c.id, c.session_id, c.content, c.embedding::text AS embedding
