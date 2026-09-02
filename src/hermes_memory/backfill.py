@@ -10,7 +10,7 @@ import os
 import sys
 from typing import Optional
 
-from .graph_api import is_verify_session
+from .graph_api import is_synthetic_session
 from .store import Store
 
 
@@ -38,11 +38,6 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
     sql = """
         SELECT c.id, c.session_id, c.content, c.embedding::text AS embedding
           FROM conversations c
-         WHERE NOT EXISTS (
-                 SELECT 1 FROM memory_chunk_nodes b
-                  WHERE b.chunk_id = 'conv_' || c.id::text
-                    AND b.source = 'conversation'
-               )
          ORDER BY c.id
     """
     async with pool.acquire() as conn:
@@ -53,7 +48,7 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
         if limit and linked >= limit:
             break
         sid = row["session_id"] or ""
-        if is_verify_session(sid):
+        if is_synthetic_session(sid):
             skipped += 1
             continue
         content = row["content"] or ""

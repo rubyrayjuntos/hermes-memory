@@ -8,6 +8,8 @@ import pytest
 from hermes_memory.graph_api import (
     clamp_limit,
     conversation_first_budget,
+    human_turn_title,
+    is_synthetic_session,
     is_verify_session,
     match_route,
     parse_vertex,
@@ -72,6 +74,32 @@ def test_preview_embedding():
     assert preview == [0.1, 0.5]
     assert stats["min"] == -0.2
     assert stats["max"] == 0.5
+
+
+def test_human_turn_title():
+    assert human_turn_title("You're right. That hub is verify.", "turn_1") == "You're right. That hub is verify."
+    assert "turn_472" not in human_turn_title("**Hello** world\nmore", "turn_472")
+    assert human_turn_title("", "turn_9") == "turn_9"
+
+
+def test_humanize_node_turn():
+    from hermes_memory.graph_api import humanize_node
+    n = humanize_node({
+        "id": "1", "label": "Turn", "name": "turn_9",
+        "props": {"content": "<img src=x onerror=alert(1)>\nmore", "session_id": "s"},
+    })
+    assert n is not None
+    assert n["name"].startswith("<img")
+    assert "snippet" in n
+    file_n = humanize_node({"id": "2", "label": "File", "name": "a.py", "props": {}})
+    assert file_n is not None
+    assert file_n["name"] == "a.py"
+
+
+def test_is_synthetic_session():
+    assert is_synthetic_session("bench-throughput-1788250950")
+    assert is_synthetic_session("verify-c5-verify-1")
+    assert not is_synthetic_session("20260902_094854_3c01ca")
 
 
 def test_is_verify_session():
