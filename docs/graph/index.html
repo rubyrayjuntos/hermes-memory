@@ -272,7 +272,7 @@ async function load(){
     if(CONFIG.FALLBACK_TO_DEMO){
       raw = demoData();
       setApi('err', `API: offline · demo ${raw.meta.verts}v/${raw.meta.edges}e`);
-      statsEl.textContent = `demo ${raw.meta.verts}v/${raw.meta.edges}e — start: python3 ~/.hermes/scripts/graph_api.py`;
+      statsEl.textContent = `demo ${raw.meta.verts}v/${raw.meta.edges}e — start: hermes-memory-api start`;
     } else {
       setApi('err', `API: error — ${e.message}`);
       raw = {nodes:[], links:[]};
