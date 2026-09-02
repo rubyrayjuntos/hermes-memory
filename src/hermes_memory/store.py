@@ -936,6 +936,69 @@ class Store:
                 names.append(name)
         return names
 
+    async def fetch_concept_id_names(self) -> list[tuple[int, str]]:
+        """id + name for Concept verts. No degree walk."""
+        graph = self.graph_name
+        cypher = (
+            f"SELECT * FROM cypher('{graph}', $$ "
+            "MATCH (c:Concept) RETURN id(c), c.name "
+            "$$) AS (id agtype, name agtype)"
+        )
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            sp = savepoint_name("fetch_cids", 0)
+            try:
+                async with conn.transaction():
+                    await conn.execute(f"SAVEPOINT {sp}")
+                    try:
+                        rows = await conn.fetch(cypher)
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        return []
+            except Exception:
+                return []
+        out: list[tuple[int, str]] = []
+        for r in rows:
+            try:
+                vid = int(str(r["id"]).strip('"'))
+            except Exception:
+                continue
+            raw = r["name"]
+            name = str(raw).strip('"') if raw is not None else ""
+            if name == "null":
+                name = ""
+            out.append((vid, name))
+        return out
+
+    async def purge_concept_ids(self, vids: Sequence[int]) -> int:
+        """DETACH DELETE Concept vertices by AGE id. SAVEPOINT per delete."""
+        if not vids:
+            return 0
+        graph = self.graph_name
+        deleted = 0
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            try:
+                async with conn.transaction():
+                    for i, vid in enumerate(vids):
+                        sp = savepoint_name("purge_c", i)
+                        await conn.execute(f"SAVEPOINT {sp}")
+                        try:
+                            await conn.execute(
+                                f"SELECT * FROM cypher('{graph}', $$ "
+                                f"MATCH (c:Concept) WHERE id(c) = {int(vid)} "
+                                f"DETACH DELETE c RETURN 1 "
+                                f"$$) AS (ok agtype)"
+                            )
+                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                            deleted += 1
+                        except Exception:
+                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+            except Exception:
+                logger.debug("purge_concept_ids txn failed", exc_info=True)
+        return deleted
+
     async def find_orphan_concept_ids(self, days: int = 7):
         """Prune candidates: Concept degree==0 and older than days (created_at).
 
