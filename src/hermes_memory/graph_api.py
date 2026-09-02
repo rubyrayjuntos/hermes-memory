@@ -361,16 +361,17 @@ class Runtime:
     async def _count_cypher(self, conn, graph: str, body: str) -> int:
         graph = validate_graph_name(graph)
         sp = savepoint_name("count", 0)
-        await conn.execute(f"SAVEPOINT {sp}")
-        try:
-            row = await conn.fetchrow(
-                f"SELECT * FROM cypher('{graph}', $$ {body} $$) AS (c agtype)"
-            )
-            await conn.execute(f"RELEASE SAVEPOINT {sp}")
-        except Exception:
-            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-            logger.debug("count cypher failed: %s", body, exc_info=True)
-            return 0
+        async with conn.transaction():
+            await conn.execute(f"SAVEPOINT {sp}")
+            try:
+                row = await conn.fetchrow(
+                    f"SELECT * FROM cypher('{graph}', $$ {body} $$) AS (c agtype)"
+                )
+                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+            except Exception:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                logger.debug("count cypher failed: %s", body, exc_info=True)
+                return 0
         if row is None:
             return 0
         try:
@@ -396,17 +397,18 @@ class Runtime:
         async with self.pool.acquire() as conn:
             await self.store.load_age(conn)
             sp = savepoint_name("g3d", 0)
-            await conn.execute(f"SAVEPOINT {sp}")
-            try:
-                rows = await conn.fetch(
-                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS "
-                    f"(n agtype, rel agtype, m agtype, nid agtype, mid agtype, w agtype, c agtype)"
-                )
-                await conn.execute(f"RELEASE SAVEPOINT {sp}")
-            except Exception:
-                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                logger.warning("graph/3d cypher failed", exc_info=True)
-                rows = []
+            async with conn.transaction():
+                await conn.execute(f"SAVEPOINT {sp}")
+                try:
+                    rows = await conn.fetch(
+                        f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS "
+                        f"(n agtype, rel agtype, m agtype, nid agtype, mid agtype, w agtype, c agtype)"
+                    )
+                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                except Exception:
+                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                    logger.warning("graph/3d cypher failed", exc_info=True)
+                    rows = []
         nodes: Dict[str, Dict[str, Any]] = {}
         links: List[Dict[str, Any]] = []
         degree: Dict[str, int] = {}
@@ -599,16 +601,17 @@ class Runtime:
         async with self.pool.acquire() as conn:
             await self.store.load_age(conn)
             sp = savepoint_name("node", 0)
-            await conn.execute(f"SAVEPOINT {sp}")
-            try:
-                row = await conn.fetchrow(
-                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (n agtype)"
-                )
-                await conn.execute(f"RELEASE SAVEPOINT {sp}")
-            except Exception:
-                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                logger.debug("node fetch failed", exc_info=True)
-                return {"error": "not found", "id": str(vid)}
+            async with conn.transaction():
+                await conn.execute(f"SAVEPOINT {sp}")
+                try:
+                    row = await conn.fetchrow(
+                        f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (n agtype)"
+                    )
+                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                except Exception:
+                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                    logger.debug("node fetch failed", exc_info=True)
+                    return {"error": "not found", "id": str(vid)}
         parsed = parse_vertex(row["n"]) if row else None
         if not parsed:
             return {"error": "not found", "id": str(vid)}
@@ -633,15 +636,16 @@ class Runtime:
         async with self.pool.acquire() as conn:
             await self.store.load_age(conn)
             sp = savepoint_name("audit", 0)
-            await conn.execute(f"SAVEPOINT {sp}")
-            try:
-                row = await conn.fetchrow(
-                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (c agtype)"
-                )
-                await conn.execute(f"RELEASE SAVEPOINT {sp}")
-            except Exception:
-                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                row = None
+            async with conn.transaction():
+                await conn.execute(f"SAVEPOINT {sp}")
+                try:
+                    row = await conn.fetchrow(
+                        f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (c agtype)"
+                    )
+                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                except Exception:
+                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                    row = None
             bridge_rows = await conn.fetchval(
                 "SELECT count(*) FROM memory_chunk_nodes WHERE vertex_id = $1",
                 vid,
