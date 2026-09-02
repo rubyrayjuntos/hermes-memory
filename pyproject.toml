@@ -47,6 +47,7 @@ hermes-memory-upgrade = "hermes_memory.upgrade_cli:main"
 hermes-memory-migrate = "hermes_memory.migrate_cli:main"
 hermes-memory-uninstall = "hermes_memory.uninstall_cli:main"
 hermes-memory-api = "hermes_memory.graph_api:main"
+hermes-memory-backfill = "hermes_memory.backfill:main"
 
 [project.entry-points."hermes_agent.memory_providers"]
 hybrid-age = "hermes_memory:register"

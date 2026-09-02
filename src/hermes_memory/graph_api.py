@@ -121,6 +121,20 @@ def validate_bind_host(host: str) -> str:
     return host
 
 
+def is_verify_session(session_id: Any) -> bool:
+    """C5 verify synthetics use session_id verify-c5-verify-<ts>."""
+    s = str(session_id or "").strip().strip('"')
+    return s.startswith("verify-c5")
+
+
+def conversation_first_budget(limit: int) -> tuple[int, int]:
+    """Split an 'all' view: conversations take 70%, remainder is File/IMPORTS."""
+    n = max(1, int(limit))
+    convo = max(1, (n * 7) // 10)
+    other = max(0, n - convo)
+    return convo, other
+
+
 def clamp_limit(raw: Any, default: int = DEFAULT_LIMIT) -> int:
     try:
         n = int(raw)
@@ -183,7 +197,7 @@ def match_route(method: str, path: str) -> Tuple[str, Dict[str, str]]:
         return "search", {}
     if method == "GET" and path in ("/api/librarian/verify",):
         return "verify", {}
-    if method == "GET" and path in ("/", "/3d.html", "/api/librarian/pane"):
+    if method == "GET" and path in ("/", "/3d.html", "/fountain.html", "/api/librarian/pane"):
         return "pane", {}
     if method == "GET" and path in ("/index.html",):
         return "pane_index", {}
@@ -217,7 +231,7 @@ def find_pane_dir() -> Optional[Path]:
         Path.cwd() / "docs" / "graph",
     ]
     for cand in candidates:
-        if (cand / "3d.html").is_file():
+        if (cand / "fountain.html").is_file() or (cand / "3d.html").is_file():
             return cand
     return None
 
@@ -407,37 +421,44 @@ class Runtime:
         assert self.store is not None
         return self.loop.call(self._agraph_3d(label, limit))
 
-    async def _agraph_3d(self, label: Optional[str], limit: int) -> Dict[str, Any]:
-        assert self.store is not None and self.pool is not None
-        graph = self.store.graph_name
-        label_pat = f"(n:{label})" if label else "(n)"
+    async def _fetch_3d_rows(self, conn, graph: str, label: Optional[str], limit: int):
+        if limit <= 0:
+            return []
+        if label:
+            label_pat = f"(n:{label})"
+        else:
+            label_pat = "(n)"
         cypher = f"""
             MATCH {label_pat}
             OPTIONAL MATCH (n)-[r]->(m)
             RETURN n, type(r) AS rel, m, id(n), id(m),
                    coalesce(r.weight, 0.5), coalesce(r.cosine, 0.5)
+            {("ORDER BY coalesce(n.turn_id, 0) DESC" if label == "Turn" else "")}
             LIMIT {int(limit)}
         """
-        async with self.pool.acquire() as conn:
-            await self.store.load_age(conn)
-            sp = savepoint_name("g3d", 0)
-            async with conn.transaction():
-                await conn.execute(f"SAVEPOINT {sp}")
-                try:
-                    rows = await conn.fetch(
-                        f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS "
-                        f"(n agtype, rel agtype, m agtype, nid agtype, mid agtype, w agtype, c agtype)"
-                    )
-                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                except Exception:
-                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                    logger.warning("graph/3d cypher failed", exc_info=True)
-                    rows = []
+        sp = savepoint_name("g3d", 0 if not label else 1)
+        async with conn.transaction():
+            await conn.execute(f"SAVEPOINT {sp}")
+            try:
+                rows = await conn.fetch(
+                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS "
+                    f"(n agtype, rel agtype, m agtype, nid agtype, mid agtype, w agtype, c agtype)"
+                )
+                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                return rows
+            except Exception:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                logger.warning("graph/3d cypher failed label=%s", label, exc_info=True)
+                return []
+
+    def _assemble_3d(self, rows, limit: int, label: Optional[str]) -> Dict[str, Any]:
         nodes: Dict[str, Dict[str, Any]] = {}
         links: List[Dict[str, Any]] = []
         degree: Dict[str, int] = {}
         for row in rows:
             src = parse_vertex(row["n"])
+            if src and is_verify_session((src.get("props") or {}).get("session_id")):
+                continue
             if src:
                 nodes[src["id"]] = src
                 degree[src["id"]] = degree.get(src["id"], 0)
@@ -469,11 +490,25 @@ class Runtime:
             "links": links,
             "meta": {
                 "limit": limit,
-                "label": label or "all",
+                "label": label or "Turn+File",
                 "verts": len(out_nodes),
                 "edges": len(links),
             },
         }
+
+    async def _agraph_3d(self, label: Optional[str], limit: int) -> Dict[str, Any]:
+        assert self.store is not None and self.pool is not None
+        graph = self.store.graph_name
+        async with self.pool.acquire() as conn:
+            await self.store.load_age(conn)
+            if label:
+                rows = await self._fetch_3d_rows(conn, graph, label, limit)
+            else:
+                convo_n, other_n = conversation_first_budget(limit)
+                convo = await self._fetch_3d_rows(conn, graph, "Turn", convo_n)
+                other = await self._fetch_3d_rows(conn, graph, "File", other_n)
+                rows = list(convo) + list(other)
+        return self._assemble_3d(rows, limit, label)
 
     def chunks(self, file_path: str, limit: int) -> Dict[str, Any]:
         assert self.store is not None
@@ -774,7 +809,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(501, {"error": "not implemented", "detail": "read-only viz API"})
                 return
             if route == "pane":
-                self._serve_pane("3d.html")
+                self._serve_pane("fountain.html")
                 return
             if route == "pane_index":
                 self._serve_pane("index.html")
@@ -831,6 +866,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "pane html not found in repo docs/graph"})
             return
         path = pane / name
+        if not path.is_file():
+            path = pane / "fountain.html"
         if not path.is_file():
             path = pane / "3d.html"
         body = path.read_bytes()

@@ -389,6 +389,52 @@ class Store:
             except Exception:
                 logger.debug("bridge_turn failed", exc_info=True)
 
+    async def purge_verify_turns(self) -> int:
+        """DETACH DELETE Turn vertices whose session_id is a C5 verify synthetic.
+
+        Also drops orphan conversation bridges whose conv_* row is gone.
+        """
+        graph = self.graph_name
+        deleted = 0
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            sp = savepoint_name("purge_vfy", 0)
+            try:
+                async with conn.transaction():
+                    await conn.execute(f"SAVEPOINT {sp}")
+                    try:
+                        row = await conn.fetchrow(
+                            f"SELECT * FROM cypher('{graph}', $$ "
+                            f"MATCH (t:Turn) WHERE t.session_id STARTS WITH 'verify-c5' "
+                            f"DETACH DELETE t RETURN count(t) "
+                            f"$$) AS (c agtype)"
+                        )
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        if row is not None:
+                            try:
+                                deleted = int(str(row["c"]).strip().strip('"') or 0)
+                            except ValueError:
+                                deleted = 0
+                    except Exception:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        logger.debug("purge_verify_turns cypher failed", exc_info=True)
+            except Exception:
+                logger.debug("purge_verify_turns txn failed", exc_info=True)
+            try:
+                await conn.execute(
+                    """
+                    DELETE FROM memory_chunk_nodes b
+                     WHERE b.source = 'conversation'
+                       AND NOT EXISTS (
+                         SELECT 1 FROM conversations c
+                          WHERE b.chunk_id = 'conv_' || c.id::text
+                       )
+                    """
+                )
+            except Exception:
+                logger.debug("purge verify bridges failed", exc_info=True)
+        return deleted
+
     async def upsert_memory_entry(
         self,
         agent_identity: str,
