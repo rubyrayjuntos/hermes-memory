@@ -90,13 +90,13 @@
   <header>
     <div>
       <h1>THE HERMES LIBRARIAN</h1>
-      <p>Fountain live — gems are AGE vertices; threads are typed edges; shells are hop-from-seed</p>
+      <p>Fountain live — Concepts (lapis) join sessions; Sessions (amber) are hubs; Turns (alabaster) orbit</p>
     </div>
     <div class="legend">
-      <span><i class="gem" style="background:#234A8A"></i> FILE / SEED</span>
-      <span><i class="gem" style="background:#2F8F8A"></i> MODULE / BRIDGE</span>
+      <span><i class="gem" style="background:#234A8A"></i> CONCEPT</span>
+      <span><i class="gem" style="background:#C9943F"></i> SESSION</span>
       <span><i class="gem" style="background:#EAE3D6;border:1px solid #fff"></i> TURN</span>
-      <span><i class="gem" style="background:#C9943F"></i> DEP / CONCEPT</span>
+      <span><i class="gem" style="background:#2F8F8A"></i> NEXT</span>
     </div>
     <div class="status"><span class="dot" id="dot"></span><span id="api-status">connecting</span></div>
   </header>
@@ -124,7 +124,7 @@
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint">Drag to orbit · scroll to elevate · click gem · distances = hop shells, not physics</div>
+  <div class="hint">Drag to orbit · scroll to zoom · click gem · catalog = session clusters, not force springs</div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -138,8 +138,8 @@ const MAT = {
   seed:       { color: 0xd946a6, transmission: 0.22, roughness: 0.16, metalness: 0.08, clearcoat: 1,   ior: 1.60 },
 };
 const LABEL_GEM = {
-  File: 'lapis', Module: 'turquoise', Turn: 'alabaster', Session: 'alabaster',
-  Dependency: 'amber', Concept: 'amber', Standard: 'amber', Person: 'amber',
+  File: 'lapis', Module: 'turquoise', Turn: 'alabaster', Session: 'amber',
+  Dependency: 'amber', Concept: 'lapis', Standard: 'amber', Person: 'amber',
   Project: 'amber', Technology: 'amber', Tool: 'amber', Skill: 'amber',
   Organization: 'amber', Domain: 'amber', Repo: 'amber'
 };
@@ -244,40 +244,30 @@ function layout(nodes, links, seedSet, mode) {
   const sessions = nodes.filter(n => n.label === 'Session');
   const turns = nodes.filter(n => n.label === 'Turn');
   const other = nodes.filter(n => !['Concept','Session','Turn'].includes(n.label));
-  placeRing(concepts, 2.6, 8.2);
+  placeRing(concepts, 5.4, 8.2);
   sessions.forEach((s, i) => {
-    const turnIds = nbr(id(s), 'IN_SESSION');
-    const conceptPos = [];
-    turnIds.forEach(tid => {
-      nbr(tid, 'ABOUT').forEach(cid => {
-        const c = byId.get(cid);
-        if (c && c.pos) conceptPos.push(c.pos);
-      });
-    });
-    const t = (i / Math.max(sessions.length, 1)) * Math.PI * 2 + hash01(s.id);
-    const ring = [Math.cos(t) * 9.5, 8, Math.sin(t) * 9.5];
-    if (conceptPos.length) {
-      const m = [0,0,0];
-      conceptPos.forEach(p => { m[0]+=p[0]; m[1]+=p[1]; m[2]+=p[2]; });
-      const n = conceptPos.length;
-      s.pos = [m[0]/n * 0.55 + ring[0]*0.45, 8, m[2]/n * 0.55 + ring[2]*0.45];
-    } else {
-      s.pos = ring;
-    }
+    const t = (i / Math.max(sessions.length, 1)) * Math.PI * 2;
+    s.pos = [Math.cos(t) * 15.5, 8, Math.sin(t) * 15.5];
     s.offset = hash01(s.id) * Math.PI * 2;
   });
-  turns.forEach((t, i) => {
-    const sessId = nbr(id(t), 'IN_SESSION')[0];
-    const sess = sessId ? byId.get(sessId) : null;
-    const ang = hash01(t.id) * Math.PI * 2;
-    const rad = 1.7 + (hash01(t.id + 'r') * 0.6);
-    if (sess && sess.pos) {
-      t.pos = [sess.pos[0] + Math.cos(ang)*rad, 8 + (hash01(t.id+'y')-0.5)*0.4, sess.pos[2] + Math.sin(ang)*rad];
-    } else {
-      const tt = (i / Math.max(turns.length, 1)) * Math.PI * 2;
-      t.pos = [Math.cos(tt)*14, 8, Math.sin(tt)*14];
-    }
-    t.offset = ang;
+  const turnsBySess = new Map();
+  turns.forEach(t => {
+    const sessId = nbr(id(t), 'IN_SESSION')[0] || '_none';
+    if (!turnsBySess.has(sessId)) turnsBySess.set(sessId, []);
+    turnsBySess.get(sessId).push(t);
+  });
+  turnsBySess.forEach((list, sessId) => {
+    const sess = byId.get(sessId);
+    const rad = 3.4 + Math.sqrt(list.length) * 0.28;
+    list.forEach((t, i) => {
+      const ang = (i / Math.max(list.length, 1)) * Math.PI * 2;
+      if (sess && sess.pos) {
+        t.pos = [sess.pos[0] + Math.cos(ang) * rad, 8 + (hash01(t.id + 'y') - 0.5) * 0.2, sess.pos[2] + Math.sin(ang) * rad];
+      } else {
+        t.pos = [Math.cos(ang) * 20, 8, Math.sin(ang) * 20];
+      }
+      t.offset = ang;
+    });
   });
   placeRing(other, 18, 8.4);
   return nodes;
@@ -332,10 +322,10 @@ function rebuildScene() {
     if (!n.pos) return;
     const kind = gemKind(n);
     const deg = Number(n.val || 1);
-    const radius = n.label === 'Concept' ? 0.30 + Math.min(0.55, deg * 0.045)
-      : n.label === 'Session' ? 0.36
+    const radius = n.label === 'Session' ? 0.55
+      : n.label === 'Concept' ? 0.28 + Math.min(0.40, deg * 0.04)
       : n._searchSeed ? 0.32
-      : 0.16 + Math.min(0.14, deg * 0.012);
+      : 0.14 + Math.min(0.10, deg * 0.01);
     const geo = new THREE.IcosahedronGeometry(radius, 0);
     const mesh = new THREE.Mesh(geo, materialFor(kind, n._searchSeed));
     mesh.position.set(...n.pos);
@@ -357,7 +347,7 @@ function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xE9E3D4);
   camera = new THREE.PerspectiveCamera(42, el.clientWidth / el.clientHeight, 0.1, 200);
-  camera.position.set(0, 22, 36);
+  camera.position.set(0, 36, 58);
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(el.clientWidth, el.clientHeight);
@@ -392,7 +382,7 @@ function initThree() {
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.dampingFactor = 0.07;
   controls.minPolarAngle = Math.PI * 0.12; controls.maxPolarAngle = Math.PI * 0.48;
-  controls.minDistance = 4; controls.maxDistance = 60; controls.target.set(0, 8, 0);
+  controls.minDistance = 10; controls.maxDistance = 110; controls.target.set(0, 8, 0);
 
   const ray = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
@@ -471,14 +461,17 @@ function renderList() {
 
 function setMetrics(stats, extra) {
   const v = stats?.vertices || {};
-  const e = stats?.edges || {};
   const b = stats?.bridge || {};
   const vec = stats?.vector || {};
   const i = stats?.integrity || {};
+  const labels = {};
+  const elabs = {};
+  raw.nodes.forEach(n => { const k = n.label || ''; labels[k] = (labels[k] || 0) + 1; });
+  raw.links.forEach(l => { const k = l.label || ''; elabs[k] = (elabs[k] || 0) + 1; });
   const cells = [
-    ['VERTICES', extra?.verts ?? v.total ?? raw.nodes.length, `${v.File||0} File · ${v.Turn||0} Turn`],
-    ['EDGES', extra?.edges ?? e.total ?? raw.links.length, `${e.IMPORTS||0} IMPORTS · ${e.ABOUT != null ? e.ABOUT : ''} ABOUT`],
-    ['BRIDGE', b.rows ?? '—', `${b.vertices_bridged||0} verts bridged`],
+    ['VERTICES', extra?.verts ?? raw.nodes.length, `${labels.Turn||0} Turn · ${labels.Session||0} Session · ${labels.Concept||0} Concept`],
+    ['EDGES', extra?.edges ?? raw.links.length, `${elabs.NEXT||0} NEXT · ${elabs.IN_SESSION||0} IN_SESSION · ${elabs.ABOUT||0} ABOUT`],
+    ['BRIDGE', b.rows ?? '—', `${b.vertices_bridged||0} verts bridged · graph ${v.total??'—'}v`],
     ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'}`],
   ];
   document.getElementById('metrics').innerHTML = cells.map(([k,val,sub]) =>
@@ -523,7 +516,7 @@ function applyCatalog(payload) {
   rebuildScene();
   renderList();
   document.getElementById('contrib').className = 'banner weak';
-  document.getElementById('contrib').textContent = `catalog snapshot · ${raw.nodes.length} gems · ${raw.links.length} threads · rings = AGE label`;
+  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · ${raw.links.length} threads · session clusters`;
 }
 
 function applySearch(res) {
@@ -566,7 +559,7 @@ async function loadCatalog() {
   if (stats) {
     lastStats = stats;
     setMetrics(stats, { verts: g3d.nodes.length, edges: (g3d.links||[]).length });
-    setStatus(true, `live AGE ${g3d.meta?.verts || g3d.nodes.length}v / ${g3d.meta?.edges || g3d.links.length}e`);
+    setStatus(true, `catalog ${g3d.nodes.length}v / graph ${stats.vertices?.total||'?'}v`);
   }
 }
 
