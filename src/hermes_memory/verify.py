@@ -160,7 +160,7 @@ async def run_verify(dsn: Optional[str] = None,
             tokens_est = 0
             try:
                 if isinstance(out, str) and out:
-                    # provider._format emits "- [Label name] -REL-> [Label name]" for graph
+                    # format_injection Path headers match [A] -REL-> [B]
                     graph_lines = len(re.findall(r"\[.*?\]\s*-.*->\s*\[.*?\]", out))
                     total_prefetch_lines = len([ln for ln in out.splitlines() if ln.strip().startswith("- ")])
                     tokens_est = max(1, len(out) // 4) if out else 0

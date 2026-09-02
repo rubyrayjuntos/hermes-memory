@@ -291,6 +291,24 @@ def is_synthetic_session(session_id: Any) -> bool:
     return classify_session_kind(session_id) != "interactive"
 
 
+def catalog_where_clause(label: Optional[str]) -> str:
+    """Push synthetic-session exclusion into Cypher so LIMIT is not starved.
+
+    Only Turn vertices carry session_id. Prefixes match is_synthetic_session.
+    Identifier is the static MATCH alias ``n`` — never user input.
+    """
+    if label != "Turn":
+        return ""
+    return (
+        "WHERE NOT ("
+        "coalesce(n.session_id, '') STARTS WITH 'bench-' OR "
+        "coalesce(n.session_id, '') STARTS WITH 'bench_' OR "
+        "coalesce(n.session_id, '') STARTS WITH 'verify-c5' OR "
+        "coalesce(n.session_id, '') STARTS WITH 'c8-'"
+        ")"
+    )
+
+
 def conversation_first_budget(limit: int) -> tuple[int, int]:
     """Split an 'all' view: conversations take 70%, remainder is File/IMPORTS."""
     n = max(1, int(limit))
@@ -592,8 +610,10 @@ class Runtime:
             label_pat = f"(n:{label})"
         else:
             label_pat = "(n)"
+        where = catalog_where_clause(label)
         cypher = f"""
             MATCH {label_pat}
+            {where}
             OPTIONAL MATCH (n)-[r]->(m)
             RETURN n, type(r) AS rel, m, id(n), id(m),
                    coalesce(r.weight, 0.5), coalesce(r.cosine, 0.5)
