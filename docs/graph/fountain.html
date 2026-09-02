@@ -210,38 +210,76 @@ function layout(nodes, links, seedSet, mode) {
   const hmap = seedSet.size ? bfsHops(nodes, links, seedSet) : new Map();
   hops = hmap;
   const byHop = new Map();
-  const byLabel = new Map();
   nodes.forEach(n => {
     const hop = hmap.has(n.id) ? hmap.get(n.id) : null;
     n._hop = hop;
     if (mode === 'search' && hop != null) {
       if (!byHop.has(hop)) byHop.set(hop, []);
       byHop.get(hop).push(n);
-    } else {
-      const lab = n.label || n.group || 'Node';
-      if (!byLabel.has(lab)) byLabel.set(lab, []);
-      byLabel.get(lab).push(n);
     }
   });
-  const place = (list, radius, y0) => {
+  const placeRing = (list, radius, y0) => {
     list.forEach((n, i) => {
       const t = (i / Math.max(list.length, 1)) * Math.PI * 2 + hash01(n.id);
-      const r = radius + (hash01(n.id + 'r') - 0.5) * 1.4;
-      n.pos = [Math.cos(t) * r, y0 + (hash01(n.id + 'y') - 0.5) * 0.7, Math.sin(t) * r];
+      const r = radius + (hash01(n.id + 'r') - 0.5) * 0.8;
+      n.pos = [Math.cos(t) * r, y0 + (hash01(n.id + 'y') - 0.5) * 0.5, Math.sin(t) * r];
       n.offset = hash01(n.id) * Math.PI * 2;
     });
   };
   if (mode === 'search' && byHop.size) {
     [...byHop.keys()].sort((a,b)=>a-b).forEach(hop => {
-      place(byHop.get(hop), 3.2 + hop * 7.2, 8 + hop * 0.22);
+      placeRing(byHop.get(hop), 3.2 + hop * 7.2, 8 + hop * 0.22);
     });
     const unknown = nodes.filter(n => n._hop == null);
-    place(unknown, 26, 8.4);
-  } else {
-    const order = ['Turn','Concept','Session','Standard','File','Module','Dependency'];
-    const labs = [...new Set([...order, ...byLabel.keys()])].filter(k => byLabel.has(k));
-    labs.forEach((lab, i) => place(byLabel.get(lab), 4 + i * 4.6, 8));
+    placeRing(unknown, 26, 8.4);
+    return nodes;
   }
+  const id = n => sid(n.id);
+  const byId = new Map(nodes.map(n => [id(n), n]));
+  const nbr = (nid, label) => links.filter(l => {
+    if (label && l.label !== label) return false;
+    return sid(l.source) === nid || sid(l.target) === nid;
+  }).map(l => sid(l.source) === nid ? sid(l.target) : sid(l.source));
+  const concepts = nodes.filter(n => n.label === 'Concept');
+  const sessions = nodes.filter(n => n.label === 'Session');
+  const turns = nodes.filter(n => n.label === 'Turn');
+  const other = nodes.filter(n => !['Concept','Session','Turn'].includes(n.label));
+  placeRing(concepts, 2.6, 8.2);
+  sessions.forEach((s, i) => {
+    const turnIds = nbr(id(s), 'IN_SESSION');
+    const conceptPos = [];
+    turnIds.forEach(tid => {
+      nbr(tid, 'ABOUT').forEach(cid => {
+        const c = byId.get(cid);
+        if (c && c.pos) conceptPos.push(c.pos);
+      });
+    });
+    const t = (i / Math.max(sessions.length, 1)) * Math.PI * 2 + hash01(s.id);
+    const ring = [Math.cos(t) * 9.5, 8, Math.sin(t) * 9.5];
+    if (conceptPos.length) {
+      const m = [0,0,0];
+      conceptPos.forEach(p => { m[0]+=p[0]; m[1]+=p[1]; m[2]+=p[2]; });
+      const n = conceptPos.length;
+      s.pos = [m[0]/n * 0.55 + ring[0]*0.45, 8, m[2]/n * 0.55 + ring[2]*0.45];
+    } else {
+      s.pos = ring;
+    }
+    s.offset = hash01(s.id) * Math.PI * 2;
+  });
+  turns.forEach((t, i) => {
+    const sessId = nbr(id(t), 'IN_SESSION')[0];
+    const sess = sessId ? byId.get(sessId) : null;
+    const ang = hash01(t.id) * Math.PI * 2;
+    const rad = 1.7 + (hash01(t.id + 'r') * 0.6);
+    if (sess && sess.pos) {
+      t.pos = [sess.pos[0] + Math.cos(ang)*rad, 8 + (hash01(t.id+'y')-0.5)*0.4, sess.pos[2] + Math.sin(ang)*rad];
+    } else {
+      const tt = (i / Math.max(turns.length, 1)) * Math.PI * 2;
+      t.pos = [Math.cos(tt)*14, 8, Math.sin(tt)*14];
+    }
+    t.offset = ang;
+  });
+  placeRing(other, 18, 8.4);
   return nodes;
 }
 
@@ -278,10 +316,11 @@ function rebuildScene() {
     const curve = new THREE.QuadraticBezierCurve3(pa, mid, pb);
     const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(l.label === 'ABOUT' ? 16 : 8));
     const about = l.label === 'ABOUT';
+    const w = Number(l.weight != null ? l.weight : (about ? 1 : 0.5));
     const mat = new THREE.LineBasicMaterial({
       color: EDGE_COLOR[l.label] || 0x2A5DB0,
       transparent: true,
-      opacity: about ? 0.92 : (l._isExpansion ? 0.75 : 0.38),
+      opacity: about ? Math.min(0.95, 0.45 + w * 0.5) : (l._isExpansion ? 0.75 : 0.32 + w * 0.25),
       linewidth: 1
     });
     const line = new THREE.Line(geo, mat);
@@ -292,7 +331,11 @@ function rebuildScene() {
   raw.nodes.forEach(n => {
     if (!n.pos) return;
     const kind = gemKind(n);
-    const radius = n._searchSeed ? 0.32 : (n.label === 'Turn' ? 0.22 : 0.26);
+    const deg = Number(n.val || 1);
+    const radius = n.label === 'Concept' ? 0.30 + Math.min(0.55, deg * 0.045)
+      : n.label === 'Session' ? 0.36
+      : n._searchSeed ? 0.32
+      : 0.16 + Math.min(0.14, deg * 0.012);
     const geo = new THREE.IcosahedronGeometry(radius, 0);
     const mesh = new THREE.Mesh(geo, materialFor(kind, n._searchSeed));
     mesh.position.set(...n.pos);
