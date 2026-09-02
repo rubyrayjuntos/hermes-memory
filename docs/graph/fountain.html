@@ -25,7 +25,7 @@
       --ink: #1E2D45;
       --seed: #d946a6;
       --about: #7c3aed;
-      --ghost: #94A3B8;
+      --ghost: #E040B0;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; background: #ffffff; color: var(--ink);
@@ -92,6 +92,8 @@
     .hint.alert { background: #7f1d1d; color: #fff; font-style: normal; font-family: Cinzel, serif; font-size: 10px; letter-spacing: .14em; box-shadow: 0 6px 18px rgba(127,29,29,.35); animation: hintPulse 1.25s ease-in-out infinite; }
     .hint.alert .mono { color: #fecaca !important; opacity: 1 !important; }
     @keyframes hintPulse { 0%,100% { background:#7f1d1d; box-shadow:0 6px 18px rgba(127,29,29,.35) } 50% { background:#991b1b; box-shadow:0 8px 26px rgba(153,27,27,.55) } }
+    .gem.ghost-pulse { animation: ghostGemPulse 1.4s ease-in-out infinite; }
+    @keyframes ghostGemPulse { 0%,100% { opacity: .95; transform: rotate(45deg) scale(1); box-shadow: 0 0 0 0 rgba(224,64,176,.00) } 50% { opacity: 1; transform: rotate(45deg) scale(1.12); box-shadow: 0 0 10px 2px rgba(224,64,176,.45) } }
     #filewarn { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 50; background: #8B3A2E; color: #F7F3EB; padding: 8px 12px; font-size: 12px; text-align: center; }
   </style>
 </head>
@@ -108,7 +110,7 @@
       <span><i class="gem" style="background:#C9943F"></i> SESSION</span>
       <span><i class="gem" style="background:#EAE3D6;border:1px solid #fff"></i> TURN</span>
       <span><i class="gem" style="background:#2F8F8A"></i> NEXT</span>
-      <span><i class="gem" style="background:#94A3B8;opacity:0.55"></i> GHOST</span>
+      <span title="GHOST_KNN · vector proximity (768-d cosine kNN) · pulsing magenta · render-time only, not persisted to AGE"><i class="gem ghost-pulse" style="background:#E040B0"></i> GHOST</span>
     </div>
     <div class="status"><span class="dot" id="dot"></span><span id="api-status">connecting</span></div>
     <div class="hud-toggles" style="display:flex;gap:6px;align-items:center">
@@ -168,7 +170,7 @@ const LABEL_GEM = {
   Project: 'amber', Technology: 'amber', Tool: 'amber', Skill: 'amber',
   Organization: 'amber', Domain: 'amber', Repo: 'amber'
 };
-const EDGE_COLOR = { IMPORTS: 0x2A5DB0, ABOUT: 0x7c3aed, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F, GHOST_KNN: 0x94A3B8 };
+const EDGE_COLOR = { IMPORTS: 0x2A5DB0, ABOUT: 0x7c3aed, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F, GHOST_KNN: 0xE040B0 };
 
 let raw = { nodes: [], links: [] };
 let hops = new Map();
@@ -381,7 +383,7 @@ function rebuildScene() {
       sag = 0.12;
       segs = 8;
     } else if (kind === 'GHOST_KNN') {
-      radius = 0.006 + c * 0.010;
+      radius = 0.009 + c * 0.012;
       sag = 0.35 + (1 - c) * 0.9;
       segs = 6;
     }
@@ -398,19 +400,23 @@ function rebuildScene() {
     mid.add(lift);
     const curve = new THREE.QuadraticBezierCurve3(pa, mid, pb);
     const geo = new THREE.TubeGeometry(curve, segs, radius, 6, false);
+    const isGhost = kind === 'GHOST_KNN';
+    const ghostBase = isGhost ? (0.42 + c * 0.28) : 0;
     const mat = new THREE.MeshPhysicalMaterial({
       color: EDGE_COLOR[kind] || 0x2A5DB0,
-      roughness: kind === 'GHOST_KNN' ? 0.52 : 0.32,
-      metalness: kind === 'ABOUT' ? 0.35 : kind === 'GHOST_KNN' ? 0.02 : 0.12,
+      roughness: isGhost ? 0.35 : 0.32,
+      metalness: kind === 'ABOUT' ? 0.35 : isGhost ? 0.10 : 0.12,
       transparent: true,
-      opacity: kind === 'GHOST_KNN' ? (0.10 + c * 0.06) : (0.38 + force * 0.55),
+      opacity: isGhost ? ghostBase : (0.38 + force * 0.55),
       transmission: kind === 'ABOUT' ? 0.12 : 0,
       thickness: 0.2,
-      emissive: lit ? 0xffffff : 0x000000,
-      emissiveIntensity: lit ? 0.25 : 0
+      emissive: isGhost ? 0xE040B0 : (lit ? 0xffffff : 0x000000),
+      emissiveIntensity: isGhost ? 0.22 : (lit ? 0.25 : 0)
     });
     const tube = new THREE.Mesh(geo, mat);
     tube.userData.edge = l;
+    tube.userData.isGhost = isGhost;
+    if (isGhost) tube.userData.ghostBase = ghostBase;
     graphGroup.add(tube);
     if (kind === 'GHOST_KNN') return;
     const tangent = curve.getTangent(0.84).normalize();
@@ -524,6 +530,14 @@ function initThree() {
     const t = clock.getElapsedTime();
     if (graphGroup) {
       graphGroup.children.forEach(obj => {
+        // ghost tubes — pulsing magenta (vector proximity, not persisted)
+        if (obj.userData.isGhost) {
+          const base = obj.userData.ghostBase || 0.55;
+          const ph = Math.sin(t * 1.9 + (obj.position.x * 0.07 + obj.position.z * 0.05));
+          obj.material.opacity = Math.max(0.28, Math.min(0.92, base + ph * 0.16));
+          obj.material.emissiveIntensity = 0.18 + (ph * 0.5 + 0.5) * 0.22;
+          return;
+        }
         const n = obj.userData.node;
         if (!n || !n.pos) return;
         obj.position.y = n.pos[1] + Math.sin(t * 0.32 + n.offset) * 0.08;
