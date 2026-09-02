@@ -21,14 +21,14 @@
       --turquoise: #2F8F8A;
       --alabaster: #EAE3D6;
       --amber: #C9943F;
-      --parchment: #E9E3D4;
+      --parchment: #ffffff;
       --ink: #1E2D45;
       --seed: #d946a6;
       --about: #7c3aed;
       --ghost: #94A3B8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; background: var(--parchment); color: var(--ink);
+    html, body { height: 100%; background: #ffffff; color: var(--ink);
       font-family: "Cormorant Garamond", serif; overflow: hidden; }
     #stage { position: absolute; inset: 0; }
     header {
@@ -88,7 +88,10 @@
     .list { max-height: 160px; overflow: auto; background: rgba(255,255,255,.55); border-radius: 10px; }
     .list button { all: unset; display: flex; width: 100%; gap: 8px; align-items: center; padding: 6px 10px; cursor: pointer; font-size: 12px; }
     .list button:hover, .list button.on { background: #DCE8FA; }
-    .hint { position: absolute; left: 16px; bottom: 14px; z-index: 20; font-style: italic; font-size: 13px; color: #5E7A97; }
+    .hint { position: absolute; left: 16px; bottom: 14px; z-index: 20; font-style: italic; font-size: 13px; color: #5E7A97; padding: 6px 12px; border-radius: 999px; transition: background .22s, color .22s, box-shadow .22s; }
+    .hint.alert { background: #7f1d1d; color: #fff; font-style: normal; font-family: Cinzel, serif; font-size: 10px; letter-spacing: .14em; box-shadow: 0 6px 18px rgba(127,29,29,.35); animation: hintPulse 1.25s ease-in-out infinite; }
+    .hint.alert .mono { color: #fecaca !important; opacity: 1 !important; }
+    @keyframes hintPulse { 0%,100% { background:#7f1d1d; box-shadow:0 6px 18px rgba(127,29,29,.35) } 50% { background:#991b1b; box-shadow:0 8px 26px rgba(153,27,27,.55) } }
     #filewarn { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 50; background: #8B3A2E; color: #F7F3EB; padding: 8px 12px; font-size: 12px; text-align: center; }
   </style>
 </head>
@@ -146,7 +149,7 @@
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span></div>
+  <div class="hint" id="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -449,7 +452,7 @@ function rebuildScene() {
 function initThree() {
   const el = document.getElementById('stage');
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xE9E3D4);
+  scene.background = new THREE.Color(0xffffff);
   camera = new THREE.PerspectiveCamera(42, el.clientWidth / el.clientHeight, 0.1, 200);
   camera.position.set(24, 36, 42);
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -843,6 +846,14 @@ const PANEL_MAP = {
   injection: ['panel-injection'],
   inspector: ['panel-topo','panel-hook'],
 };
+function refreshHintAlert() {
+  const anyHidden = ['metrics','injection','inspector'].some(k => {
+    const ids = PANEL_MAP[k]||[];
+    return ids.some(id => document.getElementById(id)?.classList.contains('hidden'));
+  });
+  const hint = document.getElementById('hint');
+  if (hint) hint.classList.toggle('alert', anyHidden);
+}
 function applyPanelState(key, on) {
   (PANEL_MAP[key]||[]).forEach(id => {
     const el = document.getElementById(id);
@@ -851,6 +862,7 @@ function applyPanelState(key, on) {
   const btn = document.querySelector(`.hud-toggle[data-panel="${key}"]`);
   if (btn) { btn.classList.toggle('on', on); btn.classList.toggle('off', !on); }
   try { localStorage.setItem('fountain.panels.'+key, on ? '1' : '0'); } catch {}
+  refreshHintAlert();
 }
 function initPanelToggles() {
   ['metrics','injection','inspector'].forEach(k => {
