@@ -327,6 +327,14 @@ def main():
         print("Installation complete! Verify: PASS")
     else:
         print("Installation finished with verify: FAIL")
+    print("[8] Backfilling conversation graph from existing rows...")
+    bf = subprocess.run(
+        [sys.executable, "-m", "hermes_memory.backfill"],
+        capture_output=True, text=True,
+    )
+    print(bf.stdout)
+    if bf.returncode != 0:
+        print(f"    backfill warning: {bf.stderr[:300]}")
 
 
 if __name__ == "__main__":

@@ -184,13 +184,25 @@ async def run_verify(dsn: Optional[str] = None,
         finally:
             provider.shutdown()
 
-        # cleanup our synthetic rows so reruns stay idempotent-ish
-        await conn.execute("DELETE FROM conversations WHERE session_id = $1",
-                           f"verify-{marker}")
+        # cleanup synthetic SQL rows + leftover AGE Turn vertices from this
+        # run and any prior verify-c5 sessions (graph was surviving DELETE).
+        await conn.execute(
+            "DELETE FROM conversations WHERE session_id LIKE $1",
+            "verify-c5%",
+        )
         await conn.execute(
             "DELETE FROM memory_entries WHERE agent_identity = 'c5-verify' "
             "AND content LIKE 'c5-verify-memory-row:%'"
         )
+        try:
+            import asyncpg as _apg
+
+            pool = await _apg.create_pool(dsn, min_size=1, max_size=2)
+            st = Store(pool, graph_name=cfg.graph)
+            await st.purge_verify_turns()
+            await pool.close()
+        except Exception:
+            pass
     except Exception as exc:
         result.add("pipeline-execution", False, repr(exc)[:200])
     finally:

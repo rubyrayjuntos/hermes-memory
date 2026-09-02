@@ -121,6 +121,12 @@ def validate_bind_host(host: str) -> str:
     return host
 
 
+def is_verify_session(session_id: Any) -> bool:
+    """C5 verify synthetics use session_id verify-c5-verify-<ts>."""
+    s = str(session_id or "").strip().strip('"')
+    return s.startswith("verify-c5")
+
+
 def conversation_first_budget(limit: int) -> tuple[int, int]:
     """Split an 'all' view: conversations take 70%, remainder is File/IMPORTS."""
     n = max(1, int(limit))
@@ -450,6 +456,8 @@ class Runtime:
         degree: Dict[str, int] = {}
         for row in rows:
             src = parse_vertex(row["n"])
+            if src and is_verify_session((src.get("props") or {}).get("session_id")):
+                continue
             if src:
                 nodes[src["id"]] = src
                 degree[src["id"]] = degree.get(src["id"], 0)

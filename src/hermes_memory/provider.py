@@ -437,9 +437,6 @@ class HybridAgeMemoryProvider(MemoryProvider):
     ) -> None:
         """Create Turn->ABOUT->Concept edges with real cosine + bridge."""
         concepts = _extract_concepts(content)
-        if not concepts:
-            return
-        # Compute real cosine per concept; threshold 0.55
         scored: list[tuple[str, float]] = []
         for concept in concepts:
             try:
@@ -449,26 +446,20 @@ class HybridAgeMemoryProvider(MemoryProvider):
             cos = _cosine_similarity(turn_vec, cvec)
             if cos is None:
                 cos = 0.75
-            # Clamp to [-1,1] for safety
             cos = max(-1.0, min(1.0, float(cos)))
             if cos < 0.55:
                 continue
             scored.append((concept, cos))
-        if not scored:
-            return
-        # Ensure labels exist (SAVEPOINT-guarded)
+        # Always MERGE the Turn vertex + bridge, even with zero ABOUT edges.
+        # Title-case extraction missing used to skip the vertex entirely, so
+        # live chats never appeared on the graph (only C5 verify synthetics).
         try:
             await store.ensure_about_labels()
         except Exception:
             logger.debug("ensure_about_labels failed", exc_info=True)
-        # Merge Turn vertex (content truncated 200 chars)
         turn_content = (content or "")[:200]
         turn_props = {"name": f"turn_{conv_id}", "session_id": session_id, "turn_id": int(conv_id), "content": turn_content, "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
-        # Use Concept vertices: MERGE on name; Turn vertex merges via name too
-        # Turn label expects name key; we provide it
-        vids: list[str | None] = []
         try:
-            # Turn vertex first
             vids_turn = await store.merge_vertices_batched([("Turn", turn_props)])
             turn_vid_str = vids_turn[0] if vids_turn else None
             if not turn_vid_str:
@@ -477,13 +468,22 @@ class HybridAgeMemoryProvider(MemoryProvider):
         except Exception:
             logger.debug("Turn vertex merge failed", exc_info=True)
             return
-        # Concept vertices
+        if not scored:
+            try:
+                await store.bridge_turn(conv_id, turn_vid)
+            except Exception:
+                logger.debug("bridge_turn failed", exc_info=True)
+            return
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         concept_items = [("Concept", {"name": c, "created_at": now_iso}) for c, _ in scored]
         try:
             concept_vids = await store.merge_vertices_batched(concept_items)
         except Exception:
             logger.debug("Concept vertex merge failed", exc_info=True)
+            try:
+                await store.bridge_turn(conv_id, turn_vid)
+            except Exception:
+                logger.debug("bridge_turn failed", exc_info=True)
             return
         # Build edges Turn->ABOUT->Concept with real cosine
         edges: list[tuple[str, int, int]] = []
