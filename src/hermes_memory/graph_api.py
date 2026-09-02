@@ -146,6 +146,125 @@ def humanize_node(n: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return n
 
 
+def pack_search(
+    q: str,
+    k: int,
+    hops: int,
+    seeds: List[Dict[str, Any]],
+    seed_vertex_ids: List[str],
+    triples: List[Tuple[Any, ...]],
+) -> Dict[str, Any]:
+    """Pure assembly of /search JSON: seeds, graph, paths, retrieval.
+
+    triples: (n, rel, m[, weight, cosine[, hop]])
+    """
+    seed_ids = {str(v) for v in seed_vertex_ids}
+    nodes: Dict[str, Dict[str, Any]] = {}
+    edges: List[Dict[str, Any]] = []
+    paths: List[Dict[str, Any]] = []
+    by_label: Dict[str, int] = {}
+
+    def _ingest(raw: Any) -> Optional[Dict[str, Any]]:
+        parsed = humanize_node(parse_vertex(raw))
+        if not parsed:
+            return None
+        vid = str(parsed["id"])
+        nodes[vid] = parsed
+        return parsed
+
+    for row in triples:
+        if not row or len(row) < 3:
+            continue
+        n_raw, rel_raw, m_raw = row[0], row[1], row[2]
+        w = float(row[3]) if len(row) > 3 and row[3] is not None else 0.5
+        c = float(row[4]) if len(row) > 4 and row[4] is not None else 0.5
+        hop = int(row[5]) if len(row) > 5 and row[5] is not None else 1
+        src = _ingest(n_raw)
+        dst = _ingest(m_raw)
+        rel = None if rel_raw is None else str(rel_raw).strip().strip('"')
+        if rel in ("", "null", "None"):
+            rel = None
+        if not src or not dst or not rel:
+            continue
+        edges.append({
+            "source": src["id"],
+            "target": dst["id"],
+            "from": src["id"],
+            "to": dst["id"],
+            "label": rel,
+            "weight": w,
+            "cosine": c,
+        })
+        src_is_seed = src["id"] in seed_ids
+        paths.append({
+            "from": src["id"],
+            "to": dst["id"],
+            "rel": rel,
+            "weight": w,
+            "cosine": c,
+            "hop": hop,
+            "seed": src_is_seed,
+            "from_label": src.get("label"),
+            "to_label": dst.get("label"),
+            "from_name": src.get("name") or src.get("title") or src["id"],
+            "to_name": dst.get("name") or dst.get("title") or dst["id"],
+        })
+        by_label[dst.get("label") or ""] = by_label.get(dst.get("label") or "", 0) + 1
+
+    seed_out = []
+    for s in seeds:
+        excerpt = str(s.get("content") or "")[:160]
+        seed_out.append({
+            "id": str(s.get("id")),
+            "score": float(s.get("similarity") or s.get("score") or 0.0),
+            "excerpt": excerpt,
+            "vertex_ids": list(seed_vertex_ids),
+        })
+    ranked = []
+    for p in paths[:k]:
+        ranked.append({
+            "id": p["to"],
+            "title": p["to_name"],
+            "group": p["to_label"],
+            "rank_score": 0.5 * p["cosine"] + 0.3 * p["weight"],
+            "governed": False,
+        })
+    if not ranked:
+        for s in seed_out:
+            ranked.append({
+                "id": s["id"],
+                "title": (s["excerpt"] or s["id"])[:80],
+                "group": "memory",
+                "rank_score": s["score"],
+                "governed": False,
+            })
+    results = [{
+        "id": str(s.get("id")),
+        "content": s.get("content") or "",
+        "score": float(s.get("similarity") or 0.0),
+        "file_path": "",
+    } for s in seeds]
+    return {
+        "query": q,
+        "ranked": ranked[:k],
+        "results": results,
+        "seeds": seed_out,
+        "graph": {"nodes": list(nodes.values()), "edges": edges, "links": edges},
+        "paths": paths,
+        "retrieval": {
+            "k": k,
+            "hops": hops,
+            "seeds": len(seed_out),
+            "bridge_vertices": len(seed_vertex_ids),
+            "vertices_reached": len(nodes),
+            "edges_traversed": len(edges),
+            "paths": len(paths),
+            "by_label": by_label,
+            "graph_backend": "age",
+        },
+    }
+
+
 SESSION_KINDS = frozenset({"interactive", "benchmark", "system_test"})
 
 
@@ -637,62 +756,35 @@ class Runtime:
                 int_ids.append(int(v))
             except (TypeError, ValueError):
                 continue
-        triples = []
+        triples: List[Tuple[Any, ...]] = []
         if int_ids and hops > 0:
-            triples = await self.store.expand_graph(int_ids, limit=max(k * 4, 16))
+            hop1 = await self.store.expand_graph(int_ids, limit=max(k * 4, 16))
+            for row in hop1:
+                triples.append(tuple(row) + (1,))
+            if hops >= 2 and hop1:
+                dest: List[int] = []
+                for row in hop1:
+                    dst = parse_vertex(row[2])
+                    if not dst:
+                        continue
+                    try:
+                        dest.append(int(dst["id"]))
+                    except (TypeError, ValueError):
+                        continue
+                dest = [d for d in dest if d not in set(int_ids)]
+                if dest:
+                    hop2 = await self.store.expand_graph(dest[:32], limit=max(k * 2, 8))
+                    for row in hop2:
+                        triples.append(tuple(row) + (2,))
         t_graph = time.perf_counter()
-        results = []
-        ranked = []
-        by_label: Dict[str, int] = {}
-        for s in seeds:
-            results.append({
-                "id": str(s["id"]),
-                "content": s.get("content") or "",
-                "score": float(s.get("similarity") or 0.0),
-                "file_path": "",
-            })
-        for n, rel, m in triples:
-            src = parse_vertex(n)
-            dst = parse_vertex(m)
-            node = dst or src
-            if not node:
-                continue
-            by_label[node["label"]] = by_label.get(node["label"], 0) + 1
-            ranked.append({
-                "id": node["id"],
-                "title": node["name"],
-                "group": node["label"],
-                "rank_score": 0.69,
-                "governed": False,
-            })
-        if not ranked:
-            for r in results:
-                ranked.append({
-                    "id": r["id"],
-                    "title": (r["content"] or "")[:80] or r["id"],
-                    "group": "memory",
-                    "rank_score": r["score"],
-                    "governed": False,
-                })
-        return {
-            "query": q,
-            "ranked": ranked[:k],
-            "results": results,
-            "retrieval": {
-                "k": k,
-                "hops": hops,
-                "embed_model": getattr(self.cfg, "embed_model", "nomic-embed-text"),
-                "embed_dim": getattr(self.cfg, "embed_dim", 768),
-                "bridge_vertices": len(vids),
-                "embed_ms": round((t_embed - t0) * 1000, 1),
-                "vector_ms": round((t_vec - t_embed) * 1000, 1),
-                "graph_ms": round((t_graph - t_vec) * 1000, 1),
-                "fusion_ms": round((time.perf_counter() - t_graph) * 1000, 1),
-                "by_label": by_label,
-                "edges_traversed": len(triples),
-                "graph_backend": "age",
-            },
-        }
+        packed = pack_search(q, k, hops, seeds, [str(v) for v in vids], triples)
+        packed["retrieval"]["embed_model"] = getattr(self.cfg, "embed_model", "nomic-embed-text")
+        packed["retrieval"]["embed_dim"] = getattr(self.cfg, "embed_dim", 768)
+        packed["retrieval"]["embed_ms"] = round((t_embed - t0) * 1000, 1)
+        packed["retrieval"]["vector_ms"] = round((t_vec - t_embed) * 1000, 1)
+        packed["retrieval"]["graph_ms"] = round((t_graph - t_vec) * 1000, 1)
+        packed["retrieval"]["fusion_ms"] = round((time.perf_counter() - t_graph) * 1000, 1)
+        return packed
 
     def node(self, vid: int) -> Dict[str, Any]:
         assert self.store is not None
