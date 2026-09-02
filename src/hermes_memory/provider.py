@@ -468,41 +468,60 @@ class HybridAgeMemoryProvider(MemoryProvider):
         except Exception:
             logger.debug("Turn vertex merge failed", exc_info=True)
             return
-        if not scored:
-            try:
-                await store.bridge_turn(conv_id, turn_vid)
-            except Exception:
-                logger.debug("bridge_turn failed", exc_info=True)
-            return
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        concept_items = [("Concept", {"name": c, "created_at": now_iso}) for c, _ in scored]
-        try:
-            concept_vids = await store.merge_vertices_batched(concept_items)
-        except Exception:
-            logger.debug("Concept vertex merge failed", exc_info=True)
-            try:
-                await store.bridge_turn(conv_id, turn_vid)
-            except Exception:
-                logger.debug("bridge_turn failed", exc_info=True)
-            return
-        # Build edges Turn->ABOUT->Concept with real cosine
         edges: list[tuple[str, int, int]] = []
         edge_props: dict[tuple[str, int, int], dict] = {}
-        for (concept, cos), cvid_str in zip(scored, concept_vids):
-            if not cvid_str:
-                continue
+        # Session chain: Turn -IN_SESSION-> Session, prev -NEXT-> Turn
+        if session_id:
             try:
-                cvid = int(cvid_str)
-            except ValueError:
-                continue
-            edges.append(("ABOUT", turn_vid, cvid))
-            edge_props[("ABOUT", turn_vid, cvid)] = {"weight": 1.0, "cosine": float(cos), "created_at": now_iso}
+                sess_vids = await store.merge_vertices_batched(
+                    [("Session", {"name": session_id, "created_at": now_iso})]
+                )
+                sess_vid = int(sess_vids[0]) if sess_vids and sess_vids[0] else None
+                if sess_vid:
+                    edges.append(("IN_SESSION", turn_vid, sess_vid))
+                    edge_props[("IN_SESSION", turn_vid, sess_vid)] = {
+                        "weight": 1.0, "cosine": 1.0, "created_at": now_iso,
+                    }
+            except Exception:
+                logger.debug("Session vertex merge failed", exc_info=True)
+            try:
+                prev_id = await store.previous_conversation_id(session_id, conv_id)
+                if prev_id:
+                    prev_vids = await store.merge_vertices_batched(
+                        [("Turn", {"name": f"turn_{prev_id}"})]
+                    )
+                    prev_vid = int(prev_vids[0]) if prev_vids and prev_vids[0] else None
+                    if prev_vid:
+                        edges.append(("NEXT", prev_vid, turn_vid))
+                        edge_props[("NEXT", prev_vid, turn_vid)] = {
+                            "weight": 1.0, "cosine": 1.0, "created_at": now_iso,
+                        }
+            except Exception:
+                logger.debug("NEXT edge failed", exc_info=True)
+        if scored:
+            concept_items = [("Concept", {"name": c, "created_at": now_iso}) for c, _ in scored]
+            try:
+                concept_vids = await store.merge_vertices_batched(concept_items)
+            except Exception:
+                logger.debug("Concept vertex merge failed", exc_info=True)
+                concept_vids = []
+            for (concept, cos), cvid_str in zip(scored, concept_vids or []):
+                if not cvid_str:
+                    continue
+                try:
+                    cvid = int(cvid_str)
+                except ValueError:
+                    continue
+                edges.append(("ABOUT", turn_vid, cvid))
+                edge_props[("ABOUT", turn_vid, cvid)] = {
+                    "weight": 1.0, "cosine": float(cos), "created_at": now_iso,
+                }
         if edges:
             try:
                 await store.merge_edges_batched(edges, edge_props=edge_props)
             except Exception:
-                logger.debug("ABOUT edge merge failed", exc_info=True)
-        # Bridge for vector-seed expansion
+                logger.debug("turn edge merge failed", exc_info=True)
         try:
             await store.bridge_turn(conv_id, turn_vid)
         except Exception:

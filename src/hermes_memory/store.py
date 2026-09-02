@@ -349,7 +349,14 @@ class Store:
             try:
                 async with conn.transaction():
                     for idx, (kind, label) in enumerate(
-                        [("v", "Turn"), ("v", "Concept"), ("e", "ABOUT")]
+                        [
+                            ("v", "Turn"),
+                            ("v", "Concept"),
+                            ("v", "Session"),
+                            ("e", "ABOUT"),
+                            ("e", "NEXT"),
+                            ("e", "IN_SESSION"),
+                        ]
                     ):
                         sp = savepoint_name(f"ensure_{label.lower()}", idx)
                         await conn.execute(f"SAVEPOINT {sp}")
@@ -388,6 +395,20 @@ class Store:
                 )
             except Exception:
                 logger.debug("bridge_turn failed", exc_info=True)
+
+    async def previous_conversation_id(self, session_id: str, conv_id: int) -> Optional[int]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                SELECT id FROM conversations
+                 WHERE session_id = $1 AND id < $2
+                 ORDER BY id DESC
+                 LIMIT 1
+                """,
+                session_id,
+                int(conv_id),
+            )
+        return int(row) if row is not None else None
 
     async def purge_verify_turns(self) -> int:
         """DETACH DELETE Turn vertices whose session_id is a C5 verify synthetic.
