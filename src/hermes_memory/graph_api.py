@@ -197,7 +197,7 @@ def match_route(method: str, path: str) -> Tuple[str, Dict[str, str]]:
         return "search", {}
     if method == "GET" and path in ("/api/librarian/verify",):
         return "verify", {}
-    if method == "GET" and path in ("/", "/3d.html", "/api/librarian/pane"):
+    if method == "GET" and path in ("/", "/3d.html", "/fountain.html", "/api/librarian/pane"):
         return "pane", {}
     if method == "GET" and path in ("/index.html",):
         return "pane_index", {}
@@ -231,7 +231,7 @@ def find_pane_dir() -> Optional[Path]:
         Path.cwd() / "docs" / "graph",
     ]
     for cand in candidates:
-        if (cand / "3d.html").is_file():
+        if (cand / "fountain.html").is_file() or (cand / "3d.html").is_file():
             return cand
     return None
 
@@ -433,6 +433,7 @@ class Runtime:
             OPTIONAL MATCH (n)-[r]->(m)
             RETURN n, type(r) AS rel, m, id(n), id(m),
                    coalesce(r.weight, 0.5), coalesce(r.cosine, 0.5)
+            {("ORDER BY coalesce(n.turn_id, 0) DESC" if label == "Turn" else "")}
             LIMIT {int(limit)}
         """
         sp = savepoint_name("g3d", 0 if not label else 1)
@@ -489,7 +490,7 @@ class Runtime:
             "links": links,
             "meta": {
                 "limit": limit,
-                "label": label or "all",
+                "label": label or "Turn+File",
                 "verts": len(out_nodes),
                 "edges": len(links),
             },
@@ -808,7 +809,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(501, {"error": "not implemented", "detail": "read-only viz API"})
                 return
             if route == "pane":
-                self._serve_pane("3d.html")
+                self._serve_pane("fountain.html")
                 return
             if route == "pane_index":
                 self._serve_pane("index.html")
@@ -865,6 +866,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "pane html not found in repo docs/graph"})
             return
         path = pane / name
+        if not path.is_file():
+            path = pane / "fountain.html"
         if not path.is_file():
             path = pane / "3d.html"
         body = path.read_bytes()

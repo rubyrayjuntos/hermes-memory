@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Hermes Librarian — Fountain (live manifold)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+Garamond:ital,wght@0,500;1,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.157.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.157.0/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    :root {
+      --lapis: #234A8A;
+      --lapis-ink: #1E3A5F;
+      --turquoise: #2F8F8A;
+      --alabaster: #EAE3D6;
+      --amber: #C9943F;
+      --parchment: #E9E3D4;
+      --ink: #1E2D45;
+      --seed: #d946a6;
+      --about: #7c3aed;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--parchment); color: var(--ink);
+      font-family: "Cormorant Garamond", serif; overflow: hidden; }
+    #stage { position: absolute; inset: 0; }
+    header {
+      position: absolute; z-index: 20; left: 12px; right: 12px; top: 10px;
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      border: 2.5px solid #2A5DB0; border-radius: 18px; padding: 10px 16px;
+      background: rgba(246,243,232,0.92); box-shadow: 0 8px 28px rgba(30,58,95,.14);
+    }
+    header h1 { font-family: Cinzel, serif; font-size: 18px; letter-spacing: .14em; color: #16325C; }
+    header p { font-style: italic; font-size: 13px; color: #5A6E87; }
+    .status { font-family: "JetBrains Mono", monospace; font-size: 10px; color: #5B7AA0; display: flex; align-items: center; gap: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #2A5DB0; animation: pulse 1.6s infinite; }
+    .dot.bad { background: #8B3A2E; animation: none; }
+    .dot.warn { background: #C9943F; }
+    @keyframes pulse { 50% { opacity: .35 } }
+    .legend { display: flex; gap: 10px; flex-wrap: wrap; font-family: Cinzel, serif; font-size: 9px; letter-spacing: .12em; color: #1E3A5F; }
+    .gem { width: 10px; height: 10px; transform: rotate(45deg); border-radius: 2px; display: inline-block; }
+    #hud {
+      position: absolute; z-index: 20; top: 78px; right: 12px; bottom: 12px;
+      width: min(420px, 38vw); min-width: 320px; display: flex; flex-direction: column; gap: 10px;
+      overflow: auto;
+    }
+    .panel {
+      border: 2px solid #2A5DB0; border-radius: 16px; padding: 12px 14px;
+      background: rgba(242,248,250,.9); box-shadow: 0 10px 28px rgba(30,70,120,.12);
+    }
+    .panel h2 { font-family: Cinzel, serif; font-size: 12px; letter-spacing: .18em; color: #1E3A5F; margin-bottom: 8px; }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric { border: 1px solid rgba(42,93,176,.15); background: rgba(238,245,251,.85); border-radius: 10px; padding: 8px 10px; }
+    .metric .k { display: block; font-family: Cinzel, serif; font-size: 8.5px; letter-spacing: .14em; color: #6A86A8; }
+    .metric .v { display: block; font-family: Cinzel, serif; font-size: 14px; font-weight: 700; color: #1E3A5F; }
+    .metric .s { font-family: "JetBrains Mono", monospace; font-size: 10px; color: #7A92B1; }
+    textarea {
+      width: 100%; min-height: 78px; resize: none; border: 0; background: transparent;
+      font-family: "Cormorant Garamond", serif; font-size: 15px; color: #1E2F49; outline: none;
+    }
+    .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    button {
+      font-family: Cinzel, serif; font-size: 9px; letter-spacing: .14em; font-weight: 600;
+      background: #1E3A5F; color: #fff; border: 0; border-radius: 999px; padding: 6px 12px; cursor: pointer;
+    }
+    button.ghost { background: #DCE8FA; color: #1E3A5F; }
+    button:hover { filter: brightness(1.08); }
+    .banner { font-family: "JetBrains Mono", monospace; font-size: 10px; padding: 8px 10px; border-radius: 10px; }
+    .banner.good { background: #0F2340; color: #86efac; }
+    .banner.weak { background: #0F2340; color: #fde047; }
+    .banner.bad { background: #3b1210; color: #fecaca; }
+    pre, .mono { font-family: "JetBrains Mono", monospace; font-size: 11px; line-height: 1.45; color: #8ED8E8; white-space: pre-wrap; }
+    .term { background: #0F2340; border-radius: 12px; padding: 10px; color: #8ED8E8; max-height: 180px; overflow: auto; }
+    .list { max-height: 160px; overflow: auto; background: rgba(255,255,255,.55); border-radius: 10px; }
+    .list button { all: unset; display: flex; width: 100%; gap: 8px; align-items: center; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+    .list button:hover, .list button.on { background: #DCE8FA; }
+    .hint { position: absolute; left: 16px; bottom: 14px; z-index: 20; font-style: italic; font-size: 13px; color: #5E7A97; }
+    #filewarn { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 50; background: #8B3A2E; color: #F7F3EB; padding: 8px 12px; font-size: 12px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="filewarn">file:// origin cannot fetch the Librarian API. Serve this folder over http, then open the http URL.</div>
+  <div id="stage"></div>
+  <header>
+    <div>
+      <h1>THE HERMES LIBRARIAN</h1>
+      <p>Fountain live — gems are AGE vertices; threads are typed edges; shells are hop-from-seed</p>
+    </div>
+    <div class="legend">
+      <span><i class="gem" style="background:#234A8A"></i> FILE / SEED</span>
+      <span><i class="gem" style="background:#2F8F8A"></i> MODULE / BRIDGE</span>
+      <span><i class="gem" style="background:#EAE3D6;border:1px solid #fff"></i> TURN</span>
+      <span><i class="gem" style="background:#C9943F"></i> DEP / CONCEPT</span>
+    </div>
+    <div class="status"><span class="dot" id="dot"></span><span id="api-status">connecting</span></div>
+  </header>
+  <aside id="hud">
+    <div class="panel">
+      <div class="row"><h2>MANIFOLD METRICS</h2><span class="mono" id="mode-tag">CATALOG</span></div>
+      <div class="metrics" id="metrics"></div>
+      <div class="banner weak" id="contrib" style="margin-top:8px">awaiting hybrid retrieval</div>
+    </div>
+    <div class="panel">
+      <h2>ACTIVE PROMPT INJECTION</h2>
+      <textarea id="q">hybrid age memory</textarea>
+      <div class="row">
+        <span class="mono" style="color:#7A92B1">what the model sees this Turn</span>
+        <div>
+          <button class="ghost" id="btn-catalog" type="button">CATALOG</button>
+          <button id="btn-dissolve" type="button">DISSOLVE →</button>
+        </div>
+      </div>
+      <div class="term" id="injection" style="margin-top:8px">(run DISSOLVE)</div>
+    </div>
+    <div class="panel">
+      <div class="row"><h2>LIVE AGE HOOK</h2><span class="mono" id="sel-meta">click a gem</span></div>
+      <div class="term" id="hook"></div>
+      <div class="list" id="nodelist"></div>
+    </div>
+  </aside>
+  <div class="hint">Drag to orbit · scroll to elevate · click gem · distances = hop shells, not physics</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+const API = 'http://127.0.0.1:7890';
+const MAT = {
+  lapis:      { color: 0x234A8A, transmission: 0.18, roughness: 0.18, metalness: 0.05, clearcoat: 1,   ior: 1.62 },
+  turquoise:  { color: 0x2F8F8A, transmission: 0.26, roughness: 0.24, metalness: 0.02, clearcoat: 1,   ior: 1.54 },
+  alabaster:  { color: 0xEAE3D6, transmission: 0.40, roughness: 0.30, metalness: 0.00, clearcoat: 0.6, ior: 1.45 },
+  amber:      { color: 0xC9943F, transmission: 0.48, roughness: 0.20, metalness: 0.00, clearcoat: 0.8, ior: 1.55 },
+  seed:       { color: 0xd946a6, transmission: 0.22, roughness: 0.16, metalness: 0.08, clearcoat: 1,   ior: 1.60 },
+};
+const LABEL_GEM = {
+  File: 'lapis', Module: 'turquoise', Turn: 'alabaster', Session: 'alabaster',
+  Dependency: 'amber', Concept: 'amber', Standard: 'amber', Person: 'amber',
+  Project: 'amber', Technology: 'amber', Tool: 'amber', Skill: 'amber',
+  Organization: 'amber', Domain: 'amber', Repo: 'amber'
+};
+const EDGE_COLOR = { IMPORTS: 0x2A5DB0, ABOUT: 0x7c3aed, GOVERNED_BY: 0xC9943F };
+
+let raw = { nodes: [], links: [] };
+let hops = new Map();
+let seedIds = new Set();
+let selected = null;
+let lastStats = null;
+let scene, camera, renderer, controls, graphGroup, clock;
+
+function sid(x) { return String(x); }
+
+function gemKind(n) {
+  if (n._searchSeed) return 'seed';
+  return LABEL_GEM[n.label] || LABEL_GEM[n.group] || 'lapis';
+}
+
+function setStatus(ok, txt) {
+  const d = document.getElementById('dot');
+  d.className = 'dot' + (ok === true ? '' : ok === 'warn' ? ' warn' : ' bad');
+  document.getElementById('api-status').textContent = txt;
+}
+
+async function safeFetch(url) {
+  try {
+    const r = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    return await r.json();
+  } catch (e) {
+    setStatus(false, String(e.message || e));
+    return null;
+  }
+}
+
+function bfsHops(nodes, links, seeds) {
+  const adj = new Map();
+  nodes.forEach(n => adj.set(n.id, []));
+  links.forEach(l => {
+    const a = sid(l.source), b = sid(l.target);
+    if (!adj.has(a)) adj.set(a, []);
+    if (!adj.has(b)) adj.set(b, []);
+    adj.get(a).push(b); adj.get(b).push(a);
+  });
+  const h = new Map();
+  const q = [];
+  seeds.forEach(id => { h.set(id, 0); q.push(id); });
+  while (q.length) {
+    const u = q.shift();
+    for (const v of (adj.get(u) || [])) {
+      if (!h.has(v)) { h.set(v, h.get(u) + 1); q.push(v); }
+    }
+  }
+  return h;
+}
+
+function hash01(s) {
+  let x = 0;
+  for (let i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) >>> 0;
+  return (x % 10000) / 10000;
+}
+
+function layout(nodes, links, seedSet, mode) {
+  const hmap = seedSet.size ? bfsHops(nodes, links, seedSet) : new Map();
+  hops = hmap;
+  const byHop = new Map();
+  const byLabel = new Map();
+  nodes.forEach(n => {
+    const hop = hmap.has(n.id) ? hmap.get(n.id) : null;
+    n._hop = hop;
+    if (mode === 'search' && hop != null) {
+      if (!byHop.has(hop)) byHop.set(hop, []);
+      byHop.get(hop).push(n);
+    } else {
+      const lab = n.label || n.group || 'Node';
+      if (!byLabel.has(lab)) byLabel.set(lab, []);
+      byLabel.get(lab).push(n);
+    }
+  });
+  const place = (list, radius, y0) => {
+    list.forEach((n, i) => {
+      const t = (i / Math.max(list.length, 1)) * Math.PI * 2 + hash01(n.id);
+      const r = radius + (hash01(n.id + 'r') - 0.5) * 1.4;
+      n.pos = [Math.cos(t) * r, y0 + (hash01(n.id + 'y') - 0.5) * 0.7, Math.sin(t) * r];
+      n.offset = hash01(n.id) * Math.PI * 2;
+    });
+  };
+  if (mode === 'search' && byHop.size) {
+    [...byHop.keys()].sort((a,b)=>a-b).forEach(hop => {
+      place(byHop.get(hop), 3.2 + hop * 7.2, 8 + hop * 0.22);
+    });
+    const unknown = nodes.filter(n => n._hop == null);
+    place(unknown, 26, 8.4);
+  } else {
+    const order = ['Turn','Concept','Session','Standard','File','Module','Dependency'];
+    const labs = [...new Set([...order, ...byLabel.keys()])].filter(k => byLabel.has(k));
+    labs.forEach((lab, i) => place(byLabel.get(lab), 4 + i * 4.6, 8));
+  }
+  return nodes;
+}
+
+function materialFor(kind, highlight) {
+  const spec = MAT[kind] || MAT.lapis;
+  return new THREE.MeshPhysicalMaterial({
+    color: spec.color, roughness: spec.roughness, metalness: spec.metalness,
+    transmission: spec.transmission, thickness: 0.55, ior: spec.ior,
+    clearcoat: spec.clearcoat, clearcoatRoughness: 0.18, flatShading: true,
+    emissive: highlight ? 0xffffff : 0x000000, emissiveIntensity: highlight ? 0.12 : 0
+  });
+}
+
+function rebuildScene() {
+  if (graphGroup) {
+    scene.remove(graphGroup);
+    graphGroup.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) {
+        if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+        else o.material.dispose();
+      }
+    });
+  }
+  graphGroup = new THREE.Group();
+  const nodeMap = new Map(raw.nodes.map(n => [n.id, n]));
+
+  raw.links.forEach(l => {
+    const a = nodeMap.get(sid(l.source)), b = nodeMap.get(sid(l.target));
+    if (!a || !b || !a.pos || !b.pos) return;
+    const pa = new THREE.Vector3(...a.pos), pb = new THREE.Vector3(...b.pos);
+    const mid = pa.clone().add(pb).multiplyScalar(0.5);
+    mid.y -= (l.label === 'ABOUT' ? 0.35 : 0.55);
+    const curve = new THREE.QuadraticBezierCurve3(pa, mid, pb);
+    const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(l.label === 'ABOUT' ? 16 : 8));
+    const about = l.label === 'ABOUT';
+    const mat = new THREE.LineBasicMaterial({
+      color: EDGE_COLOR[l.label] || 0x2A5DB0,
+      transparent: true,
+      opacity: about ? 0.92 : (l._isExpansion ? 0.75 : 0.38),
+      linewidth: 1
+    });
+    const line = new THREE.Line(geo, mat);
+    line.userData.edge = l;
+    graphGroup.add(line);
+  });
+
+  raw.nodes.forEach(n => {
+    if (!n.pos) return;
+    const kind = gemKind(n);
+    const radius = n._searchSeed ? 0.32 : (n.label === 'Turn' ? 0.22 : 0.26);
+    const geo = new THREE.IcosahedronGeometry(radius, 0);
+    const mesh = new THREE.Mesh(geo, materialFor(kind, n._searchSeed));
+    mesh.position.set(...n.pos);
+    mesh.userData.node = n;
+    mesh.castShadow = true;
+    const glow = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(radius, 1),
+      new THREE.MeshBasicMaterial({ color: MAT[kind].color, transparent: true, opacity: n._searchSeed ? 0.22 : 0.06, depthWrite: false })
+    );
+    glow.scale.setScalar(1.4);
+    mesh.add(glow);
+    graphGroup.add(mesh);
+  });
+  scene.add(graphGroup);
+}
+
+function initThree() {
+  const el = document.getElementById('stage');
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xE9E3D4);
+  camera = new THREE.PerspectiveCamera(42, el.clientWidth / el.clientHeight, 0.1, 200);
+  camera.position.set(0, 22, 36);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(el.clientWidth, el.clientHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  el.appendChild(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0xE8F1FF, 0.45));
+  const sun = new THREE.DirectionalLight(0xFFF6E0, 1.85);
+  sun.position.set(18, 28, 12); sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  scene.add(sun);
+  scene.add(new THREE.DirectionalLight(0x8AB8E8, 0.55)).position.set(-14, 18, -10);
+  scene.add(new THREE.PointLight(0xCDE8FF, 0.6, 40)).position.set(0, 10, 0);
+
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(120, 120),
+    new THREE.MeshStandardMaterial({ color: 0xD9D3C2, roughness: 0.95, metalness: 0.01 })
+  );
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+  scene.add(ground);
+  [ [22, 28], [34, 40] ].forEach(([inner, outer], i) => {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(inner, outer, 32),
+      new THREE.MeshStandardMaterial({ color: i ? 0xB9B6A6 : 0xC2BFAE, transparent: true, opacity: i ? 0.16 : 0.22, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.01 + i * 0.01;
+    scene.add(ring);
+  });
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.07;
+  controls.minPolarAngle = Math.PI * 0.12; controls.maxPolarAngle = Math.PI * 0.48;
+  controls.minDistance = 4; controls.maxDistance = 60; controls.target.set(0, 8, 0);
+
+  const ray = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  renderer.domElement.addEventListener('pointerdown', ev => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    ray.setFromCamera(mouse, camera);
+    const hits = ray.intersectObjects(graphGroup ? graphGroup.children : [], false);
+    const hit = hits.find(h => h.object.userData.node);
+    if (hit) selectNode(hit.object.userData.node);
+  });
+
+  clock = new THREE.Clock();
+  function tick() {
+    requestAnimationFrame(tick);
+    const t = clock.getElapsedTime();
+    if (graphGroup) {
+      graphGroup.children.forEach(obj => {
+        const n = obj.userData.node;
+        if (!n || !n.pos) return;
+        obj.position.y = n.pos[1] + Math.sin(t * 0.42 + n.offset) * 0.18;
+        obj.rotation.y += 0.0035;
+      });
+    }
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  tick();
+  window.addEventListener('resize', () => {
+    camera.aspect = el.clientWidth / el.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(el.clientWidth, el.clientHeight);
+  });
+}
+
+function nodeName(n) {
+  return n.name || n.title || n.label || n.id;
+}
+
+function selectNode(n) {
+  selected = n;
+  document.getElementById('sel-meta').textContent = n.id.slice(0, 10) + '… · ' + (n.label || '');
+  const nbr = raw.links.filter(l => sid(l.source) === n.id || sid(l.target) === n.id);
+  const lines = [];
+  lines.push(`// LIVE AGE — ${nodeName(n)} (${n.label || n.group || '?'})`);
+  lines.push(`id: "${n.id}"`);
+  lines.push(`gem: ${gemKind(n)}`);
+  if (n._hop != null) lines.push(`hop_from_seed: ${n._hop}`);
+  if (n._searchSeed) lines.push(`role: VECTOR_SEED  score=${n._seed_score ?? '?'}`);
+  else if (n._searchExpanded) lines.push('role: GRAPH_EXPANDED');
+  lines.push(`degree_in_view: ${nbr.length}`);
+  nbr.slice(0, 12).forEach(l => {
+    const other = sid(l.source) === n.id ? sid(l.target) : sid(l.source);
+    const on = raw.nodes.find(x => x.id === other);
+    lines.push(`  -[:${l.label || 'REL'}]- ${on ? nodeName(on) : other}`);
+  });
+  document.getElementById('hook').textContent = lines.join('\n');
+  [...document.querySelectorAll('#nodelist button')].forEach(b => {
+    b.classList.toggle('on', b.dataset.id === n.id);
+  });
+}
+
+function renderList() {
+  const el = document.getElementById('nodelist');
+  const ranked = [...raw.nodes].sort((a,b) => (a._hop ?? 9) - (b._hop ?? 9) || (b.val||0) - (a.val||0));
+  el.innerHTML = ranked.slice(0, 80).map(n => {
+    const kind = gemKind(n);
+    const hex = '#' + MAT[kind].color.toString(16).padStart(6, '0');
+    const tag = n._searchSeed ? 'SEED' : (n._hop != null ? 'H' + n._hop : (n.label || ''));
+    return `<button data-id="${n.id}" type="button"><i class="gem" style="background:${hex}"></i><span>${nodeName(n).slice(0,42)}</span><span class="mono" style="margin-left:auto;color:#7A92B1">${tag}</span></button>`;
+  }).join('');
+  el.querySelectorAll('button').forEach(b => b.onclick = () => {
+    const n = raw.nodes.find(x => x.id === b.dataset.id);
+    if (n) selectNode(n);
+  });
+}
+
+function setMetrics(stats, extra) {
+  const v = stats?.vertices || {};
+  const e = stats?.edges || {};
+  const b = stats?.bridge || {};
+  const vec = stats?.vector || {};
+  const i = stats?.integrity || {};
+  const cells = [
+    ['VERTICES', extra?.verts ?? v.total ?? raw.nodes.length, `${v.File||0} File · ${v.Turn||0} Turn`],
+    ['EDGES', extra?.edges ?? e.total ?? raw.links.length, `${e.IMPORTS||0} IMPORTS · ${e.ABOUT != null ? e.ABOUT : ''} ABOUT`],
+    ['BRIDGE', b.rows ?? '—', `${b.vertices_bridged||0} verts bridged`],
+    ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'}`],
+  ];
+  document.getElementById('metrics').innerHTML = cells.map(([k,val,sub]) =>
+    `<div class="metric"><span class="k">${k}</span><span class="v">${val}</span><span class="s">${sub}</span></div>`).join('');
+  if (i.healthy === false) setStatus('warn', `live · drifted ${i.drifted} · isolated ${i.isolated_files}`);
+}
+
+function reconstructInjection(res) {
+  const seeds = res.seeds || [];
+  const g = res.graph || { nodes: [], edges: [] };
+  const ret = res.retrieval || {};
+  let out = '';
+  seeds.forEach((s, i) => { out += `[SEED V${i+1} ${((s.score||0)*100|0)}%] ${(s.excerpt||s.file_path||'').slice(0,160)}\n\n`; });
+  (g.nodes || []).filter(n => !n.seed).slice(0, 6).forEach((n, i) => {
+    out += `[GRAPH G${i+1}] ${n.group || n.label}: ${n.title || n.label || n.id}\n`;
+  });
+  document.getElementById('injection').textContent = out || '(empty retrieval — graph ADDED LITTLE)';
+  const seedC = ret.seeds ?? seeds.length;
+  const reached = ret.vertices_reached || (g.nodes||[]).length;
+  const exp = Math.max(0, reached - seedC);
+  const contrib = (ret.edges_traversed || 0) > 0 && exp > 0;
+  const el = document.getElementById('contrib');
+  el.className = 'banner ' + (contrib ? 'good' : 'weak');
+  el.textContent = contrib
+    ? `graph CONTRIBUTED · seeds ${seedC} → ${reached} verts / ${ret.edges_traversed} edges · hops=${ret.hops}`
+    : `graph ADDED LITTLE · seeds ${seedC} expanded ${exp} edges ${ret.edges_traversed||0}`;
+}
+
+function applyCatalog(payload) {
+  seedIds = new Set();
+  raw.nodes = (payload.nodes || []).map(n => ({
+    ...n, id: sid(n.id),
+    name: n.name || n.title || n.label,
+    label: n.label || n.group,
+    _searchSeed: false, _searchExpanded: false
+  }));
+  raw.links = (payload.links || payload.edges || []).map(l => ({
+    ...l, source: sid(l.source || l.from), target: sid(l.target || l.to), label: l.label
+  }));
+  layout(raw.nodes, raw.links, seedIds, 'catalog');
+  document.getElementById('mode-tag').textContent = 'CATALOG';
+  rebuildScene();
+  renderList();
+  document.getElementById('contrib').className = 'banner weak';
+  document.getElementById('contrib').textContent = `catalog snapshot · ${raw.nodes.length} gems · ${raw.links.length} threads · rings = AGE label`;
+}
+
+function applySearch(res) {
+  const seeds = res.seeds || [];
+  seedIds = new Set(seeds.flatMap(s => (s.vertex_ids || []).map(sid)));
+  const g = res.graph || { nodes: [], edges: [] };
+  raw.nodes = (g.nodes || []).map(n => {
+    const id = sid(n.id);
+    const isSeed = seedIds.has(id) || n.seed === true;
+    const m = seeds.find(s => (s.vertex_ids || []).some(v => sid(v) === id));
+    return {
+      ...n, id,
+      name: n.title || n.label || n.name,
+      label: n.group || n.label,
+      _searchSeed: isSeed,
+      _searchExpanded: !isSeed,
+      _seed_score: m ? m.score : n.seed_score
+    };
+  });
+  raw.links = (g.edges || g.links || []).map(l => ({
+    ...l,
+    source: sid(l.source || l.from),
+    target: sid(l.target || l.to),
+    _isExpansion: true
+  }));
+  layout(raw.nodes, raw.links, seedIds, 'search');
+  document.getElementById('mode-tag').textContent = 'INJECTION';
+  rebuildScene();
+  renderList();
+  reconstructInjection(res);
+}
+
+async function loadCatalog() {
+  const [g3d, stats] = await Promise.all([
+    safeFetch(`${API}/api/librarian/graph/3d?limit=250&fresh=1`),
+    safeFetch(`${API}/api/librarian/graph/stats?fresh=1`)
+  ]);
+  if (!g3d) return;
+  applyCatalog(g3d);
+  if (stats) {
+    lastStats = stats;
+    setMetrics(stats, { verts: g3d.nodes.length, edges: (g3d.links||[]).length });
+    setStatus(true, `live AGE ${g3d.meta?.verts || g3d.nodes.length}v / ${g3d.meta?.edges || g3d.links.length}e`);
+  }
+}
+
+async function dissolve() {
+  const q = document.getElementById('q').value.trim() || 'hybrid age memory';
+  document.getElementById('injection').textContent = 'embedding → pgvector → bridge → 1–2 hop AGE…';
+  const res = await safeFetch(`${API}/api/librarian/search?q=${encodeURIComponent(q)}&hops=2&k=6&fresh=1`);
+  if (!res) {
+    document.getElementById('contrib').className = 'banner bad';
+    document.getElementById('contrib').textContent = 'search failed — is graph_api on :7890?';
+    return;
+  }
+  applySearch(res);
+  const ret = res.retrieval || {};
+  if (lastStats) setMetrics(lastStats, { verts: raw.nodes.length, edges: raw.links.length });
+  setStatus(true, `hybrid ${res.timing_ms?.total||'?'}ms · ${ret.seeds||0} seeds → ${ret.vertices_reached||raw.nodes.length}v`);
+}
+
+document.getElementById('btn-dissolve').onclick = dissolve;
+document.getElementById('btn-catalog').onclick = loadCatalog;
+
+if (location.protocol === 'file:') document.getElementById('filewarn').style.display = 'block';
+
+initThree();
+loadCatalog().then(() => {
+  // default: show the injection manifold that actually feeds the model
+  dissolve();
+});
+</script>
+</body>
+</html>
