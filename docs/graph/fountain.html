@@ -73,6 +73,10 @@
     button.ghost { background: #DCE8FA; color: #1E3A5F; }
     button:hover { filter: brightness(1.08); }
     button:disabled { opacity: .45; cursor: default; filter: none; }
+    button.hud-toggle { padding: 4px 8px; font-size: 8px; min-width: 52px; }
+    button.hud-toggle.on { background: #1E3A5F; color: #fff; }
+    button.hud-toggle.off { background: #DCE8FA; color: #5B7AA0; text-decoration: line-through; opacity: .85; }
+    .panel.hidden { display: none; }
     input[type=range] { accent-color: #1E3A5F; vertical-align: middle; }
     input[type=checkbox] { accent-color: #1E3A5F; vertical-align: middle; margin-right: 4px; }
     .banner { font-family: "JetBrains Mono", monospace; font-size: 10px; padding: 8px 10px; border-radius: 10px; }
@@ -104,9 +108,14 @@
       <span><i class="gem" style="background:#94A3B8;opacity:0.55"></i> GHOST</span>
     </div>
     <div class="status"><span class="dot" id="dot"></span><span id="api-status">connecting</span></div>
+    <div class="hud-toggles" style="display:flex;gap:6px;align-items:center">
+      <button class="ghost hud-toggle on" data-panel="metrics" type="button" title="Toggle Manifold Metrics (M)">METRICS</button>
+      <button class="ghost hud-toggle on" data-panel="injection" type="button" title="Toggle Prompt Injection (I)">INJECT</button>
+      <button class="ghost hud-toggle on" data-panel="inspector" type="button" title="Toggle Graph Inspector (G)">GRAPH</button>
+    </div>
   </header>
   <aside id="hud">
-    <div class="panel">
+    <div class="panel" id="panel-metrics">
       <div class="row"><h2>MANIFOLD METRICS</h2><span class="mono" id="mode-tag">CATALOG</span></div>
       <div class="metrics" id="metrics"></div>
       <div class="banner weak" id="contrib" style="margin-top:8px">awaiting hybrid retrieval</div>
@@ -115,7 +124,7 @@
       <div class="row" style="margin-top:4px"><label class="mono" style="color:#7A92B1"><input type="checkbox" id="hide-bench" checked> hide bench/verify</label><span class="mono" id="live-persisted" style="color:#1E3A5F">persisted —</span></div>
       <div class="mono" id="edge-tip" style="display:none;position:fixed;z-index:40;background:#0F2340;color:#8ED8E8;padding:8px 10px;border-radius:10px;max-width:380px;pointer-events:none;font-size:11px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,.28)"></div>
     </div>
-    <div class="panel">
+    <div class="panel" id="panel-injection">
       <h2>ACTIVE PROMPT INJECTION</h2>
       <textarea id="q">hybrid age memory</textarea>
       <div class="row">
@@ -127,17 +136,17 @@
       </div>
       <div class="term" id="injection" style="margin-top:8px">(run DISSOLVE)</div>
     </div>
-    <div class="panel">
+    <div class="panel" id="panel-topo">
       <div class="row"><h2>INFERENCE TOPOLOGY</h2><span class="mono" id="topo-meta">DISSOLVE to walk</span></div>
       <div class="list" id="topo-list"></div>
     </div>
-    <div class="panel">
+    <div class="panel" id="panel-hook">
       <div class="row"><h2>LIVE AGE HOOK</h2><span class="mono" id="sel-meta">click a gem</span></div>
       <div class="term" id="hook"></div>
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths</div>
+  <div class="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -838,6 +847,43 @@ document.getElementById('btn-ghost').onclick = toggleGhost;
 document.getElementById('ghost-k').addEventListener('input', e => { ghostK = parseInt(e.target.value,10)||5; document.getElementById('ghost-k-val').textContent=String(ghostK); updateGhostMeta(); if(ghostEnabled) refreshGhost(); });
 document.getElementById('ghost-thr').addEventListener('input', e => { ghostThr = parseFloat(e.target.value)||0.70; document.getElementById('ghost-thr-val').textContent=ghostThr.toFixed(2); updateGhostMeta(); if(ghostEnabled) refreshGhost(); });
 document.getElementById('hide-bench').addEventListener('change', e => { hideBench = e.target.checked; loadCatalog(); });
+// telemetry panel toggles — 3 panels, top bar always present
+const PANEL_MAP = {
+  metrics: ['panel-metrics'],
+  injection: ['panel-injection'],
+  inspector: ['panel-topo','panel-hook'],
+};
+function applyPanelState(key, on) {
+  (PANEL_MAP[key]||[]).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden', !on);
+  });
+  const btn = document.querySelector(`.hud-toggle[data-panel="${key}"]`);
+  if (btn) { btn.classList.toggle('on', on); btn.classList.toggle('off', !on); }
+  try { localStorage.setItem('fountain.panels.'+key, on ? '1' : '0'); } catch {}
+}
+function initPanelToggles() {
+  ['metrics','injection','inspector'].forEach(k => {
+    let saved = null;
+    try { saved = localStorage.getItem('fountain.panels.'+k); } catch {}
+    const on = saved == null ? true : saved === '1';
+    applyPanelState(k, on);
+    const btn = document.querySelector(`.hud-toggle[data-panel="${k}"]`);
+    if (btn) btn.onclick = () => {
+      const nowOn = btn.classList.contains('on');
+      applyPanelState(k, !nowOn);
+    };
+  });
+  // keyboard M/I/G
+  window.addEventListener('keydown', ev => {
+    if (ev.target && (ev.target.tagName==='INPUT' || ev.target.tagName==='TEXTAREA')) return;
+    const k = ev.key.toLowerCase();
+    if (k==='m') { const b=document.querySelector('.hud-toggle[data-panel="metrics"]'); if(b) b.click(); }
+    else if (k==='i') { const b=document.querySelector('.hud-toggle[data-panel="injection"]'); if(b) b.click(); }
+    else if (k==='g') { const b=document.querySelector('.hud-toggle[data-panel="inspector"]'); if(b) b.click(); }
+  });
+}
+initPanelToggles();
 
 if (location.protocol === 'file:') document.getElementById('filewarn').style.display = 'block';
 
