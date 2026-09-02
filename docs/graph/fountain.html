@@ -119,12 +119,16 @@
       <div class="term" id="injection" style="margin-top:8px">(run DISSOLVE)</div>
     </div>
     <div class="panel">
+      <div class="row"><h2>INFERENCE TOPOLOGY</h2><span class="mono" id="topo-meta">DISSOLVE to walk</span></div>
+      <div class="list" id="topo-list"></div>
+    </div>
+    <div class="panel">
       <div class="row"><h2>LIVE AGE HOOK</h2><span class="mono" id="sel-meta">click a gem</span></div>
       <div class="term" id="hook"></div>
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint">Drag to orbit · scroll to zoom · tubes = weight×cosine · arrows = direction · helix = time</div>
+  <div class="hint">Drag to orbit · tubes = weight×cosine · DISSOLVE lists seed → rel → dest paths</div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -148,6 +152,7 @@ const EDGE_COLOR = { IMPORTS: 0x2A5DB0, ABOUT: 0x7c3aed, GOVERNED_BY: 0xC9943F, 
 let raw = { nodes: [], links: [] };
 let hops = new Map();
 let seedIds = new Set();
+let highlighted = new Set();
 let selected = null;
 let lastStats = null;
 let scene, camera, renderer, controls, graphGroup, clock;
@@ -206,87 +211,77 @@ function hash01(s) {
   return (x % 10000) / 10000;
 }
 
+function massOf(n) {
+  if (n.label === 'Session') return 12;
+  if (n.label === 'Concept') return 6 + Math.min(10, Number(n.val || 1) * 0.45);
+  if (n._searchSeed) return 4;
+  return 1.15;
+}
+
+function forceLayout(nodes, links, steps) {
+  const n = nodes.length;
+  if (!n) return;
+  nodes.forEach((node, i) => {
+    const t = (i / n) * Math.PI * 2 + hash01(node.id);
+    const base = node.label === 'Concept' ? 5 : node.label === 'Session' ? 11 : 15;
+    node.pos = [
+      Math.cos(t) * base,
+      (hash01(node.id + 'y') - 0.5) * 10,
+      Math.sin(t) * base
+    ];
+    node.vel = [0, 0, 0];
+    node.offset = t;
+  });
+  const byId = new Map(nodes.map(x => [sid(x.id), x]));
+  for (let step = 0; step < steps; step++) {
+    const cool = 0.90 - 0.35 * (step / steps);
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = a.pos[0] - b.pos[0], dy = a.pos[1] - b.pos[1], dz = a.pos[2] - b.pos[2];
+        const d2 = dx * dx + dy * dy + dz * dz + 0.2;
+        const f = 16 / d2;
+        const s = f / Math.sqrt(d2);
+        const ma = massOf(a), mb = massOf(b);
+        a.vel[0] += dx * s / ma; a.vel[1] += dy * s / ma; a.vel[2] += dz * s / ma;
+        b.vel[0] -= dx * s / mb; b.vel[1] -= dy * s / mb; b.vel[2] -= dz * s / mb;
+      }
+    }
+    links.forEach(l => {
+      const a = byId.get(sid(l.source)), b = byId.get(sid(l.target));
+      if (!a || !b) return;
+      const w = Number(l.weight != null ? l.weight : 0.5);
+      const c = Number(l.cosine != null ? l.cosine : 0.5);
+      const force = Math.max(0.08, Math.min(1, 0.6 * w + 0.4 * c));
+      let rest = 7;
+      if (l.label === 'NEXT') rest = 2.3;
+      else if (l.label === 'IN_SESSION') rest = 4.0;
+      else if (l.label === 'ABOUT') rest = 3.0 + (1 - force) * 5.5;
+      const k = 0.07 + force * 0.32;
+      const dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
+      const dist = Math.hypot(dx, dy, dz) || 0.01;
+      const s = ((dist - rest) * k) / dist;
+      const ma = massOf(a), mb = massOf(b);
+      a.vel[0] += dx * s / ma; a.vel[1] += dy * s / ma; a.vel[2] += dz * s / ma;
+      b.vel[0] -= dx * s / mb; b.vel[1] -= dy * s / mb; b.vel[2] -= dz * s / mb;
+    });
+    nodes.forEach(node => {
+      node.vel[0] -= node.pos[0] * 0.003;
+      node.vel[1] -= node.pos[1] * 0.003;
+      node.vel[2] -= node.pos[2] * 0.003;
+      node.vel[0] *= cool; node.vel[1] *= cool; node.vel[2] *= cool;
+      node.pos[0] += node.vel[0];
+      node.pos[1] += node.vel[1];
+      node.pos[2] += node.vel[2];
+    });
+  }
+}
+
 function layout(nodes, links, seedSet, mode) {
   const hmap = seedSet.size ? bfsHops(nodes, links, seedSet) : new Map();
   hops = hmap;
-  const byHop = new Map();
-  nodes.forEach(n => {
-    const hop = hmap.has(n.id) ? hmap.get(n.id) : null;
-    n._hop = hop;
-    if (mode === 'search' && hop != null) {
-      if (!byHop.has(hop)) byHop.set(hop, []);
-      byHop.get(hop).push(n);
-    }
-  });
-  const placeRing = (list, radius, y0) => {
-    list.forEach((n, i) => {
-      const t = (i / Math.max(list.length, 1)) * Math.PI * 2 + hash01(n.id);
-      const r = radius + (hash01(n.id + 'r') - 0.5) * 0.8;
-      n.pos = [Math.cos(t) * r, y0 + (hash01(n.id + 'y') - 0.5) * 0.5, Math.sin(t) * r];
-      n.offset = hash01(n.id) * Math.PI * 2;
-    });
-  };
-  if (mode === 'search' && byHop.size) {
-    [...byHop.keys()].sort((a,b)=>a-b).forEach(hop => {
-      placeRing(byHop.get(hop), 3.2 + hop * 7.2, 6 + hop * 4.2);
-    });
-    const unknown = nodes.filter(n => n._hop == null);
-    placeRing(unknown, 26, 8.4);
-    return nodes;
-  }
-  const id = n => sid(n.id);
-  const byId = new Map(nodes.map(n => [id(n), n]));
-  const nbr = (nid, label) => links.filter(l => {
-    if (label && l.label !== label) return false;
-    return sid(l.source) === nid || sid(l.target) === nid;
-  }).map(l => sid(l.source) === nid ? sid(l.target) : sid(l.source));
-  const concepts = nodes.filter(n => n.label === 'Concept');
-  const sessions = nodes.filter(n => n.label === 'Session');
-  const turns = nodes.filter(n => n.label === 'Turn');
-  const other = nodes.filter(n => !['Concept','Session','Turn'].includes(n.label));
-  concepts.forEach((n, i) => {
-    const t = (i / Math.max(concepts.length, 1)) * Math.PI * 2 + hash01(n.id);
-    const r = 4.8 + (hash01(n.id + 'r') - 0.5) * 1.2;
-    n.pos = [Math.cos(t) * r, 14 + (hash01(n.id + 'y') - 0.5) * 3.2, Math.sin(t) * r];
-    n.offset = t;
-  });
-  sessions.forEach((s, i) => {
-    const t = (i / Math.max(sessions.length, 1)) * Math.PI * 2;
-    s.pos = [Math.cos(t) * 18, 7 + Math.sin(t) * 4.5, Math.sin(t) * 18];
-    s.offset = t;
-  });
-  const turnsBySess = new Map();
-  turns.forEach(t => {
-    const sessId = nbr(id(t), 'IN_SESSION')[0] || '_none';
-    if (!turnsBySess.has(sessId)) turnsBySess.set(sessId, []);
-    turnsBySess.get(sessId).push(t);
-  });
-  turnsBySess.forEach((list, sessId) => {
-    const sess = byId.get(sessId);
-    list.sort((a, b) => {
-      const pa = a.props || {};
-      const pb = b.props || {};
-      return Number(pa.turn_id || 0) - Number(pb.turn_id || 0);
-    });
-    const n = list.length;
-    const helixR = 3.8 + Math.sqrt(n) * 0.22;
-    const helixH = Math.max(7, n * 0.16);
-    list.forEach((t, i) => {
-      const u = n <= 1 ? 0.5 : i / (n - 1);
-      const ang = u * Math.PI * 2 * 2.15;
-      if (sess && sess.pos) {
-        t.pos = [
-          sess.pos[0] + Math.cos(ang) * helixR,
-          sess.pos[1] + (u - 0.5) * helixH,
-          sess.pos[2] + Math.sin(ang) * helixR
-        ];
-      } else {
-        t.pos = [Math.cos(ang) * 22, 8 + (u - 0.5) * helixH, Math.sin(ang) * 22];
-      }
-      t.offset = ang;
-    });
-  });
-  placeRing(other, 24, 5);
+  nodes.forEach(n => { n._hop = hmap.has(n.id) ? hmap.get(n.id) : null; });
+  forceLayout(nodes, links, mode === 'search' ? 140 : 180);
   return nodes;
 }
 
@@ -338,6 +333,11 @@ function rebuildScene() {
       sag = 0.12;
       segs = 8;
     }
+    const lit = highlighted.has(sid(l.source) + '|' + (l.label || '') + '|' + sid(l.target));
+    if (lit) {
+      radius *= 1.8;
+      sag += 0.4;
+    }
     const mid = pa.clone().add(pb).multiplyScalar(0.5);
     const lift = new THREE.Vector3().subVectors(pb, pa).cross(new THREE.Vector3(0, 1, 0));
     if (lift.lengthSq() < 1e-6) lift.set(1, 0, 0);
@@ -353,7 +353,9 @@ function rebuildScene() {
       transparent: true,
       opacity: 0.38 + force * 0.55,
       transmission: kind === 'ABOUT' ? 0.12 : 0,
-      thickness: 0.2
+      thickness: 0.2,
+      emissive: lit ? 0xffffff : 0x000000,
+      emissiveIntensity: lit ? 0.25 : 0
     });
     const tube = new THREE.Mesh(geo, mat);
     tube.userData.edge = l;
@@ -531,23 +533,60 @@ function setMetrics(stats, extra) {
 
 function reconstructInjection(res) {
   const seeds = res.seeds || [];
-  const g = res.graph || { nodes: [], edges: [] };
+  const paths = res.paths || [];
   const ret = res.retrieval || {};
   let out = '';
   seeds.forEach((s, i) => { out += `[SEED V${i+1} ${((s.score||0)*100|0)}%] ${(s.excerpt||s.file_path||'').slice(0,160)}\n\n`; });
-  (g.nodes || []).filter(n => !n.seed).slice(0, 6).forEach((n, i) => {
-    out += `[GRAPH G${i+1}] ${n.group || n.label}: ${n.title || n.label || n.id}\n`;
+  paths.slice(0, 8).forEach((p, i) => {
+    const tag = p.seed ? 'SEED' : ('H' + (p.hop || 1));
+    out += `[PATH ${tag}] ${p.from_name} -[:${p.rel} w=${Number(p.weight||0).toFixed(2)} c=${Number(p.cosine||0).toFixed(2)}]-> ${p.to_name}\n`;
   });
   document.getElementById('injection').textContent = out || '(empty retrieval — graph ADDED LITTLE)';
   const seedC = ret.seeds ?? seeds.length;
-  const reached = ret.vertices_reached || (g.nodes||[]).length;
-  const exp = Math.max(0, reached - seedC);
-  const contrib = (ret.edges_traversed || 0) > 0 && exp > 0;
+  const reached = ret.vertices_reached || 0;
+  const contrib = (ret.edges_traversed || 0) > 0;
   const el = document.getElementById('contrib');
   el.className = 'banner ' + (contrib ? 'good' : 'weak');
   el.textContent = contrib
     ? `graph CONTRIBUTED · seeds ${seedC} → ${reached} verts / ${ret.edges_traversed} edges · hops=${ret.hops}`
-    : `graph ADDED LITTLE · seeds ${seedC} expanded ${exp} edges ${ret.edges_traversed||0}`;
+    : `graph ADDED LITTLE · seeds ${seedC} expanded ${ret.edges_traversed||0} edges`;
+}
+
+function renderTopo(res) {
+  const el = document.getElementById('topo-list');
+  const meta = document.getElementById('topo-meta');
+  const paths = (res && res.paths) || [];
+  if (!paths.length) {
+    meta.textContent = 'sparse';
+    el.innerHTML = '<div class="mono" style="padding:8px;color:#7A92B1">Topology is still sparse — expansion returned no edges.</div>';
+    return;
+  }
+  meta.textContent = paths.length + ' paths';
+  el.innerHTML = paths.slice(0, 40).map((p, i) => {
+    const tag = p.seed ? 'SEED' : ('H' + (p.hop || 1));
+    const line = `${p.from_name} → ${p.rel} → ${p.to_name}`;
+    return `<button data-i="${i}" type="button"><span>${escapeHTML(line.slice(0, 52))}</span><span class="mono" style="margin-left:auto;color:#7A92B1">${escapeHTML(tag)}</span></button>`;
+  }).join('');
+  el.querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      const p = paths[Number(b.dataset.i)];
+      if (p) focusPath(p);
+    };
+  });
+}
+
+function focusPath(p) {
+  highlighted = new Set([sid(p.from) + '|' + p.rel + '|' + sid(p.to)]);
+  rebuildScene();
+  const a = raw.nodes.find(n => sid(n.id) === sid(p.from));
+  const b = raw.nodes.find(n => sid(n.id) === sid(p.to));
+  if (a && a.pos && b && b.pos && controls) {
+    const mx = (a.pos[0] + b.pos[0]) / 2;
+    const my = (a.pos[1] + b.pos[1]) / 2;
+    const mz = (a.pos[2] + b.pos[2]) / 2;
+    controls.target.set(mx, my, mz);
+    camera.position.set(mx + 14, my + 11, mz + 16);
+  }
 }
 
 function applyCatalog(payload) {
@@ -563,10 +602,16 @@ function applyCatalog(payload) {
   }));
   layout(raw.nodes, raw.links, seedIds, 'catalog');
   document.getElementById('mode-tag').textContent = 'CATALOG';
+  highlighted = new Set();
   rebuildScene();
   renderList();
   document.getElementById('contrib').className = 'banner weak';
-  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · ${raw.links.length} threads · session clusters`;
+  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · ${raw.links.length} threads · force = weight×cosine`;
+  const topo = document.getElementById('topo-list');
+  if (topo) {
+    document.getElementById('topo-meta').textContent = 'catalog';
+    topo.innerHTML = '<div class="mono" style="padding:8px;color:#7A92B1">Run DISSOLVE to list seed → relation → dest paths.</div>';
+  }
 }
 
 function applySearch(res) {
@@ -594,9 +639,11 @@ function applySearch(res) {
   }));
   layout(raw.nodes, raw.links, seedIds, 'search');
   document.getElementById('mode-tag').textContent = 'INJECTION';
+  highlighted = new Set();
   rebuildScene();
   renderList();
   reconstructInjection(res);
+  renderTopo(res);
 }
 
 async function loadCatalog() {

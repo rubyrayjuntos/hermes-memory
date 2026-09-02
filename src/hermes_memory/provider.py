@@ -674,9 +674,15 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         lines: List[str] = []
         seen: set[str] = set()
-        for n, rel, m in rows:
+        for row in rows:
+            n, rel, m = row[0], row[1], row[2]
+            w = float(row[3]) if len(row) > 3 else 0.5
+            c = float(row[4]) if len(row) > 4 else 0.5
             line = format_triple(n, rel, m)
-            if line and line not in seen:
+            if not line:
+                continue
+            line = f"{line} w={w:.2f} c={c:.2f}"
+            if line not in seen:
                 seen.add(line)
                 lines.append(line)
         return lines[:8]

@@ -609,7 +609,7 @@ class Store:
         self, seed_vertex_ids: Sequence[int], rel_types: Sequence[str] = (), limit: int = 40,
         min_weight: float = 0.0, min_cosine: float = 0.0,
         decay_half_life_days: float = 30.0,
-    ) -> List[Tuple[Any, Optional[str], Any]]:
+    ) -> List[Tuple[Any, Optional[str], Any, float, float]]:
         """1-hop weighted expand from seed vertices. Cypher inside SAVEPOINT.
 
         Dynamic memory graph: edges carry weight (force) and cosine (vector radius).
@@ -684,7 +684,20 @@ class Store:
                 scored.sort(key=lambda x: x[0], reverse=True)
                 # Trim to requested limit
                 trimmed = scored[: int(limit)] if int(limit) > 0 else scored
-                return [(row["n"], row["rel"], row["m"]) for _, row in trimmed]
+                out: List[Tuple[Any, Optional[str], Any, float, float]] = []
+                for _score, row in trimmed:
+                    try:
+                        raw_w = row["w"]
+                        w = float(str(raw_w).strip('"')) if raw_w is not None and str(raw_w).strip('"') != "null" else 0.5
+                    except Exception:
+                        w = 0.5
+                    try:
+                        raw_c = row["c"]
+                        c = float(str(raw_c).strip('"')) if raw_c is not None and str(raw_c).strip('"') != "null" else 0.5
+                    except Exception:
+                        c = 0.5
+                    out.append((row["n"], row["rel"], row["m"], w, c))
+                return out
             except Exception:
                 logger.debug("expand_graph transaction error", exc_info=True)
                 return []

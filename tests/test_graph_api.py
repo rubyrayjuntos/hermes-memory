@@ -13,6 +13,7 @@ from hermes_memory.graph_api import (
     is_synthetic_session,
     is_verify_session,
     match_route,
+    pack_search,
     parse_vertex,
     preview_embedding,
     safe_label,
@@ -149,3 +150,32 @@ def test_routes_read_and_mutations():
     assert match_route("PATCH", "/api/librarian/nodes/1")[0] == "not_implemented"
     assert match_route("POST", "/api/librarian/nodes/merge")[0] == "not_implemented"
     assert match_route("GET", "/nope")[0] == "not_found"
+
+
+def test_pack_search_emits_paths_and_graph():
+    n = {"id": 1, "label": "Turn", "properties": {"name": "hello", "content": "hello tokyo"}}
+    m = {"id": 2, "label": "Concept", "properties": {"name": "Tokyo Eye"}}
+    out = pack_search(
+        "tokyo",
+        4,
+        2,
+        [{"id": 9, "content": "tokyo eye", "similarity": 0.81}],
+        ["1"],
+        [(n, "ABOUT", m, 1.0, 0.72, 1)],
+    )
+    assert out["paths"][0]["rel"] == "ABOUT"
+    assert out["paths"][0]["from"] == "1"
+    assert out["paths"][0]["to"] == "2"
+    assert out["paths"][0]["seed"] is True
+    assert out["paths"][0]["hop"] == 1
+    assert out["graph"]["edges"][0]["weight"] == 1.0
+    assert out["graph"]["edges"][0]["cosine"] == 0.72
+    assert out["seeds"][0]["vertex_ids"] == ["1"]
+    assert out["retrieval"]["edges_traversed"] == 1
+
+
+def test_pack_search_sparse_has_empty_paths():
+    out = pack_search("x", 4, 2, [{"id": 3, "content": "none", "similarity": 0.2}], [], [])
+    assert out["paths"] == []
+    assert out["retrieval"]["edges_traversed"] == 0
+    assert out["ranked"][0]["group"] == "memory"

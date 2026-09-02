@@ -388,7 +388,8 @@ class BenchHarness:
         )
         out: List[tuple[str, float]] = []
         seen = set()
-        for n, rel, m in rows:
+        for row in rows:
+            n, rel, m = row[0], row[1], row[2]
             def props(v: Any) -> Dict[str, str]:
                 if v is None:
                     return {}
