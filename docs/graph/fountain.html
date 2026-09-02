@@ -468,20 +468,10 @@ function initThree() {
   scene.add(new THREE.DirectionalLight(0x8AB8E8, 0.55)).position.set(-14, 18, -10);
   scene.add(new THREE.PointLight(0xCDE8FF, 0.6, 40)).position.set(0, 10, 0);
 
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(120, 120),
-    new THREE.MeshStandardMaterial({ color: 0xD9D3C2, roughness: 0.95, metalness: 0.01 })
-  );
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
-  scene.add(ground);
-  [ [22, 28], [34, 40] ].forEach(([inner, outer], i) => {
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(inner, outer, 32),
-      new THREE.MeshStandardMaterial({ color: i ? 0xB9B6A6 : 0xC2BFAE, transparent: true, opacity: i ? 0.16 : 0.22, side: THREE.DoubleSide })
-    );
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.01 + i * 0.01;
-    scene.add(ring);
-  });
+  // no opaque ground — removed 120×120 Plane + rings at y≈0 that cut the manifold.
+  // parchment background (scene.background #E9E3D4) is the ground. Manifold yStrata
+  // Session 6.0 / Concept 1.6 / Turn ±3 is now fully visible from any orbit angle.
+  renderer.shadowMap.enabled = false;
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.dampingFactor = 0.07;
