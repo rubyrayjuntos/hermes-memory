@@ -124,7 +124,7 @@
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint">Drag to orbit · scroll to zoom · click gem · catalog = session clusters, not force springs</div>
+  <div class="hint">Drag to orbit · scroll to zoom · tubes = weight×cosine · arrows = direction · helix = time</div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -228,7 +228,7 @@ function layout(nodes, links, seedSet, mode) {
   };
   if (mode === 'search' && byHop.size) {
     [...byHop.keys()].sort((a,b)=>a-b).forEach(hop => {
-      placeRing(byHop.get(hop), 3.2 + hop * 7.2, 8 + hop * 0.22);
+      placeRing(byHop.get(hop), 3.2 + hop * 7.2, 6 + hop * 4.2);
     });
     const unknown = nodes.filter(n => n._hop == null);
     placeRing(unknown, 26, 8.4);
@@ -244,11 +244,16 @@ function layout(nodes, links, seedSet, mode) {
   const sessions = nodes.filter(n => n.label === 'Session');
   const turns = nodes.filter(n => n.label === 'Turn');
   const other = nodes.filter(n => !['Concept','Session','Turn'].includes(n.label));
-  placeRing(concepts, 5.4, 8.2);
+  concepts.forEach((n, i) => {
+    const t = (i / Math.max(concepts.length, 1)) * Math.PI * 2 + hash01(n.id);
+    const r = 4.8 + (hash01(n.id + 'r') - 0.5) * 1.2;
+    n.pos = [Math.cos(t) * r, 14 + (hash01(n.id + 'y') - 0.5) * 3.2, Math.sin(t) * r];
+    n.offset = t;
+  });
   sessions.forEach((s, i) => {
     const t = (i / Math.max(sessions.length, 1)) * Math.PI * 2;
-    s.pos = [Math.cos(t) * 15.5, 8, Math.sin(t) * 15.5];
-    s.offset = hash01(s.id) * Math.PI * 2;
+    s.pos = [Math.cos(t) * 18, 7 + Math.sin(t) * 4.5, Math.sin(t) * 18];
+    s.offset = t;
   });
   const turnsBySess = new Map();
   turns.forEach(t => {
@@ -258,18 +263,30 @@ function layout(nodes, links, seedSet, mode) {
   });
   turnsBySess.forEach((list, sessId) => {
     const sess = byId.get(sessId);
-    const rad = 3.4 + Math.sqrt(list.length) * 0.28;
+    list.sort((a, b) => {
+      const pa = a.props || {};
+      const pb = b.props || {};
+      return Number(pa.turn_id || 0) - Number(pb.turn_id || 0);
+    });
+    const n = list.length;
+    const helixR = 3.8 + Math.sqrt(n) * 0.22;
+    const helixH = Math.max(7, n * 0.16);
     list.forEach((t, i) => {
-      const ang = (i / Math.max(list.length, 1)) * Math.PI * 2;
+      const u = n <= 1 ? 0.5 : i / (n - 1);
+      const ang = u * Math.PI * 2 * 2.15;
       if (sess && sess.pos) {
-        t.pos = [sess.pos[0] + Math.cos(ang) * rad, 8 + (hash01(t.id + 'y') - 0.5) * 0.2, sess.pos[2] + Math.sin(ang) * rad];
+        t.pos = [
+          sess.pos[0] + Math.cos(ang) * helixR,
+          sess.pos[1] + (u - 0.5) * helixH,
+          sess.pos[2] + Math.sin(ang) * helixR
+        ];
       } else {
-        t.pos = [Math.cos(ang) * 20, 8, Math.sin(ang) * 20];
+        t.pos = [Math.cos(ang) * 22, 8 + (u - 0.5) * helixH, Math.sin(ang) * 22];
       }
       t.offset = ang;
     });
   });
-  placeRing(other, 18, 8.4);
+  placeRing(other, 24, 5);
   return nodes;
 }
 
@@ -301,21 +318,54 @@ function rebuildScene() {
     const a = nodeMap.get(sid(l.source)), b = nodeMap.get(sid(l.target));
     if (!a || !b || !a.pos || !b.pos) return;
     const pa = new THREE.Vector3(...a.pos), pb = new THREE.Vector3(...b.pos);
+    const w = Number(l.weight != null ? l.weight : 0.5);
+    const c = Number(l.cosine != null ? l.cosine : 0.5);
+    const force = Math.max(0.05, Math.min(1, 0.6 * w + 0.4 * c));
+    const kind = l.label;
+    let radius = 0.016 + force * 0.02;
+    let sag = 0.6;
+    let segs = 8;
+    if (kind === 'ABOUT') {
+      radius = 0.030 + force * 0.08;
+      sag = 1.8 + (1 - force) * 3.2;
+      segs = 18;
+    } else if (kind === 'IN_SESSION') {
+      radius = 0.024 + w * 0.03;
+      sag = 0.45;
+      segs = 10;
+    } else if (kind === 'NEXT') {
+      radius = 0.018 + w * 0.025;
+      sag = 0.12;
+      segs = 8;
+    }
     const mid = pa.clone().add(pb).multiplyScalar(0.5);
-    mid.y -= (l.label === 'ABOUT' ? 0.35 : 0.55);
+    const lift = new THREE.Vector3().subVectors(pb, pa).cross(new THREE.Vector3(0, 1, 0));
+    if (lift.lengthSq() < 1e-6) lift.set(1, 0, 0);
+    lift.normalize().multiplyScalar(kind === 'ABOUT' ? sag * 0.35 : 0);
+    mid.y += sag;
+    mid.add(lift);
     const curve = new THREE.QuadraticBezierCurve3(pa, mid, pb);
-    const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(l.label === 'ABOUT' ? 16 : 8));
-    const about = l.label === 'ABOUT';
-    const w = Number(l.weight != null ? l.weight : (about ? 1 : 0.5));
-    const mat = new THREE.LineBasicMaterial({
-      color: EDGE_COLOR[l.label] || 0x2A5DB0,
+    const geo = new THREE.TubeGeometry(curve, segs, radius, 6, false);
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: EDGE_COLOR[kind] || 0x2A5DB0,
+      roughness: 0.32,
+      metalness: kind === 'ABOUT' ? 0.35 : 0.12,
       transparent: true,
-      opacity: about ? Math.min(0.95, 0.45 + w * 0.5) : (l._isExpansion ? 0.75 : 0.32 + w * 0.25),
-      linewidth: 1
+      opacity: 0.38 + force * 0.55,
+      transmission: kind === 'ABOUT' ? 0.12 : 0,
+      thickness: 0.2
     });
-    const line = new THREE.Line(geo, mat);
-    line.userData.edge = l;
-    graphGroup.add(line);
+    const tube = new THREE.Mesh(geo, mat);
+    tube.userData.edge = l;
+    graphGroup.add(tube);
+    const tangent = curve.getTangent(0.84).normalize();
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(radius * 2.4, radius * 7.5, 8),
+      mat
+    );
+    cone.position.copy(curve.getPoint(0.84));
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
+    graphGroup.add(cone);
   });
 
   raw.nodes.forEach(n => {
@@ -347,7 +397,7 @@ function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xE9E3D4);
   camera = new THREE.PerspectiveCamera(42, el.clientWidth / el.clientHeight, 0.1, 200);
-  camera.position.set(0, 36, 58);
+  camera.position.set(22, 42, 48);
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(el.clientWidth, el.clientHeight);
@@ -381,7 +431,7 @@ function initThree() {
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.dampingFactor = 0.07;
-  controls.minPolarAngle = Math.PI * 0.12; controls.maxPolarAngle = Math.PI * 0.48;
+  controls.minPolarAngle = Math.PI * 0.08; controls.maxPolarAngle = Math.PI * 0.62;
   controls.minDistance = 10; controls.maxDistance = 110; controls.target.set(0, 8, 0);
 
   const ray = new THREE.Raycaster();
@@ -404,8 +454,8 @@ function initThree() {
       graphGroup.children.forEach(obj => {
         const n = obj.userData.node;
         if (!n || !n.pos) return;
-        obj.position.y = n.pos[1] + Math.sin(t * 0.42 + n.offset) * 0.18;
-        obj.rotation.y += 0.0035;
+        obj.position.y = n.pos[1] + Math.sin(t * 0.32 + n.offset) * 0.08;
+        obj.rotation.y += 0.002;
       });
     }
     controls.update();
