@@ -94,6 +94,16 @@
     @keyframes hintPulse { 0%,100% { background:#7f1d1d; box-shadow:0 6px 18px rgba(127,29,29,.35) } 50% { background:#991b1b; box-shadow:0 8px 26px rgba(153,27,27,.55) } }
     .gem.ghost-pulse { animation: ghostGemPulse 1.4s ease-in-out infinite; }
     @keyframes ghostGemPulse { 0%,100% { opacity: .95; transform: rotate(45deg) scale(1); box-shadow: 0 0 0 0 rgba(224,64,176,.00) } 50% { opacity: 1; transform: rotate(45deg) scale(1.12); box-shadow: 0 0 10px 2px rgba(224,64,176,.45) } }
+    .level-ctl { display:flex; gap:4px; align-items:center; padding:4px 6px 4px 8px; border:1px solid var(--border); border-radius:999px; background:#fff; }
+    .level-ctl button { min-width:30px; padding:4px 6px; font:700 10px/1 Cinzel,serif; letter-spacing:.08em; border-radius:999px; border:1px solid transparent; cursor:pointer; }
+    .level-ctl button.on { background:var(--lapis-ink); color:#fff; border-color:var(--lapis-ink); }
+    .level-ctl button.off { background:#fff; color:var(--ink); border-color:var(--border); opacity:.78; }
+    .level-ctl button:disabled { opacity:.32; cursor:not-allowed; }
+    #coach { position:absolute; left:50%; bottom:56px; transform:translateX(-50%); z-index:30; background:#0F2340; color:#E8F1FF; padding:10px 14px; border-radius:12px; font:11px/1.5 system-ui, -apple-system, Segoe UI; max-width:560px; display:none; box-shadow:0 10px 28px rgba(0,0,0,.35); gap:10px; align-items:center; }
+    #coach.show { display:flex; }
+    #coach button { padding:6px 10px; border-radius:999px; border:none; font:700 10px/1 Cinzel,serif; cursor:pointer; letter-spacing:.06em; }
+    #coach-cta { background:#E040B0; color:#fff; }
+    #coach-dismiss { background:transparent !important; border:1px solid rgba(255,255,255,.45) !important; color:#fff !important; }
     #filewarn { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 50; background: #8B3A2E; color: #F7F3EB; padding: 8px 12px; font-size: 12px; text-align: center; }
   </style>
 </head>
@@ -112,6 +122,10 @@
       <span><i class="gem" style="background:#2F8F8A"></i> NEXT</span>
       <span title="GHOST_KNN · vector proximity (768-d cosine kNN) · pulsing magenta · render-time only, not persisted to AGE"><i class="gem ghost-pulse" style="background:#E040B0"></i> GHOST</span>
     </div>
+    <div class="level-ctl" id="level-ctl" title="Progressive reveal: 1 Garden → 4 Cockpit (controls gate by level)">
+      <span class="mono" style="font-size:9px; color:#5E7A97; letter-spacing:.12em; margin-right:2px">LEVEL</span>
+      <button data-lvl="1" type="button" title="1 · Garden — pure spatial intuition">1</button><button data-lvl="2" type="button" title="2 · Horizon — ghost veil">2</button><button data-lvl="3" type="button" title="3 · Instrument — sliders & DISSOLVE">3</button><button data-lvl="4" type="button" title="4 · Cockpit — full telemetry">4</button>
+    </div>
     <div class="status"><span class="dot" id="dot"></span><span id="api-status">connecting</span></div>
     <div class="hud-toggles" style="display:flex;gap:6px;align-items:center">
       <button class="ghost hud-toggle on" data-panel="metrics" type="button" title="Toggle Manifold Metrics (M)">METRICS</button>
@@ -124,9 +138,9 @@
       <div class="row"><h2>MANIFOLD METRICS</h2><span class="mono" id="mode-tag">CATALOG</span></div>
       <div class="metrics" id="metrics"></div>
       <div class="banner weak" id="contrib" style="margin-top:8px">awaiting hybrid retrieval</div>
-      <div class="row" style="margin-top:8px"><span class="mono" id="ghost-meta" style="color:#7A92B1">ghost off — vector kNN hidden</span><button class="ghost" id="btn-ghost" type="button">GHOST OFF</button></div>
-      <div class="row" style="margin-top:6px;gap:6px;flex-wrap:wrap"><label class="mono" style="color:#7A92B1">k <input id="ghost-k" type="range" min="1" max="8" value="5" style="width:64px"></label><span class="mono" id="ghost-k-val">5</span><label class="mono" style="color:#7A92B1">thr <input id="ghost-thr" type="range" min="0.40" max="0.85" step="0.05" value="0.70" style="width:72px"></label><span class="mono" id="ghost-thr-val">0.70</span></div>
-      <div class="row" style="margin-top:4px"><label class="mono" style="color:#7A92B1"><input type="checkbox" id="hide-bench" checked> hide bench/verify</label><span class="mono" id="live-persisted" style="color:#1E3A5F">persisted —</span></div>
+      <div class="row" id="ghost-row" style="margin-top:8px"><span class="mono" id="ghost-meta" style="color:#7A92B1">ghost off — vector kNN hidden</span><button class="ghost" id="btn-ghost" type="button">GHOST OFF</button></div>
+      <div class="row" id="ghost-ctl" style="margin-top:6px;gap:6px;flex-wrap:wrap"><label class="mono" style="color:#7A92B1">k <input id="ghost-k" type="range" min="1" max="8" value="5" style="width:64px"></label><span class="mono" id="ghost-k-val">5</span><label class="mono" style="color:#7A92B1">thr <input id="ghost-thr" type="range" min="0.40" max="0.85" step="0.05" value="0.70" style="width:72px"></label><span class="mono" id="ghost-thr-val">0.70</span></div>
+      <div class="row" id="bench-row" style="margin-top:4px"><label class="mono" style="color:#7A92B1"><input type="checkbox" id="hide-bench" checked> hide bench/verify</label><span class="mono" id="live-persisted" style="color:#1E3A5F">persisted —</span></div>
       <div class="mono" id="edge-tip" style="display:none;position:fixed;z-index:40;background:#0F2340;color:#8ED8E8;padding:8px 10px;border-radius:10px;max-width:380px;pointer-events:none;font-size:11px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,.28)"></div>
     </div>
     <div class="panel" id="panel-injection">
@@ -152,6 +166,7 @@
     </div>
   </aside>
   <div class="hint" id="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span></div>
+  <div id="coach"><span id="coach-msg"></span><button id="coach-cta" type="button"></button><button id="coach-dismiss" type="button">later</button></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -179,12 +194,37 @@ let highlighted = new Set();
 let selected = null;
 let lastStats = null;
 let scene, camera, renderer, controls, graphGroup, clock;
-let ghostEnabled = false;
+// ——— Progressive reveal state machine (single source of truth) ———
+const LEVEL_DEF = {
+  1: { name:'Garden', hint:'Level 1 · Garden — pure spatial intuition · click a gem' },
+  2: { name:'Horizon', hint:'Level 2 · Horizon — Ghost veil reveals hidden thematic shape' },
+  3: { name:'Instrument', hint:'Level 3 · Instrument — sliders · DISSOLVE · w×c' },
+  4: { name:'Cockpit', hint:'Level 4 · Cockpit — full score=0.5c+0.3w+0.2decay audited cockpit' },
+};
+const PANEL_MIN = { metrics:3, injection:4, inspector:3 };
+let AppState = {
+  level: Math.min(4, Math.max(1, parseInt((() => { try{return localStorage.getItem('fountain.level');}catch{return null;}})() || '1', 10) || 1)),
+  mode: 'catalog',
+  ghost: {
+    enabled: (()=>{ try{return localStorage.getItem('fountain.ghostEnabled')==='1';}catch{return false;}})(),
+    k: parseInt((()=>{ try{return localStorage.getItem('fountain.ghostK');}catch{return null;}})() || '5',10)||5,
+    threshold: parseFloat((()=>{ try{return localStorage.getItem('fountain.ghostThr');}catch{return null;}})() || '0.70')||0.70,
+  },
+  filters: { hideBench: (()=>{ try{return localStorage.getItem('fountain.hideBench')!=='0';}catch{return true;}})() },
+  panels: {
+    metrics: (()=>{ try{return localStorage.getItem('fountain.panels.metrics')!=='0';}catch{return true;}})(),
+    injection: (()=>{ try{return localStorage.getItem('fountain.panels.injection')!=='0';}catch{return true;}})(),
+    inspector: (()=>{ try{return localStorage.getItem('fountain.panels.inspector')!=='0';}catch{return true;}})(),
+  },
+  coachSeen: (()=>{ try{return localStorage.getItem('fountain.coachSeen')==='1';}catch{return false;}})(),
+  _coachClicks: 0, _coachTimer: null,
+};
+let ghostEnabled = AppState.ghost.enabled;
 let ghostEdges = [];
 let ghostMeta = null;
-let ghostK = 5;
-let ghostThr = 0.70;
-let hideBench = true;
+let ghostK = AppState.ghost.k;
+let ghostThr = AppState.ghost.threshold;
+let hideBench = AppState.filters.hideBench;
 
 function isBenchNode(n) {
   const sid_ = (n.props || n.properties || {}).session_id || n.session_id || '';
@@ -497,7 +537,13 @@ function initThree() {
     const sc = 0.5*c + 0.3*w + 0.2*dec;
     const a = raw.nodes.find(n=>sid(n.id)===sid(l.source));
     const b = raw.nodes.find(n=>sid(n.id)===sid(l.target));
-    tip.innerHTML = `<b>${escapeHTML(l.label||'REL')}</b> ${escapeHTML(a?nodeName(a):String(l.source))} → ${escapeHTML(b?nodeName(b):String(l.target))}<br>w=${w.toFixed(2)} c=${c.toFixed(2)} decay=${dec.toFixed(2)} → <b>score ${sc.toFixed(2)}</b> = 0.5*${c.toFixed(2)}+0.3*${w.toFixed(2)}+0.2*${dec.toFixed(2)}<br><span style="opacity:.8">force ${(0.6*w+0.4*c).toFixed(2)} · sag ${l.label==='ABOUT' ? (1.8+(1-Math.max(0.08,Math.min(1,0.6*w+0.4*c)))*3.2).toFixed(1) : '—'}</span>`;
+    const lvl = AppState?.level || 1;
+    let body = `<b>${escapeHTML(l.label||'REL')}</b> ${escapeHTML(a?nodeName(a):String(l.source))} → ${escapeHTML(b?nodeName(b):String(l.target))}`;
+    if (lvl >= 4) body += `<br>w=${w.toFixed(2)} c=${c.toFixed(2)} decay=${dec.toFixed(2)} → <b>score ${sc.toFixed(2)}</b> = 0.5*${c.toFixed(2)}+0.3*${w.toFixed(2)}+0.2*${dec.toFixed(2)}<br><span style="opacity:.8">force ${(0.6*w+0.4*c).toFixed(2)} · sag ${l.label==='ABOUT' ? (1.8+(1-Math.max(0.08,Math.min(1,0.6*w+0.4*c)))*3.2).toFixed(1) : '—'}</span>`;
+    else if (lvl >= 3) body += `<br>w=${w.toFixed(2)} · c=${c.toFixed(2)}<span style="opacity:.8"> · force ${(0.6*w+0.4*c).toFixed(2)}</span>`;
+    else if (lvl >= 2) body += `<br><span style="opacity:.8">${l.label==='GHOST_KNN'?'vector proximity (kNN) — pulsing = not persisted': l.label==='ABOUT'?'semantic bridge': l.label==='NEXT'?'sequential turn':'session membership'}</span>`;
+    else body += `<br><span style="opacity:.8">${escapeHTML(l.label||'connected')}</span>`;
+    tip.innerHTML = body;
     tip.style.left = (ev.clientX + 14) + 'px';
     tip.style.top = (ev.clientY + 10) + 'px';
     tip.style.display = 'block';
@@ -566,7 +612,8 @@ function nodeName(n) {
 }
 
 function selectNode(n) {
-  selected = n;
+  selected = n; AppState.selectedNode = n?.id || null;
+  AppState._coachClicks = (AppState._coachClicks||0)+1; maybeCoach();
   const props = n.props || n.properties || {};
   const snippet = n.snippet || props.content || '';
   document.getElementById('sel-meta').textContent = (n.label || 'Turn') + (props.session_id ? ' · ' + props.session_id : '');
@@ -818,22 +865,15 @@ async function refreshGhost() {
 }
 
 async function toggleGhost() {
-  ghostEnabled = !ghostEnabled;
-  if (ghostEnabled) {
-    await refreshGhost();
-  } else {
-    ghostEdges = []; ghostMeta = null;
-    raw.links = raw.links.filter(l => l.label !== 'GHOST_KNN');
-    if (raw.nodes.length) {
-      layout(raw.nodes, raw.links, seedIds, ghostEnabled ? 'catalog' : 'catalog');
-      document.getElementById('mode-tag').textContent = 'CATALOG';
-      rebuildScene();
-    }
-    updateGhostMeta();
-  }
+  if (AppState.level < 2) return;
+  AppState.ghost.enabled = !AppState.ghost.enabled; ghostEnabled = AppState.ghost.enabled;
+  try{ localStorage.setItem('fountain.ghostEnabled', AppState.ghost.enabled?'1':'0'); }catch{}
+  if (AppState.ghost.enabled) { await refreshGhost(); renderUIForCurrentLevel(); }
+  else { ghostEdges=[]; ghostMeta=null; raw.links=raw.links.filter(l=>l.label!=='GHOST_KNN'); if(raw.nodes.length){ layout(raw.nodes,raw.links,seedIds,'catalog'); document.getElementById('mode-tag').textContent='CATALOG'; rebuildScene(); } updateGhostMeta(); renderUIForCurrentLevel(); }
 }
 
 async function dissolve() {
+  if (AppState.level < 3) dispatch('SET_LEVEL', 3);
   const q = document.getElementById('q').value.trim() || 'hybrid age memory';
   document.getElementById('injection').textContent = 'embedding → pgvector → bridge → 1–2 hop AGE…';
   const res = await safeFetch(`${API}/api/librarian/search?q=${encodeURIComponent(q)}&hops=2&k=6&fresh=1`);
@@ -851,17 +891,19 @@ async function dissolve() {
 document.getElementById('btn-dissolve').onclick = dissolve;
 document.getElementById('btn-catalog').onclick = loadCatalog;
 document.getElementById('btn-ghost').onclick = toggleGhost;
-document.getElementById('ghost-k').addEventListener('input', e => { ghostK = parseInt(e.target.value,10)||5; document.getElementById('ghost-k-val').textContent=String(ghostK); updateGhostMeta(); if(ghostEnabled) refreshGhost(); });
-document.getElementById('ghost-thr').addEventListener('input', e => { ghostThr = parseFloat(e.target.value)||0.70; document.getElementById('ghost-thr-val').textContent=ghostThr.toFixed(2); updateGhostMeta(); if(ghostEnabled) refreshGhost(); });
-document.getElementById('hide-bench').addEventListener('change', e => { hideBench = e.target.checked; loadCatalog(); });
-// telemetry panel toggles — 3 panels, top bar always present
+document.getElementById('ghost-k').addEventListener('input', e => { const k=parseInt(e.target.value,10)||5; AppState.ghost.k=k; ghostK=k; try{localStorage.setItem('fountain.ghostK',String(k));}catch{} document.getElementById('ghost-k-val').textContent=String(k); updateGhostMeta(); if(ghostEnabled) refreshGhost(); else renderUIForCurrentLevel(); });
+document.getElementById('ghost-thr').addEventListener('input', e => { const thr=parseFloat(e.target.value)||0.70; AppState.ghost.threshold=thr; ghostThr=thr; try{localStorage.setItem('fountain.ghostThr',thr.toFixed(2));}catch{} document.getElementById('ghost-thr-val').textContent=thr.toFixed(2); updateGhostMeta(); if(ghostEnabled) refreshGhost(); else renderUIForCurrentLevel(); });
+document.getElementById('hide-bench').addEventListener('change', e => { AppState.filters.hideBench=e.target.checked; hideBench=e.target.checked; try{localStorage.setItem('fountain.hideBench',hideBench?'1':'0');}catch{} loadCatalog(); renderUIForCurrentLevel(); });
+// telemetry panel toggles — 3 panels, top bar always present (gated by progressive reveal)
 const PANEL_MAP = {
   metrics: ['panel-metrics'],
   injection: ['panel-injection'],
   inspector: ['panel-topo','panel-hook'],
 };
 function refreshHintAlert() {
+  if (AppState.level < 3) { const hint=document.getElementById('hint'); if(hint) hint.classList.remove('alert'); return; }
   const anyHidden = ['metrics','injection','inspector'].some(k => {
+    if ((PANEL_MIN[k]||1) > AppState.level) return false;
     const ids = PANEL_MAP[k]||[];
     return ids.some(id => document.getElementById(id)?.classList.contains('hidden'));
   });
@@ -876,6 +918,7 @@ function applyPanelState(key, on) {
   const btn = document.querySelector(`.hud-toggle[data-panel="${key}"]`);
   if (btn) { btn.classList.toggle('on', on); btn.classList.toggle('off', !on); }
   try { localStorage.setItem('fountain.panels.'+key, on ? '1' : '0'); } catch {}
+  AppState.panels[key] = on;
   refreshHintAlert();
 }
 function initPanelToggles() {
@@ -883,23 +926,158 @@ function initPanelToggles() {
     let saved = null;
     try { saved = localStorage.getItem('fountain.panels.'+k); } catch {}
     const on = saved == null ? true : saved === '1';
-    applyPanelState(k, on);
+    AppState.panels[k] = on;
     const btn = document.querySelector(`.hud-toggle[data-panel="${k}"]`);
     if (btn) btn.onclick = () => {
+      if ((PANEL_MIN[k]||1) > AppState.level) return;
       const nowOn = btn.classList.contains('on');
-      applyPanelState(k, !nowOn);
+      const nextOn = !nowOn;
+      AppState.panels[k]=nextOn;
+      applyPanelState(k, nextOn);
     };
   });
-  // keyboard M/I/G
+  // keyboard M/I/G gated by level
   window.addEventListener('keydown', ev => {
     if (ev.target && (ev.target.tagName==='INPUT' || ev.target.tagName==='TEXTAREA')) return;
     const k = ev.key.toLowerCase();
-    if (k==='m') { const b=document.querySelector('.hud-toggle[data-panel="metrics"]'); if(b) b.click(); }
-    else if (k==='i') { const b=document.querySelector('.hud-toggle[data-panel="injection"]'); if(b) b.click(); }
-    else if (k==='g') { const b=document.querySelector('.hud-toggle[data-panel="inspector"]'); if(b) b.click(); }
+    if (k==='m' && (PANEL_MIN.metrics||1) <= AppState.level) { const b=document.querySelector('.hud-toggle[data-panel="metrics"]'); if(b) b.click(); }
+    else if (k==='i' && (PANEL_MIN.injection||1) <= AppState.level) { const b=document.querySelector('.hud-toggle[data-panel="injection"]'); if(b) b.click(); }
+    else if (k==='g' && (PANEL_MIN.inspector||1) <= AppState.level) { const b=document.querySelector('.hud-toggle[data-panel="inspector"]'); if(b) b.click(); }
   });
 }
+// ——— reducer + gating + coach ———
+function dispatch(action, payload) {
+  switch(action) {
+    case 'SET_LEVEL': {
+      let lvl = Math.min(4, Math.max(1, parseInt(payload,10)||1));
+      AppState.level = lvl;
+      try{ localStorage.setItem('fountain.level', String(lvl)); }catch{}
+      if (lvl < 2 && AppState.ghost.enabled) {
+        AppState.ghost.enabled = false; ghostEnabled = false;
+        try{ localStorage.setItem('fountain.ghostEnabled','0'); }catch{}
+        ghostEdges = []; ghostMeta = null;
+        raw.links = (raw.links||[]).filter(l => l.label !== 'GHOST_KNN');
+        if (raw.nodes.length) { layout(raw.nodes, raw.links, seedIds, 'catalog'); rebuildScene(); updateGhostMeta(); }
+      }
+      renderUIForCurrentLevel();
+      break;
+    }
+    case 'TOGGLE_GHOST': {
+      if (AppState.level < 2) return;
+      AppState.ghost.enabled = !AppState.ghost.enabled; ghostEnabled = AppState.ghost.enabled;
+      try{ localStorage.setItem('fountain.ghostEnabled', AppState.ghost.enabled?'1':'0'); }catch{}
+      if (AppState.ghost.enabled) refreshGhost();
+      else { ghostEdges=[]; ghostMeta=null; raw.links=(raw.links||[]).filter(l=>l.label!=='GHOST_KNN'); if(raw.nodes.length){ layout(raw.nodes,raw.links,seedIds,'catalog'); document.getElementById('mode-tag').textContent='CATALOG'; rebuildScene(); } updateGhostMeta(); renderUIForCurrentLevel(); }
+      break;
+    }
+    case 'UPDATE_GHOST_PARAMS': {
+      if (payload.k != null) { AppState.ghost.k = payload.k; ghostK = payload.k; try{localStorage.setItem('fountain.ghostK',String(payload.k));}catch{} const el=document.getElementById('ghost-k-val'); if(el) el.textContent=String(payload.k); }
+      if (payload.threshold != null) { AppState.ghost.threshold = payload.threshold; ghostThr = payload.threshold; try{localStorage.setItem('fountain.ghostThr',payload.threshold.toFixed(2));}catch{} const el=document.getElementById('ghost-thr-val'); if(el) el.textContent=payload.threshold.toFixed(2); }
+      updateGhostMeta();
+      if (AppState.ghost.enabled) refreshGhost(); else renderUIForCurrentLevel();
+      break;
+    }
+    case 'SET_FILTER_HIDE_BENCH': {
+      AppState.filters.hideBench = !!payload; hideBench = AppState.filters.hideBench;
+      try{ localStorage.setItem('fountain.hideBench', hideBench?'1':'0'); }catch{}
+      const cb=document.getElementById('hide-bench'); if(cb) cb.checked=hideBench;
+      loadCatalog(); renderUIForCurrentLevel();
+      break;
+    }
+    case 'TOGGLE_PANEL': {
+      const key = payload;
+      if ((PANEL_MIN[key]||1) > AppState.level) return;
+      const nowOn = !AppState.panels[key];
+      AppState.panels[key]=nowOn;
+      applyPanelState(key, nowOn);
+      break;
+    }
+    default: break;
+  }
+}
+function renderUIForCurrentLevel() {
+  const lvl = AppState.level;
+  document.querySelectorAll('#level-ctl [data-lvl]').forEach(btn=>{
+    const bLvl = parseInt(btn.dataset.lvl,10);
+    btn.className = bLvl===lvl ? 'on' : 'off';
+    btn.setAttribute('aria-pressed', bLvl===lvl ? 'true':'false');
+  });
+  const ph = document.querySelector('header p'); if(ph) ph.textContent = LEVEL_DEF[lvl].hint + (lvl < 4 ? ` · [${lvl}/4]` : ' · [4/4 Cockpit]');
+  const ghostRow = document.getElementById('ghost-row');
+  const ghostCtl = document.getElementById('ghost-ctl');
+  const benchRow = document.getElementById('bench-row');
+  const btnGhost = document.getElementById('btn-ghost');
+  if (ghostRow) ghostRow.style.display = lvl >= 2 ? '' : 'none';
+  if (btnGhost) { btnGhost.disabled = lvl < 2; btnGhost.style.opacity = lvl < 2 ? '.45' : ''; }
+  if (ghostCtl) ghostCtl.style.display = (lvl >= 3 && ghostEnabled) ? '' : 'none';
+  if (benchRow) benchRow.style.display = lvl >= 3 ? '' : 'none';
+  const gate = (key, els) => {
+    const min = PANEL_MIN[key]||1;
+    const btn = document.querySelector(`.hud-toggle[data-panel="${key}"]`);
+    if (lvl < min) {
+      els.forEach(el=>{ if(el) el.classList.add('hidden'); });
+      if(btn){ btn.disabled=true; btn.classList.remove('on'); btn.classList.add('off'); btn.style.opacity='.42'; btn.title=`Requires Level ${min}`; }
+      return;
+    }
+    if(btn){ btn.disabled=false; btn.style.opacity=''; btn.title=btn.dataset.title||btn.title; }
+    const on = !!AppState.panels[key];
+    els.forEach(el=>{ if(el) el.classList.toggle('hidden', !on); });
+    if(btn){ btn.classList.toggle('on', on); btn.classList.toggle('off', !on); }
+  };
+  // stash original titles once
+  document.querySelectorAll('.hud-toggle[data-panel]').forEach(b=>{ if(!b.dataset.title) b.dataset.title=b.title; });
+  gate('metrics', [document.getElementById('panel-metrics')].filter(Boolean));
+  gate('injection', [document.getElementById('panel-injection')].filter(Boolean));
+  gate('inspector', [document.getElementById('panel-topo'), document.getElementById('panel-hook')].filter(Boolean));
+  if (lvl < 2 && ghostEnabled) { ghostEnabled=false; AppState.ghost.enabled=false; }
+  const hint = document.getElementById('hint');
+  if (hint) {
+    if (lvl===1) hint.innerHTML = `Level 1 · Garden — drag to orbit · click a gem <span class="mono" style="opacity:.65">· LEVEL 2 unlocks Ghost veil</span>`;
+    else if (lvl===2) hint.innerHTML = `Level 2 · Horizon — pulsing magenta = vector kNN (not persisted) <span class="mono" style="opacity:.65">· LEVEL 3 unlocks sliders</span>`;
+    else if (lvl===3) hint.innerHTML = `Level 3 · Instrument — k/thr · hide bench · DISSOLVE <span class="mono" style="opacity:.65">· LEVEL 4 = full cockpit</span>`;
+    else hint.innerHTML = `Drag to orbit · tubes = weight×cosine · GHOST = pulsing magenta kNN · DISSOLVE seed→rel→dest <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span>`;
+  }
+  refreshHintAlert();
+  maybeCoach();
+}
+function maybeCoach(){
+  if (AppState.coachSeen || AppState.level > 1) return;
+  const coach = document.getElementById('coach');
+  const msg = document.getElementById('coach-msg');
+  const cta = document.getElementById('coach-cta');
+  if(!coach||!msg||!cta) return;
+  if (AppState._coachClicks >= 8) {
+    msg.textContent = 'Notice how sessions drift? Enable the Ghost veil to see the hidden thematic shape.';
+    cta.textContent = 'Try Level 2 →';
+    cta.onclick = ()=>{ AppState.coachSeen=true; try{localStorage.setItem('fountain.coachSeen','1');}catch{} coach.classList.remove('show'); dispatch('SET_LEVEL',2); };
+    document.getElementById('coach-dismiss').onclick = ()=>{ AppState.coachSeen=true; try{localStorage.setItem('fountain.coachSeen','1');}catch{} coach.classList.remove('show'); };
+    coach.classList.add('show');
+  }
+}
+function initProgressiveReveal(){
+  document.querySelectorAll('#level-ctl [data-lvl]').forEach(btn=>{
+    btn.addEventListener('click', ()=> dispatch('SET_LEVEL', parseInt(btn.dataset.lvl,10)));
+  });
+  window.addEventListener('keydown', ev=>{
+    if(ev.target && (ev.target.tagName==='INPUT'||ev.target.tagName==='TEXTAREA')) return;
+    if(ev.key>='1' && ev.key<='4'){ dispatch('SET_LEVEL', parseInt(ev.key,10)); }
+  });
+  const kv=document.getElementById('ghost-k-val'); if(kv) kv.textContent=String(ghostK);
+  const tv=document.getElementById('ghost-thr-val'); if(tv) tv.textContent=ghostThr.toFixed(2);
+  const gk=document.getElementById('ghost-k'); if(gk) gk.value=String(ghostK);
+  const gt=document.getElementById('ghost-thr'); if(gt) gt.value=ghostThr.toFixed(2);
+  const hb=document.getElementById('hide-bench'); if(hb) hb.checked=hideBench;
+  AppState._coachTimer = setTimeout(()=>{ AppState._coachClicks = Math.max(AppState._coachClicks, 8); maybeCoach(); }, 90000);
+  const _sel = window.selectNode;
+  // count gem clicks for coach
+  document.addEventListener('click', e=>{
+    if(e.target.closest && e.target.closest('canvas')) return;
+    // count any node select
+  });
+  renderUIForCurrentLevel();
+}
 initPanelToggles();
+initProgressiveReveal();
 
 if (location.protocol === 'file:') document.getElementById('filewarn').style.display = 'block';
 
