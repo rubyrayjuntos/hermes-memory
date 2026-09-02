@@ -740,35 +740,6 @@ class HybridAgeMemoryProvider(MemoryProvider):
             used += est
         return out
 
-    def _budget(self, items: List[dict]) -> List[dict]:
-        out: List[dict] = []
-        used = 40
-        cap = min(self.config.max_tokens, 1200)
-        for it in items:
-            text = it["text"]
-            if not text:
-                continue
-            est = len(text) // 4 + 4
-            if used + est > cap:
-                continue
-            out.append(it)
-            used += est
-        return out
-
-    def _format(self, items: List[dict]) -> str:
-        if not items:
-            return ""
-        graph = [i["text"] for i in items if i["kind"] == "graph"]
-        facts = [i["text"] for i in items if i["kind"] != "graph"]
-        lines = [
-            "<memory_context>",
-            "Relevant memory context (hybrid vector + graph):",
-        ]
-        for t in graph + facts:
-            lines.append(f"- {t}")
-        lines.append("</memory_context>")
-        return "\n".join(lines)
-
     # -- misc ABC surface ----------------------------------------------------------
 
     def system_prompt_block(self) -> str:

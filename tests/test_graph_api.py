@@ -6,6 +6,7 @@ import json
 import pytest
 
 from hermes_memory.graph_api import (
+    catalog_where_clause,
     classify_session_kind,
     clamp_limit,
     conversation_first_budget,
@@ -110,6 +111,17 @@ def test_is_synthetic_session():
     assert is_synthetic_session("bench-throughput-1788250950")
     assert is_synthetic_session("verify-c5-verify-1")
     assert not is_synthetic_session("20260902_094854_3c01ca")
+
+
+def test_catalog_where_clause_turn_only():
+    w = catalog_where_clause("Turn")
+    assert w.startswith("WHERE NOT")
+    assert "bench-" in w
+    assert "bench_" in w
+    assert "verify-c5" in w
+    assert "c8-" in w
+    assert catalog_where_clause("File") == ""
+    assert catalog_where_clause(None) == ""
 
 
 def test_is_verify_session():

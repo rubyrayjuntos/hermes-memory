@@ -46,11 +46,13 @@ def format_injection(seeds: list, max_paths: int = 3) -> str:
 
     Each seed: {score, content|excerpt, paths: [{triple, ...}]}.
     ``triple`` is the verify-countable ``[A] -REL-> [B]`` string.
+
+    Do **not** wrap this in ``<memory-context>`` / ``</memory-context>``.
+    Hermes ``sanitize_context`` deletes hyphen-tagged blocks before fencing.
     """
     if not seeds:
         return ""
     lines = [
-        "<memory-context>",
         "Relevant memory context (hybrid vector + graph):",
     ]
     for i, s in enumerate(seeds, 1):
@@ -66,5 +68,4 @@ def format_injection(seeds: list, max_paths: int = 3) -> str:
         if excerpt:
             lines.append(excerpt)
         lines.append("")
-    lines.append("</memory-context>")
     return "\n".join(lines).rstrip() + "\n"
