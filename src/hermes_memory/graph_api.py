@@ -123,7 +123,7 @@ def validate_bind_host(host: str) -> str:
 
 
 def human_turn_title(content: Any, fallback: str = "Turn") -> str:
-    """First line of the message, not turn_472 or an AGE id."""
+    """First line of the message. Empty content keeps ``fallback`` (e.g. turn_id)."""
     text = str(content or "").strip()
     if not text:
         return fallback
@@ -150,6 +150,14 @@ def is_verify_session(session_id: Any) -> bool:
     """C5 verify synthetics use session_id verify-c5-verify-<ts>."""
     s = str(session_id or "").strip().strip('"')
     return s.startswith("verify-c5")
+
+
+def is_synthetic_session(session_id: Any) -> bool:
+    """Verify + loadgen sessions must not pollute recall or the Turn catalog."""
+    s = str(session_id or "").strip().strip('"')
+    if is_verify_session(s):
+        return True
+    return s.startswith("bench-") or s.startswith("bench_throughput") or s.startswith("c8-")
 
 
 def conversation_first_budget(limit: int) -> tuple[int, int]:
@@ -482,7 +490,7 @@ class Runtime:
         degree: Dict[str, int] = {}
         for row in rows:
             src = humanize_node(parse_vertex(row["n"]))
-            if src and is_verify_session((src.get("props") or {}).get("session_id")):
+            if src and is_synthetic_session((src.get("props") or {}).get("session_id")):
                 continue
             if src:
                 nodes[src["id"]] = src

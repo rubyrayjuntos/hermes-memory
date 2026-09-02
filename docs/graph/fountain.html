@@ -153,6 +153,9 @@ let lastStats = null;
 let scene, camera, renderer, controls, graphGroup, clock;
 
 function sid(x) { return String(x); }
+function escapeHTML(s) {
+  return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
 
 function gemKind(n) {
   if (n._searchSeed) return 'seed';
@@ -415,7 +418,7 @@ function renderList() {
     const kind = gemKind(n);
     const hex = '#' + MAT[kind].color.toString(16).padStart(6, '0');
     const tag = n._searchSeed ? 'SEED' : (n._hop != null ? 'H' + n._hop : (n.label || ''));
-    return `<button data-id="${n.id}" type="button"><i class="gem" style="background:${hex}"></i><span>${nodeName(n).slice(0,42)}</span><span class="mono" style="margin-left:auto;color:#7A92B1">${tag}</span></button>`;
+    return `<button data-id="${escapeHTML(n.id)}" type="button"><i class="gem" style="background:${hex}"></i><span>${escapeHTML(nodeName(n).slice(0,42))}</span><span class="mono" style="margin-left:auto;color:#7A92B1">${escapeHTML(tag)}</span></button>`;
   }).join('');
   el.querySelectorAll('button').forEach(b => b.onclick = () => {
     const n = raw.nodes.find(x => x.id === b.dataset.id);

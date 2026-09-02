@@ -564,26 +564,29 @@ class Store:
     # -- Vector search ----------------------------------------------------------
 
     async def vector_search(self, vec_literal: str, k: int) -> List[Dict[str, Any]]:
-        sql_entries = """
-            SELECT id::text AS id, content,
-                   1 - (embedding <=> $1::vector) AS similarity
-            FROM memory_entries
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> $1::vector
-            LIMIT $2
-        """
-        sql_conversations = """
-            SELECT id::text AS id, content,
-                   1 - (embedding <=> $1::vector) AS similarity
-            FROM conversations
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> $1::vector
+        """ANN over file memory AND conversation turns. Turns used to be skipped
+        whenever memory_entries had any rows (the ingest parking lot)."""
+        sql = """
+            SELECT id, content, similarity, src FROM (
+              SELECT id::text AS id, content,
+                     1 - (embedding <=> $1::vector) AS similarity,
+                     'memory_entry'::text AS src
+                FROM memory_entries
+               WHERE embedding IS NOT NULL
+              UNION ALL
+              SELECT id::text AS id, content,
+                     1 - (embedding <=> $1::vector) AS similarity,
+                     'conversation'::text AS src
+                FROM conversations
+               WHERE embedding IS NOT NULL
+                 AND coalesce(session_id, '') NOT LIKE 'verify-c5%'
+                 AND coalesce(session_id, '') NOT LIKE 'bench-%'
+            ) u
+            ORDER BY similarity DESC
             LIMIT $2
         """
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql_entries, vec_literal, k)
-            if not rows:
-                rows = await conn.fetch(sql_conversations, vec_literal, k)
+            rows = await conn.fetch(sql, vec_literal, k)
         return [dict(r) for r in rows]
 
     async def bridge_vertex_ids(self, chunk_ids: Sequence[str]) -> List[str]:

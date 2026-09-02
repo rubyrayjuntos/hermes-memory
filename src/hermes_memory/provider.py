@@ -597,7 +597,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         if not seeds or self.store is None:
             return []
-        chunk_ids = list({str(s["id"]) for s in seeds})
+        chunk_ids: List[str] = []
+        for s in seeds:
+            i = str(s["id"])
+            chunk_ids.append(i)
+            chunk_ids.append(f"conv_{i}")
+        chunk_ids = list(dict.fromkeys(chunk_ids))
         vids_raw = await self.store.bridge_vertex_ids(chunk_ids)
         seed_ids: List[int] = []
         for vid in vids_raw:
