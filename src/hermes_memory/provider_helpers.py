@@ -39,3 +39,32 @@ def format_triple(n: Any, rel: Any, m: Any) -> str:
     if b and rel_s and rel_s not in ("None", "null"):
         return f"[{a}] -{rel_s}-> [{b}]"
     return f"[{a}]"
+
+
+def format_injection(seeds: list, max_paths: int = 3) -> str:
+    """Bind graph routes onto seed headers so the LLM sees path + chunk together.
+
+    Each seed: {score, content|excerpt, paths: [{triple, ...}]}.
+    ``triple`` is the verify-countable ``[A] -REL-> [B]`` string.
+    """
+    if not seeds:
+        return ""
+    lines = [
+        "<memory-context>",
+        "Relevant memory context (hybrid vector + graph):",
+    ]
+    for i, s in enumerate(seeds, 1):
+        pct = int(round(float(s.get("score") or s.get("similarity") or 0.0) * 100))
+        excerpt = str(s.get("content") or s.get("excerpt") or "").replace("\n", " ").strip()[:220]
+        paths = list(s.get("paths") or [])[:max_paths]
+        if paths:
+            route = " ; ".join(p.get("triple") or "" for p in paths if p.get("triple"))
+            header = f"[SEED V{i} {pct}%] [Path: {route}]"
+        else:
+            header = f"[SEED V{i} {pct}%] [Path: none]"
+        lines.append(header)
+        if excerpt:
+            lines.append(excerpt)
+        lines.append("")
+    lines.append("</memory-context>")
+    return "\n".join(lines).rstrip() + "\n"
