@@ -63,13 +63,7 @@ _PHRASE_STOPWORDS = {
 
 
 def _extract_concepts(text: str, max_concepts: int = 3) -> list[str]:
-    """Extract 1-3 Concept names via capitalized phrase regex.
-
-    Mirrors extract_capitalized_phrases from graph_extractor.py inline:
-    - multi-word capitalized runs (2-4 words) not crossing newlines
-    - stopword filtering, dedup, 45-char cap
-    - max 3, fallback to single keyword if none
-    """
+    """Extract 1-3 Concept names: 2-4 word Title Case only. No single-word fallback."""
     matches = re.findall(_ABOUT_PATTERN, text or "")
     results: list[str] = []
     seen: set[str] = set()
@@ -91,24 +85,16 @@ def _extract_concepts(text: str, max_concepts: int = 3) -> list[str]:
         if len(results) >= max_concepts:
             break
     if not results:
-        # Fallback: single capitalized word or first significant token
-        singles = re.findall(r"\b([A-Z][a-z]{2,})\b", text or "")
-        for s in singles:
-            if s.lower() in _PHRASE_STOPWORDS:
-                continue
-            if s not in seen:
-                results.append(s)
-                break
-        if not results:
-            tokens = re.findall(r"\b([A-Za-z]{4,})\b", text or "")
-            for t in tokens:
-                if t.lower() in _PHRASE_STOPWORDS:
-                    continue
-                cand = t.capitalize() if t.islower() else t
-                if cand not in seen:
-                    results.append(cand)
-                    break
+        return []
     return results[:max_concepts]
+
+
+def _slug(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return s
+
+
+SNAP_COSINE = 0.85
 
 
 def _cosine_similarity(a: list[float] | None, b: list[float] | None) -> float | None:
@@ -442,7 +428,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         turn_vec: list[float] | None,
         scored: list[tuple[str, float]],
         max_extra: int = 4,
-        min_cos: float = 0.58,
+        min_cos: float = SNAP_COSINE,
     ) -> list[tuple[str, float]]:
         """Hook this turn to Concepts already in the graph (cross-session hubs)."""
         if not turn_vec:
@@ -454,6 +440,17 @@ class HybridAgeMemoryProvider(MemoryProvider):
             except Exception:
                 return scored
             self._concept_names = names
+        slug_map = {_slug(n): n for n in names if n}
+        resolved: list[tuple[str, float]] = []
+        seen_slug: set[str] = set()
+        for name, cos in scored:
+            canon = slug_map.get(_slug(name), name)
+            key = _slug(canon)
+            if not key or key in seen_slug:
+                continue
+            seen_slug.add(key)
+            resolved.append((canon, cos))
+        scored = resolved
         already = {n for n, _ in scored}
         extra: list[tuple[str, float]] = []
         skip_hubs = {"Project Zephyr", "Atlas Vault Engine"}
@@ -492,12 +489,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 cvec = None
             cos = _cosine_similarity(turn_vec, cvec)
             if cos is None:
-                cos = 0.75
+                continue
             cos = max(-1.0, min(1.0, float(cos)))
-            if cos < 0.55:
+            if cos < SNAP_COSINE:
                 continue
             scored.append((concept, cos))
-        scored = await self._about_existing_concepts(store, embedder, turn_vec, scored)
+        scored = await self._about_existing_concepts(
+            store, embedder, turn_vec, scored, min_cos=SNAP_COSINE,
+        )
         # Always MERGE the Turn vertex + bridge, even with zero ABOUT edges.
         # Title-case extraction missing used to skip the vertex entirely, so
         # live chats never appeared on the graph (only C5 verify synthetics).
