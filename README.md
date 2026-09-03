@@ -33,9 +33,10 @@ Vector finds nearby chunks; the graph is the walk. Fountain is optional grammar 
 ## Quick Start
 
 This stack has moving parts (Docker, Ollama, a DB password, a Hermes plugin).
-That is intentional. **Do not hide them** — open Hermes and load skill
-`librarian-setup`. It names each piece, you run the secret bits, then **you**
-seed three facts in chat. Those turns are the first real graph.
+That is intentional. We do not set it up for you in the dark — Hermes names
+each layer (`MEMORY.md`, sessions, this provider) and you run it. Load skill
+`librarian-setup`. You handle the secret bits, then **you** seed three facts
+in chat. Those turns are the first real graph.
 
 Map the skill will walk (clone first if you are not in the repo):
 
