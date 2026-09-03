@@ -1133,7 +1133,7 @@ class Runtime:
 
     async def _asearch(self, q: str, k: int, hops: int) -> Dict[str, Any]:
         from .embed import vec_to_literal
-        from .walk import WalkHypothesis, WalkRow
+        from .walk import WalkHypothesis, WalkRow, parse_embedding
 
         assert self.store is not None
         t0 = time.perf_counter()
@@ -1165,10 +1165,7 @@ class Runtime:
             seed = seeds_by_chunk.get(str(passport.get("chunk_id") or ""))
             if seed is None:
                 continue
-            chunk_vec, _ = preview_embedding(
-                seed.get("embedding"),
-                n=max(1, int(getattr(self.cfg, "embed_dim", len(vec or [])) or 768)),
-            )
+            chunk_vec = parse_embedding(seed.get("embedding"))
             if not chunk_vec:
                 continue
             hypotheses.append(

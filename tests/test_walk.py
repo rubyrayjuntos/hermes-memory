@@ -6,6 +6,7 @@ from hermes_memory.walk import (
     beam_score,
     clamp_cos,
     consensus_decay,
+    parse_embedding,
     provenance_boost,
 )
 
@@ -76,3 +77,15 @@ def test_score_formula_uses_clamped_pole_product() -> None:
     assert c == 0.0
     assert composite == 0.4 * 0.75 + 0.2 * 0.9
     assert score == composite * (4.0 / 8.0)
+
+
+def test_parse_embedding_accepts_pgvector_text_and_sequences() -> None:
+    assert parse_embedding("[1, 0.5, -2]") == [1.0, 0.5, -2.0]
+    assert parse_embedding([1, 0.5, -2]) == [1.0, 0.5, -2.0]
+    assert parse_embedding((1, 0.5, -2)) == [1.0, 0.5, -2.0]
+
+
+def test_parse_embedding_rejects_missing_or_malformed_values() -> None:
+    assert parse_embedding(None) == []
+    assert parse_embedding("") == []
+    assert parse_embedding("[1, broken]") == []

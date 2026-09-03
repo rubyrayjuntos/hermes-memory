@@ -32,6 +32,24 @@ class WalkRow(tuple):
         return row
 
 
+def parse_embedding(raw: Any) -> list[float]:
+    """Parse a pgvector text value or numeric sequence into floats."""
+    if isinstance(raw, (list, tuple)):
+        try:
+            return [float(value) for value in raw]
+        except (TypeError, ValueError):
+            return []
+    text = str(raw or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    if not text:
+        return []
+    try:
+        return [float(value) for value in text.split(",") if value.strip()]
+    except ValueError:
+        return []
+
+
 def clamp_cos(x: float) -> float:
     return max(0.0, float(x))
 

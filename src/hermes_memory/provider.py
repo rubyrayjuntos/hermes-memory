@@ -912,7 +912,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         q_vec: list[float],
     ) -> List[dict]:
         from .provider_helpers import format_triple, parse_agtype_vertex
-        from .walk import WalkHypothesis
+        from .walk import WalkHypothesis, parse_embedding
 
         if not seeds or self.store is None or not q_vec:
             return []
@@ -933,23 +933,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
             for s in conversation_seeds
         }
 
-        def _parse_vec(raw: Any) -> list[float]:
-            if isinstance(raw, (list, tuple)):
-                return [float(x) for x in raw]
-            text = str(raw or "").strip()
-            if text.startswith("[") and text.endswith("]"):
-                text = text[1:-1]
-            try:
-                return [float(x) for x in text.split(",") if x.strip()]
-            except ValueError:
-                return []
-
         hypotheses: list[WalkHypothesis] = []
         for passport in passports:
             seed = seeds_by_chunk.get(str(passport.get("chunk_id") or ""))
             if seed is None:
                 continue
-            chunk_vec = _parse_vec(seed.get("embedding"))
+            chunk_vec = parse_embedding(seed.get("embedding"))
             if not chunk_vec:
                 continue
             hypotheses.append(
