@@ -627,8 +627,12 @@ class Store:
         self, seed_vertex_ids: Sequence[int], rel_types: Sequence[str] = (), limit: int = 40,
         min_weight: float = 0.0, min_cosine: float = 0.0,
         decay_half_life_days: float = 30.0,
-    ) -> List[Tuple[Any, Optional[str], Any, float, float]]:
+    ) -> List[Tuple[Any, Optional[str], Any, float, float, float, float]]:
         """1-hop weighted expand from seed vertices. Cypher inside SAVEPOINT.
+
+        Returns 7-tuples ``(n, rel, m, weight, cosine, decay, score)``.
+        Search packing appends hop as an 8th element; consumers must read hop
+        from the last field, not index 5 (that is decay).
 
         Dynamic memory graph: edges carry weight (force) and cosine (vector radius).
         Recency-aware scoring: 0.5*cosine + 0.3*weight + 0.2*exp(-age_days/half_life)
@@ -702,7 +706,7 @@ class Store:
                 scored.sort(key=lambda x: x[0], reverse=True)
                 # Trim to requested limit
                 trimmed = scored[: int(limit)] if int(limit) > 0 else scored
-                out: List[Tuple[Any, Optional[str], Any, float, float]] = []
+                out: List[Tuple[Any, Optional[str], Any, float, float, float, float]] = []
                 for _score, row in trimmed:
                     try:
                         raw_w = row["w"]
@@ -714,7 +718,12 @@ class Store:
                         c = float(str(raw_c).strip('"')) if raw_c is not None and str(raw_c).strip('"') != "null" else 0.5
                     except Exception:
                         c = 0.5
-                    out.append((row["n"], row["rel"], row["m"], w, c))
+                    # decay/score already computed in scored; recompute for return
+                    edge_ca = _parse_created_at(row["r_created"]) if "r_created" in row else None
+                    vert_ca = _parse_created_at(row["m_created"]) if "m_created" in row else None
+                    decay = recency_decay_for_edge(edge_ca, vert_ca, decay_half_life_days)
+                    score = 0.5 * c + 0.3 * w + 0.2 * decay
+                    out.append((row["n"], row["rel"], row["m"], w, c, decay, score))
                 return out
             except Exception:
                 logger.debug("expand_graph transaction error", exc_info=True)

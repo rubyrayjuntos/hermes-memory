@@ -644,15 +644,84 @@ class HybridAgeMemoryProvider(MemoryProvider):
         for s in kept_seeds:
             vids = {str(v) for v in (s.get("vertex_ids") or [])}
             attached = [p for p in paths if str(p.get("from_vid")) in vids]
+            # best graph score for this seed (for decomposition)
+            best_w = best_c = best_decay = best_score = None
+            if attached:
+                # paths already score-ordered DESC by store.expand_graph
+                p0 = attached[0]
+                best_w = p0.get("weight")
+                best_c = p0.get("cosine")
+                best_decay = p0.get("decay")
+                best_score = p0.get("score")
             seed_payload.append({
                 "score": s["similarity"],
                 "content": (s.get("content") or "").strip(),
                 "paths": attached[:3],
+                "best_weight": best_w,
+                "best_cosine": best_c,
+                "best_decay": best_decay,
+                "best_score": best_score,
             })
         seed_payload.sort(key=lambda x: x["score"], reverse=True)
         selected = self._budget_seeds(seed_payload)
         self._last_recall_count = len(selected)
-        block = format_injection(selected)
+        # macro graph state — live, bounded 0.30s; omit rather than invent counts
+        graph_line = None
+        ghost_line = None
+        try:
+            if self.store is not None and self.pool is not None:
+                graph = self.store.graph_name
+                async with asyncio.timeout(0.30):
+                    async with self.pool.acquire() as conn:
+                        await self.store.load_age(conn)
+                        # live counts: vertices / edges / ABOUT (each SAVEPOINT-guarded, single txn)
+                        v = e = a = 0
+                        async with conn.transaction():
+                            sp_v = "sp_live_v"
+                            await conn.execute(f"SAVEPOINT {sp_v}")
+                            try:
+                                rv = await conn.fetch(
+                                    f"SELECT * FROM cypher('{graph}', $$ MATCH (n) RETURN count(n) $$) AS (c agtype)"
+                                )
+                                v = int(str(rv[0]["c"]).strip('"')) if rv and rv[0]["c"] is not None else 0
+                                await conn.execute(f"RELEASE SAVEPOINT {sp_v}")
+                            except Exception:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_v}")
+                            sp_e = "sp_live_e"
+                            await conn.execute(f"SAVEPOINT {sp_e}")
+                            try:
+                                re_ = await conn.fetch(
+                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r]->() RETURN count(r) $$) AS (c agtype)"
+                                )
+                                e = int(str(re_[0]["c"]).strip('"')) if re_ and re_[0]["c"] is not None else 0
+                                await conn.execute(f"RELEASE SAVEPOINT {sp_e}")
+                            except Exception:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_e}")
+                            sp_a = "sp_live_a"
+                            await conn.execute(f"SAVEPOINT {sp_a}")
+                            try:
+                                ra = await conn.fetch(
+                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r:ABOUT]->() RETURN count(r) $$) AS (c agtype)"
+                                )
+                                a = int(str(ra[0]["c"]).strip('"')) if ra and ra[0]["c"] is not None else 0
+                                await conn.execute(f"RELEASE SAVEPOINT {sp_a}")
+                            except Exception:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_a}")
+                        if v or e:
+                            graph_line = f"persisted {v}v {e}e {a} ABOUT"
+                        # ghost is render-time only — never inject a snapshot count
+        except Exception:
+            pass
+        meta = {
+            "seeds": len(selected),
+            "hops": 2,
+            "budget": getattr(self.config, "max_tokens", 1200),
+            "model": f"{getattr(self.config, 'embed_model', 'nomic-embed-text')}:{getattr(self.config, 'embed_dim', 768)}",
+            "threshold": getattr(self.config, "min_similarity", 0.72),
+            "graph_line": graph_line,
+            "ghost_line": ghost_line,
+        }
+        block = format_injection(selected, meta=meta)
         graph_n = sum(len(s.get("paths") or []) for s in selected)
         logger.info(
             "prefetch seeds=%d graph=%d kept=%d chars=%d "
@@ -709,6 +778,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             n, rel, m = row[0], row[1], row[2]
             w = float(row[3]) if len(row) > 3 else 0.5
             c = float(row[4]) if len(row) > 4 else 0.5
+            decay = float(row[5]) if len(row) > 5 else 0.5
+            score = float(row[6]) if len(row) > 6 else (0.5 * c + 0.3 * w + 0.2 * decay)
             triple = format_triple(n, rel, m)
             if not triple or "->" not in triple:
                 continue
@@ -723,6 +794,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "rel": "" if rel is None else str(rel).strip('"'),
                 "weight": w,
                 "cosine": c,
+                "decay": decay,
+                "score": score,
             })
         return paths[:16]
 
