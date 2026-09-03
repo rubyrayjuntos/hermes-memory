@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+`main` since tag `v0.1.0`. Package version in `pyproject.toml` is still `0.1.0` (Alpha).
+
+### Added
+- Fountain live inspector (`docs/graph/fountain.html`) via `hermes-memory-api` on `127.0.0.1:7890`.
+- First-time install CLI (`hermes-memory-install`) plus upgrade / migrate / uninstall / backfill.
+- Instrumented prefetch / injection cockpit and graph path expansion (#59).
+
+### Security
+- Viz API CORS scoped to loopback/`null`; bind remains `127.0.0.1` (#61).
+- Ingest transaction SAVEPOINT / batched MERGE hygiene (#62).
+- Secrets/config hygiene: password leak fix, atomic config, `sql/example` (#63).
+- Ghost kNN DoS caps and namespaced bridge keys (#60).
+
+### Fixed
+- Prefetch fencing so Hermes sanitize keeps SEED/Path (#58).
+- Graph search packing, live graph name, concept embed batching (#59 review).
+
 ## [0.1.0] - 2026-08-24
 
 First tagged release. Six kanban cards ([docs/plans/board.md](docs/plans/board.md)).
