@@ -20,6 +20,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import asyncpg
 
+from .embed import vec_to_literal
+
 try:
     from psycopg.sql import Identifier, SQL
 except ImportError:
@@ -364,6 +366,16 @@ def recency_score(
     decay = recency_decay_for_edge(ea, va, half_life_days, now)
     return 0.5 * c + 0.3 * w + 0.2 * decay
 
+def _parse_pgvector(raw: Any) -> list[float]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [float(x) for x in raw]
+    s = str(raw).strip()
+    if s.startswith("[") and s.endswith("]"):
+        s = s[1:-1]
+    return [float(x) for x in s.split(",") if x.strip()]
+
 
 class Store:
     """Async data access over the pgvector + AGE schema."""
@@ -485,6 +497,235 @@ class Store:
                 int(conv_id),
             )
         return int(row) if row is not None else None
+
+    async def upsert_noun(self, label: str, type: str | None = None) -> int:
+        async with self.pool.acquire() as conn:
+            return await self._upsert_noun_on_conn(conn, label, type)
+
+    async def _upsert_noun_on_conn(self, conn, label: str, type: str | None = None) -> int:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO noun (label, type)
+            VALUES ($1, $2)
+            ON CONFLICT (label) DO UPDATE SET
+              type = COALESCE(EXCLUDED.type, noun.type)
+            RETURNING id
+            """,
+            label,
+            type,
+        )
+        return int(row["id"])
+
+    async def write_passports(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await self._write_passports_on_conn(conn, rows)
+
+    async def _write_passports_on_conn(self, conn, rows: list[dict]) -> None:
+        for row in rows:
+            noun_id = row.get("noun_id")
+            if noun_id is None:
+                raise ValueError("conversation passports require noun_id")
+            await conn.execute(
+                """
+                INSERT INTO memory_chunk_nodes
+                    (chunk_id, source, noun_id, vertex_id, session_id, turn_id, conf, graph_name)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (chunk_id, source, noun_id) WHERE noun_id IS NOT NULL
+                DO UPDATE SET
+                  conf = EXCLUDED.conf,
+                  vertex_id = COALESCE(memory_chunk_nodes.vertex_id, EXCLUDED.vertex_id),
+                  session_id = EXCLUDED.session_id
+                """,
+                row["chunk_id"],
+                row["source"],
+                int(noun_id),
+                row.get("vertex_id"),
+                row.get("session_id"),
+                row.get("turn_id"),
+                row.get("conf"),
+                row.get("graph_name") or self.graph_name,
+            )
+
+    async def write_noun_passports(
+        self,
+        mentions: Sequence[Any],
+        *,
+        chunk_id: str,
+        source: str,
+        vertex_id: int | None,
+        session_id: str,
+        turn_id: int,
+        graph_name: str | None = None,
+    ) -> list[int]:
+        """D+E in one transaction: upsert nouns then passports."""
+        if not mentions:
+            return []
+        ids: list[int] = []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                passport_rows: list[dict] = []
+                for m in mentions:
+                    nid = await self._upsert_noun_on_conn(
+                        conn, m.label, getattr(m, "type", None),
+                    )
+                    ids.append(nid)
+                    passport_rows.append({
+                        "chunk_id": chunk_id,
+                        "source": source,
+                        "noun_id": nid,
+                        "vertex_id": vertex_id,
+                        "session_id": session_id,
+                        "turn_id": turn_id,
+                        "conf": float(getattr(m, "conf", 0.3)),
+                        "graph_name": graph_name or self.graph_name,
+                    })
+                await self._write_passports_on_conn(conn, passport_rows)
+        return ids
+
+    async def upsert_mentions_chain(
+        self,
+        pairs: list[tuple[int, int]],
+        *,
+        turn_id: int,
+        turn_vec: list[float],
+        src_vecs: dict[int, list[float]],
+        confs: dict[tuple[int, int], float],
+    ) -> None:
+        if not pairs or turn_vec is None:
+            return
+        turn_lit = vec_to_literal(turn_vec)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for src, tgt in pairs:
+                    src_vec = src_vecs.get(src)
+                    if not src_vec:
+                        continue
+                    conf = float(confs.get((src, tgt), 0.3))
+                    if conf <= 0:
+                        continue
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT e_tgt_vec, magnitude, provenance_turns
+                          FROM semantic_edge
+                         WHERE src_noun=$1 AND tgt_noun=$2 AND verb_type='mentions'
+                        """,
+                        int(src),
+                        int(tgt),
+                    )
+                    if existing is None:
+                        await conn.execute(
+                            """
+                            INSERT INTO semantic_edge (
+                                src_noun, tgt_noun, verb_type,
+                                e_src_vec, e_tgt_vec, magnitude, polarity,
+                                last_active_turn, last_active_ts, provenance_turns
+                            )
+                            VALUES (
+                                $1, $2, 'mentions',
+                                $3::vector, $4::vector, $5, 1,
+                                $6, now(), ARRAY[$6]::bigint[]
+                            )
+                            """,
+                            int(src),
+                            int(tgt),
+                            vec_to_literal(src_vec),
+                            turn_lit,
+                            min(8.0, conf),
+                            int(turn_id),
+                        )
+                        continue
+                    mag = min(8.0, float(existing["magnitude"]) + conf)
+                    alpha = min(0.4, max(0.05, conf))
+                    old_tgt = _parse_pgvector(existing["e_tgt_vec"])
+                    if len(old_tgt) != len(turn_vec):
+                        continue
+                    ema = [(1.0 - alpha) * o + alpha * t for o, t in zip(old_tgt, turn_vec)]
+                    prov = list(existing["provenance_turns"] or [])
+                    if int(turn_id) not in prov:
+                        prov.append(int(turn_id))
+                    prov = prov[:32]
+                    await conn.execute(
+                        """
+                        UPDATE semantic_edge
+                           SET magnitude = $3,
+                               e_tgt_vec = $4::vector,
+                               last_active_turn = $5,
+                               last_active_ts = now(),
+                               provenance_turns = $6::bigint[]
+                         WHERE src_noun=$1 AND tgt_noun=$2 AND verb_type='mentions'
+                        """,
+                        int(src),
+                        int(tgt),
+                        mag,
+                        vec_to_literal(ema),
+                        int(turn_id),
+                        prov,
+                    )
+
+    async def passports_for_conversations(self, conv_ids: Sequence[int]) -> list[dict]:
+        if not conv_ids:
+            return []
+        keys = [f"conv_{int(i)}" for i in conv_ids]
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT chunk_id, source, noun_id, vertex_id, session_id, turn_id, conf, graph_name
+                  FROM memory_chunk_nodes
+                 WHERE chunk_id = ANY($1::text[])
+                   AND source = 'conversation'
+                   AND noun_id IS NOT NULL
+                """,
+                keys,
+            )
+        return [dict(r) for r in rows]
+
+    async def fetch_noun_labels(self) -> list[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT label FROM noun")
+        return [r["label"] for r in rows]
+
+    async def ensure_flower_labels(self) -> None:
+        """Session / Turn / NEXT / IN_SESSION only. No Concept or ABOUT."""
+        async with self.pool.acquire() as conn:
+            await self.load_age(conn)
+            try:
+                async with conn.transaction():
+                    for idx, (kind, label) in enumerate(
+                        [
+                            ("v", "Turn"),
+                            ("v", "Session"),
+                            ("e", "NEXT"),
+                            ("e", "IN_SESSION"),
+                        ]
+                    ):
+                        sp = savepoint_name(f"flower_{label.lower()}", idx)
+                        await conn.execute(f"SAVEPOINT {sp}")
+                        try:
+                            if kind == "v":
+                                await conn.execute(
+                                    "SELECT create_vlabel($1, $2)", self.graph_name, label
+                                )
+                            else:
+                                await conn.execute(
+                                    "SELECT create_elabel($1, $2)", self.graph_name, label
+                                )
+                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        except Exception as exc:
+                            try:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            except Exception:
+                                pass
+                            try:
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                            except Exception:
+                                pass
+                            if "already exists" not in str(exc).lower():
+                                logger.debug("ensure flower label %s failed", label, exc_info=True)
+            except Exception:
+                logger.debug("ensure_flower_labels transaction error", exc_info=True)
 
     async def purge_verify_turns(self) -> int:
         """DETACH DELETE Turn vertices whose session_id is a C5 verify synthetic.
