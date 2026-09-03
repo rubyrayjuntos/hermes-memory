@@ -176,6 +176,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._unavailable_reason = ""
         self._concept_emb: Dict[str, list[float]] = {}
         self._concept_names: Optional[list[str]] = None
+        self._last_turn_id: Dict[str, int] = {}
 
     # -- identity -------------------------------------------------------------
 
@@ -306,6 +307,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "session_id": sid,
                 "role": role,
                 "content": content[:8000],
+                "previous_conversation_id": self._last_turn_id.get(sid),
             })
         self._track_turn(user_content, assistant_content)
 
@@ -399,24 +401,17 @@ class HybridAgeMemoryProvider(MemoryProvider):
         if store is None or embedder is None:
             return
 
+        if item["type"] == "turn":
+            try:
+                await self._awrite_turn(store, embedder, item)
+            except Exception:
+                logger.debug("turn write failed", exc_info=True)
+            return
+
         vec = await embedder.embed_text(item["content"])
         vec_literal = vec_to_literal(vec) if vec else None
 
-        if item["type"] == "turn":
-            conv_id = await store.insert_turn(
-                item["session_id"], self._agent_identity,
-                item["role"], item["content"], vec_literal,
-                metadata={"kind": classify_session_kind(item["session_id"])},
-            )
-            # Turn->ABOUT->Concept linker (real cosine, SAVEPOINT-guarded, never poison txn)
-            if conv_id is not None:
-                try:
-                    await self._link_turn_concepts(
-                        store, embedder, conv_id, item["session_id"], item["content"], vec
-                    )
-                except Exception:
-                    logger.debug("ABOUT linker failed", exc_info=True)
-        elif item["type"] == "memory":
+        if item["type"] == "memory":
             action = item["action"]
             target = item["target"]
             content = item["content"]
@@ -440,6 +435,165 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 await store.remove_memory_entries(
                     self._agent_identity, target, content,
                 )
+
+    async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
+        """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
+        from .extract_nouns import extract_nouns
+
+        session_id = item.get("session_id") or ""
+        content = item.get("content") or ""
+        try:
+            vec = await embedder.embed_text(content)
+        except Exception:
+            logger.debug("turn embed failed", exc_info=True)
+            vec = None
+        vec_literal = vec_to_literal(vec) if vec else None
+
+        try:
+            conv_id = await store.insert_turn(
+                session_id, self._agent_identity,
+                item.get("role") or "user", content, vec_literal,
+                metadata={"kind": classify_session_kind(session_id)},
+            )
+        except Exception:
+            logger.debug("insert_turn failed", exc_info=True)
+            return
+        if conv_id is None:
+            return
+        self._last_turn_id[session_id] = int(conv_id)
+
+        vertex_id = None
+        try:
+            vertex_id = await self._link_turn_flower(
+                store, int(conv_id), session_id, content,
+                item.get("previous_conversation_id"),
+            )
+        except Exception:
+            logger.debug("flower MERGE failed", exc_info=True)
+            vertex_id = None
+
+        try:
+            existing = []
+            try:
+                existing = await store.fetch_noun_labels()
+            except Exception:
+                logger.debug("fetch_noun_labels failed", exc_info=True)
+            mentions = extract_nouns(
+                content,
+                existing_labels=existing,
+                synthetic_session=str(session_id).startswith("verify-c5"),
+            )
+            noun_ids: list[int] = []
+            if mentions:
+                noun_ids = await store.write_noun_passports(
+                    mentions,
+                    chunk_id=f"conv_{int(conv_id)}",
+                    source="conversation",
+                    vertex_id=vertex_id,
+                    session_id=session_id,
+                    turn_id=int(conv_id),
+                    graph_name=store.graph_name,
+                )
+        except Exception:
+            logger.debug("noun/passport write failed", exc_info=True)
+            return
+
+        if vec is None or not mentions or len(noun_ids) < 2:
+            return
+        try:
+            pairs: list[tuple[int, int]] = []
+            src_vecs: dict[int, list[float]] = {}
+            confs: dict[tuple[int, int], float] = {}
+            for i in range(len(noun_ids) - 1):
+                src_id, tgt_id = noun_ids[i], noun_ids[i + 1]
+                pairs.append((src_id, tgt_id))
+                confs[(src_id, tgt_id)] = float(mentions[i].conf)
+                try:
+                    src_vec = await embedder.embed_text(mentions[i].label)
+                except Exception:
+                    src_vec = None
+                if src_vec:
+                    src_vecs[src_id] = src_vec
+            if pairs:
+                await store.upsert_mentions_chain(
+                    pairs,
+                    turn_id=int(conv_id),
+                    turn_vec=vec,
+                    src_vecs=src_vecs,
+                    confs=confs,
+                )
+        except Exception:
+            logger.debug("mentions chain failed", exc_info=True)
+
+    async def _link_turn_flower(
+        self,
+        store: Store,
+        conv_id: int,
+        session_id: str,
+        content: str,
+        previous_conversation_id: Any,
+    ) -> int | None:
+        try:
+            await store.ensure_flower_labels()
+        except Exception:
+            logger.debug("ensure_flower_labels failed", exc_info=True)
+        turn_content = (content or "")[:200]
+        turn_props = {
+            "name": f"turn_{conv_id}",
+            "session_id": session_id,
+            "turn_id": int(conv_id),
+            "content": turn_content,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        try:
+            vids_turn = await store.merge_vertices_batched([("Turn", turn_props)])
+            turn_vid_str = vids_turn[0] if vids_turn else None
+            if not turn_vid_str:
+                return None
+            turn_vid = int(turn_vid_str)
+        except Exception:
+            logger.debug("Turn vertex merge failed", exc_info=True)
+            return None
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        edges: list[tuple[str, int, int]] = []
+        edge_props: dict[tuple[str, int, int], dict] = {}
+        if session_id:
+            try:
+                sess_vids = await store.merge_vertices_batched(
+                    [("Session", {
+                        "name": session_id,
+                        "kind": classify_session_kind(session_id),
+                        "created_at": now_iso,
+                    })]
+                )
+                sess_vid = int(sess_vids[0]) if sess_vids and sess_vids[0] else None
+                if sess_vid:
+                    edges.append(("IN_SESSION", turn_vid, sess_vid))
+                    edge_props[("IN_SESSION", turn_vid, sess_vid)] = {
+                        "weight": 1.0, "cosine": 1.0, "created_at": now_iso,
+                    }
+            except Exception:
+                logger.debug("Session vertex merge failed", exc_info=True)
+            prev_id = previous_conversation_id
+            if prev_id:
+                try:
+                    prev_vids = await store.merge_vertices_batched(
+                        [("Turn", {"name": f"turn_{int(prev_id)}"})]
+                    )
+                    prev_vid = int(prev_vids[0]) if prev_vids and prev_vids[0] else None
+                    if prev_vid:
+                        edges.append(("NEXT", prev_vid, turn_vid))
+                        edge_props[("NEXT", prev_vid, turn_vid)] = {
+                            "weight": 1.0, "cosine": 1.0, "created_at": now_iso,
+                        }
+                except Exception:
+                    logger.debug("NEXT edge failed", exc_info=True)
+        if edges:
+            try:
+                await store.merge_edges_batched(edges, edge_props=edge_props)
+            except Exception:
+                logger.debug("turn flower edge merge failed", exc_info=True)
+        return turn_vid
 
     async def _about_existing_concepts(
         self,
