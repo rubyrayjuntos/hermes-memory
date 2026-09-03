@@ -21,6 +21,11 @@ CONFIG_PATHS = (
     HERMES_HOME / "config.yaml",
     HERMES_HOME / "profiles" / "librarian" / "config.yaml",
 )
+SETUP_SKILL_SRC = REPO_ROOT / "skills" / "librarian-setup"
+SETUP_SKILL_DIRS = (
+    HERMES_HOME / "skills" / "librarian-setup",
+    HERMES_HOME / "profiles" / "librarian" / "skills" / "librarian-setup",
+)
 
 
 def write_hybrid_age_block(config_path: Path, embed_model: str, graph: str) -> None:
@@ -220,6 +225,17 @@ def main():
         if pc.exists():
             shutil.rmtree(str(pc))
         print(f"    Plugin dir: {plugin_dir}")
+
+    print("[1b/7] Installing librarian-setup skill...")
+    if SETUP_SKILL_SRC.is_dir():
+        for skill_dir in SETUP_SKILL_DIRS:
+            skill_dir.parent.mkdir(parents=True, exist_ok=True)
+            if skill_dir.exists():
+                shutil.rmtree(skill_dir)
+            shutil.copytree(SETUP_SKILL_SRC, skill_dir)
+            print(f"    Skill dir: {skill_dir}")
+    else:
+        print(f"    WARNING: {SETUP_SKILL_SRC} not found — skip skill copy.")
 
     # 2. Pip install
     print("[2/7] Installing package with pip...")

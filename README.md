@@ -17,10 +17,27 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 - **Stack:** `apache/age:release_PG17_1.6.0` + pgvector on `127.0.0.1:5450`
 - **Embeddings (default):** local Ollama, `nomic-embed-text` (768-dim). Do not mix embedding models on an existing database.
 
+### Offers / does not offer
+
+| Offers | Does not offer |
+|--------|----------------|
+| Unofficial `hybrid-age` **MemoryProvider** (one slot, additive) | Official Nous plugin or in-tree `hermes memory setup` pick |
+| Local Postgres + pgvector recall **and** Apache AGE walks | Hosted / multi-tenant memory service |
+| Prefetch injection you can inspect (optional Fountain pane) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
+| Turn extract → Concept + ABOUT; ingest for code | Automatic Obsidian vault recall |
+| `hermes-memory-install` / `verify` / `upgrade` / `uninstall` | Coverage under `hermes backup` (export Postgres yourself) |
+| Loopback only (`127.0.0.1:5450` and `:7890`) | Drop-in for every gateway/wrapper without the CLI |
+
+Vector finds nearby chunks; the graph is the walk. Fountain is optional grammar — recall must work with the pane closed.
+
 ## Quick Start
 
-Prerequisites: Docker, Python 3.11+, [Ollama](https://ollama.com), and a working
-[Hermes Agent](https://github.com/nousresearch/hermes-agent) install.
+This stack has moving parts (Docker, Ollama, a DB password, a Hermes plugin).
+That is intentional. **Do not hide them** — open Hermes and load skill
+`librarian-setup`. It names each piece, you run the secret bits, then **you**
+seed three facts in chat. Those turns are the first real graph.
+
+Map the skill will walk (clone first if you are not in the repo):
 
 ```bash
 # 1. Clone
@@ -39,16 +56,21 @@ cp .env.example .env
 pip install -e '.[dev]'
 hermes-memory-install
 
-# 5. Confirm the pipeline (exit 0 = PASS)
+# 5. Confirm the pipeline (exit 0 = PASS). This uses a CI synthetic; it is not your memory.
 hermes-memory-verify
+
+# 6. New Hermes session — load skill librarian-setup and *you* seed three facts in chat
 ```
 
-`hermes-memory-install` copies the plugin, runs `pip install -e .`, sets
-`memory.provider=hybrid-age`, starts `docker compose`, and serves the inspector
-on `http://127.0.0.1:7890`. Optional: `docker compose --profile pooled up -d`
-also starts PgBouncer on `127.0.0.1:6432`.
+`hermes-memory-install` copies the plugin **and** the `librarian-setup` skill,
+runs `pip install -e .`, sets `memory.provider=hybrid-age`, starts
+`docker compose`, and serves the inspector on `http://127.0.0.1:7890`.
+Optional: `docker compose --profile pooled up -d` also starts PgBouncer on
+`127.0.0.1:6432`.
 
-Memory works in Hermes without opening the graph. If you want to *see* it, open
+Do not treat verify's Zephyr/Atlas rows as product data. The first real graph
+should be facts you said to Hermes. Memory works without opening the graph.
+If you want to *see* it, open
 [http://127.0.0.1:7890/api/librarian/pane](http://127.0.0.1:7890/api/librarian/pane)
 and drag to orbit (Fountain starts in a simple “Garden” view).
 
@@ -128,7 +150,7 @@ hardening). This is not a production multi-tenant service.
 | Doc/codebase ingest + verify CLIs | yes |
 | Fountain live inspector (loopback `:7890`) | yes |
 | Property tests P1–P8 (P3/P4 skipped) + CI | yes |
-| Conversation / relation extractors | stubs in `legacy/scripts/` |
+| Turn + ingest extractors | in-process (`provider._extract_concepts`, `ingest.extract_dependencies`); `legacy/scripts/` is the old cron |
 
 ## Testing
 
@@ -226,7 +248,7 @@ until re-tested.
 
 | Command | What it does |
 |---|---|
-| `hermes-memory-install` | Full first‑time setup: docker compose, plugin copy (default + librarian profile), pip install, `memory.provider=hybrid-age`, `hybrid_age` block, `hermes-memory-api` on 127.0.0.1:7890, verify. |
+| `hermes-memory-install` | First-time setup: compose, plugin + `librarian-setup` skill, pip, `memory.provider=hybrid-age`, viz API `:7890`, verify. |
 | `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
 | `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
 | `hermes-memory-uninstall` | Stop viz API, disable hybrid‑age, drop hermes_memory DB (unless `--keep-db`), remove plugin dirs, fall back to built‑in MEMORY.md/USER.md. |
