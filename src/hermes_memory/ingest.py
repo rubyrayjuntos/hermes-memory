@@ -640,7 +640,14 @@ class Ingestor:
                             results.append(str(int(raw)) if raw else None)
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         except Exception:
-                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            try:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            except Exception:
+                                pass
+                            try:
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                            except Exception:
+                                pass
                             results.append(None)
                             self.stats.errors += 1
                             logger.debug("vertex MERGE failed %s", props, exc_info=True)
@@ -677,7 +684,14 @@ class Ingestor:
                                 done += 1
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         except Exception:
-                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            try:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            except Exception:
+                                pass
+                            try:
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                            except Exception:
+                                pass
                             self.stats.errors += 1
             except Exception:
                 self.stats.errors += 1
