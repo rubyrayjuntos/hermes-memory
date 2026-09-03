@@ -252,6 +252,140 @@ def test_pack_search_7tuple_plus_hop_keeps_hop():
     assert abs(out["paths"][0]["score"] - score) < 1e-9
 
 
+def test_pack_search_accepts_noun_dicts_and_audit_ids():
+    from hermes_memory.walk import WalkRow
+
+    row = WalkRow(
+        (
+            {"id": "11", "name": "SourceNoun", "label": "Noun"},
+            "mentions",
+            {"id": "12", "name": "TargetNoun", "label": "Noun"},
+            4.0,
+            0.8,
+            1.0,
+            0.55,
+        ),
+        audit={
+            "session_id": "session-a",
+            "turn_id": 41,
+            "chunk_id": "conv_41",
+            "hop": 1,
+        },
+    )
+
+    out = pack_search(
+        "noun",
+        4,
+        2,
+        [{"id": "41", "content": "noun seed", "similarity": 0.8}],
+        ["11"],
+        [row],
+    )
+
+    assert out["graph"]["nodes"] == [
+        {"id": "11", "label": "Noun", "name": "SourceNoun", "props": {}},
+        {"id": "12", "label": "Noun", "name": "TargetNoun", "props": {}},
+    ]
+    assert out["paths"][0]["session_id"] == "session-a"
+    assert out["paths"][0]["turn_id"] == 41
+    assert out["paths"][0]["chunk_id"] == "conv_41"
+    assert out["paths"][0]["hop"] == 1
+
+
+@pytest.mark.asyncio
+async def test_search_builds_hypotheses_only_from_conversation_passports():
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.graph_api import Runtime
+    from hermes_memory.walk import WalkRow
+
+    class FakeEmbedder:
+        async def embed_text(self, _text):
+            return [1.0, 0.0]
+
+    class FakeStore:
+        def __init__(self):
+            self.hypotheses = None
+            self.calls = 0
+
+        async def vector_search(self, _literal, _k):
+            return [
+                {
+                    "id": "41",
+                    "content": "conversation seed",
+                    "similarity": 0.8,
+                    "src": "conversation",
+                    "embedding": "[1,0]",
+                },
+                {
+                    "id": "doc:1",
+                    "content": "file seed",
+                    "similarity": 0.9,
+                    "src": "doc_chunk",
+                },
+            ]
+
+        async def passports_for_conversations(self, conv_ids):
+            assert conv_ids == [41]
+            return [
+                {
+                    "noun_id": 11,
+                    "chunk_id": "conv_41",
+                    "session_id": "session-a",
+                    "turn_id": 41,
+                },
+                {
+                    "noun_id": 12,
+                    "chunk_id": "conv_41",
+                    "session_id": "session-a",
+                    "turn_id": 41,
+                },
+            ]
+
+        async def expand_graph(self, hypotheses, *, q_vec, hops, k):
+            self.calls += 1
+            self.hypotheses = hypotheses
+            assert q_vec == [1.0, 0.0]
+            assert hops == 2
+            assert k == 4
+            return [
+                WalkRow(
+                    (
+                        {"id": "11", "name": "SourceNoun", "label": "Noun"},
+                        "mentions",
+                        {"id": "13", "name": "TargetNoun", "label": "Noun"},
+                        4.0,
+                        1.0,
+                        1.0,
+                        0.7,
+                    ),
+                    audit={
+                        "session_id": "session-a",
+                        "turn_id": 41,
+                        "chunk_id": "conv_41",
+                        "hop": 1,
+                    },
+                )
+            ]
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.store = FakeStore()
+    runtime.embedder = FakeEmbedder()
+    runtime.cfg = HybridAgeConfig(embed_dim=2)
+
+    out = await runtime._asearch("noun", 4, 2)
+
+    assert runtime.store.calls == 1
+    assert len(runtime.store.hypotheses) == 2
+    assert {h.noun_id for h in runtime.store.hypotheses} == {11, 12}
+    assert all(h.chunk_id == "conv_41" for h in runtime.store.hypotheses)
+    assert all(h.chunk_vec == [1.0, 0.0] for h in runtime.store.hypotheses)
+    assert {result["content"] for result in out["results"]} == {
+        "conversation seed",
+        "file seed",
+    }
+    assert out["paths"][0]["session_id"] == "session-a"
+
+
 def test_undirected_knn_emits_pair_selected_by_one_side_only():
     """Higher-id vertex selecting a lower-id neighbor must still emit the edge."""
     edges = undirected_knn_edges({

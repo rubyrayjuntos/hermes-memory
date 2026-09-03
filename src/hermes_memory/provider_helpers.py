@@ -9,6 +9,8 @@ def parse_agtype_vertex(blob: Any) -> Optional[Dict]:
     """Parse an AGE vertex agtype into a Python dict."""
     if blob is None:
         return None
+    if isinstance(blob, dict):
+        return blob
     raw = blob if isinstance(blob, str) else str(blob)
     for suffix in ("::vertex", "::edge", "::path"):
         if raw.endswith(suffix):
@@ -27,7 +29,7 @@ def format_triple(n: Any, rel: Any, m: Any) -> str:
             return None
         props = data.get("properties") or {}
         label = data.get("label") or ""
-        nm = props.get("name") or props.get("summary") or ""
+        nm = data.get("name") or props.get("name") or props.get("summary") or ""
         if not nm:
             return None
         return f"{label} {nm}".strip() if label else str(nm)

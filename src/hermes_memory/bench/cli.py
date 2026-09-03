@@ -383,8 +383,9 @@ class BenchHarness:
             return []
         rows = await self.store.expand_graph(
             seed_ids,
-            [],  # dynamic weighted — no whitelist, score by weight×cosine
-            limit=40,
+            q_vec=[],
+            hops=1,
+            k=8,
         )
         out: List[tuple[str, float]] = []
         seen = set()

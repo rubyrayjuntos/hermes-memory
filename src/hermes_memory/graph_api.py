@@ -93,7 +93,13 @@ def parse_vertex(raw: Any) -> Optional[Dict[str, Any]]:
         label = label[0] if label else "Node"
     raw_props = obj.get("properties")
     props: Dict[str, Any] = raw_props if isinstance(raw_props, dict) else {}
-    name = props.get("name") or props.get("path") or props.get("file_path") or vid
+    name = (
+        obj.get("name")
+        or props.get("name")
+        or props.get("path")
+        or props.get("file_path")
+        or vid
+    )
     return {
         "id": vid,
         "label": str(label),
@@ -254,7 +260,9 @@ def pack_search(
     for row in triples:
         if not row or len(row) < 3:
             continue
+        audit = getattr(row, "audit", {}) or {}
         n_raw, rel_raw, m_raw, w, c, decay, score, hop = unpack_expand_row(tuple(row))
+        hop = int(audit.get("hop", hop))
         src = _ingest(n_raw)
         dst = _ingest(m_raw)
         rel = None if rel_raw is None else str(rel_raw).strip().strip('"')
@@ -289,6 +297,9 @@ def pack_search(
             path["decay"] = decay
         if score is not None:
             path["score"] = score
+        for key in ("session_id", "turn_id", "chunk_id"):
+            if audit.get(key) is not None:
+                path[key] = audit[key]
         paths.append(path)
         by_label[dst.get("label") or ""] = by_label.get(dst.get("label") or "", 0) + 1
 
@@ -1122,6 +1133,7 @@ class Runtime:
 
     async def _asearch(self, q: str, k: int, hops: int) -> Dict[str, Any]:
         from .embed import vec_to_literal
+        from .walk import WalkHypothesis, WalkRow
 
         assert self.store is not None
         t0 = time.perf_counter()
@@ -1133,37 +1145,62 @@ class Runtime:
         if vec:
             seeds = await self.store.vector_search(vec_to_literal(vec), k)
         t_vec = time.perf_counter()
-        vids = await self.store.bridge_vertex_ids(
-            [key for s in seeds for key in bridge_keys_for_seed(s)]
-        )
-        int_ids = []
-        for v in vids:
-            try:
-                int_ids.append(int(v))
-            except (TypeError, ValueError):
+        conversation_seeds = [s for s in seeds if s.get("src") == "conversation"]
+        conv_ids = [
+            int(str(s["id"]).removeprefix("conv_"))
+            for s in conversation_seeds
+            if str(s.get("id") or "").removeprefix("conv_").isdigit()
+        ]
+        passports = await self.store.passports_for_conversations(conv_ids)
+        seeds_by_chunk = {
+            (
+                str(s["id"])
+                if str(s["id"]).startswith("conv_")
+                else f"conv_{s['id']}"
+            ): s
+            for s in conversation_seeds
+        }
+        hypotheses = []
+        for passport in passports:
+            seed = seeds_by_chunk.get(str(passport.get("chunk_id") or ""))
+            if seed is None:
                 continue
+            chunk_vec, _ = preview_embedding(
+                seed.get("embedding"),
+                n=max(1, int(getattr(self.cfg, "embed_dim", len(vec or [])) or 768)),
+            )
+            if not chunk_vec:
+                continue
+            hypotheses.append(
+                WalkHypothesis(
+                    noun_id=int(passport["noun_id"]),
+                    chunk_id=str(passport["chunk_id"]),
+                    session_id=str(passport.get("session_id") or ""),
+                    turn_id=int(passport["turn_id"]),
+                    sim=float(seed["similarity"]),
+                    chunk_vec=chunk_vec,
+                )
+            )
         triples: List[Tuple[Any, ...]] = []
-        if int_ids and hops > 0:
-            hop1 = await self.store.expand_graph(int_ids, limit=max(k * 4, 16))
-            for row in hop1:
-                triples.append(tuple(row) + (1,))
-            if hops >= 2 and hop1:
-                dest: List[int] = []
-                for row in hop1:
-                    dst = parse_vertex(row[2])
-                    if not dst:
-                        continue
-                    try:
-                        dest.append(int(dst["id"]))
-                    except (TypeError, ValueError):
-                        continue
-                dest = [d for d in dest if d not in set(int_ids)]
-                if dest:
-                    hop2 = await self.store.expand_graph(dest[:32], limit=max(k * 2, 8))
-                    for row in hop2:
-                        triples.append(tuple(row) + (2,))
+        if hypotheses and hops > 0:
+            walk_rows = await self.store.expand_graph(
+                hypotheses,
+                q_vec=vec,
+                hops=hops,
+                k=k,
+            )
+            triples = [
+                WalkRow(
+                    tuple(row) + (int(row.audit["hop"]),),
+                    audit=dict(row.audit),
+                )
+                for row in walk_rows
+            ]
         t_graph = time.perf_counter()
-        packed = pack_search(q, k, hops, seeds, [str(v) for v in vids], triples)
+        seed_noun_ids = list(
+            dict.fromkeys(str(passport["noun_id"]) for passport in passports)
+        )
+        packed = pack_search(q, k, hops, seeds, seed_noun_ids, triples)
         packed["retrieval"]["embed_model"] = getattr(self.cfg, "embed_model", "nomic-embed-text")
         packed["retrieval"]["embed_dim"] = getattr(self.cfg, "embed_dim", 768)
         packed["retrieval"]["embed_ms"] = round((t_embed - t0) * 1000, 1)

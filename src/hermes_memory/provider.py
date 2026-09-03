@@ -789,7 +789,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     if SECRET_RE.search(s["content"] or ""):
                         continue
                     kept_seeds.append(s)
-                paths = await self._expand_paths(kept_seeds)
+                paths = await self._expand_paths(kept_seeds, q_vec=emb)
                 t_graph = time.perf_counter()
         except TimeoutError:
             logger.warning("prefetch timeout query=%r", query[:80])
@@ -799,8 +799,16 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         seed_payload = []
         for s in kept_seeds:
-            vids = {str(v) for v in (s.get("vertex_ids") or [])}
-            attached = [p for p in paths if str(p.get("from_vid")) in vids]
+            chunk_id = (
+                str(s.get("id") or "")
+                if str(s.get("id") or "").startswith("conv_")
+                else f"conv_{s.get('id')}"
+            )
+            attached = (
+                [p for p in paths if p.get("chunk_id") == chunk_id]
+                if s.get("src") == "conversation"
+                else []
+            )
             # best graph score for this seed (for decomposition)
             best_w = best_c = best_decay = best_score = None
             if attached:
@@ -897,42 +905,75 @@ class HybridAgeMemoryProvider(MemoryProvider):
             parts.append("Recent: " + self._recent_turns[-1][:150])
         return " | ".join(parts)
 
-    async def _expand_paths(self, seeds: List[dict]) -> List[dict]:
+    async def _expand_paths(
+        self,
+        seeds: List[dict],
+        *,
+        q_vec: list[float],
+    ) -> List[dict]:
         from .provider_helpers import format_triple, parse_agtype_vertex
+        from .walk import WalkHypothesis
 
-        if not seeds or self.store is None:
+        if not seeds or self.store is None or not q_vec:
             return []
-        from .store import bridge_keys_for_seed
 
-        chunk_ids: List[str] = []
-        for s in seeds:
-            chunk_ids.extend(bridge_keys_for_seed(s))
-        chunk_ids = list(dict.fromkeys(chunk_ids))
-        bmap = await self.store.bridge_map(chunk_ids)
-        for s in seeds:
-            vids: List[str] = []
-            for key in bridge_keys_for_seed(s):
-                vids += list(bmap.get(key) or [])
-            s["vertex_ids"] = list(dict.fromkeys(vids))
-        seed_ids: List[int] = []
-        for vids in (s.get("vertex_ids") or [] for s in seeds):
-            for vid in vids:
-                try:
-                    seed_ids.append(int(str(vid).strip('"')))
-                except (ValueError, TypeError):
-                    continue
-        seed_ids = list(dict.fromkeys(seed_ids))
-        if not seed_ids:
+        conversation_seeds = [s for s in seeds if s.get("src") == "conversation"]
+        conv_ids = [
+            int(str(s["id"]).removeprefix("conv_"))
+            for s in conversation_seeds
+            if str(s.get("id") or "").removeprefix("conv_").isdigit()
+        ]
+        passports = await self.store.passports_for_conversations(conv_ids)
+        seeds_by_chunk = {
+            (
+                str(s["id"])
+                if str(s["id"]).startswith("conv_")
+                else f"conv_{s['id']}"
+            ): s
+            for s in conversation_seeds
+        }
+
+        def _parse_vec(raw: Any) -> list[float]:
+            if isinstance(raw, (list, tuple)):
+                return [float(x) for x in raw]
+            text = str(raw or "").strip()
+            if text.startswith("[") and text.endswith("]"):
+                text = text[1:-1]
+            try:
+                return [float(x) for x in text.split(",") if x.strip()]
+            except ValueError:
+                return []
+
+        hypotheses: list[WalkHypothesis] = []
+        for passport in passports:
+            seed = seeds_by_chunk.get(str(passport.get("chunk_id") or ""))
+            if seed is None:
+                continue
+            chunk_vec = _parse_vec(seed.get("embedding"))
+            if not chunk_vec:
+                continue
+            hypotheses.append(
+                WalkHypothesis(
+                    noun_id=int(passport["noun_id"]),
+                    chunk_id=str(passport["chunk_id"]),
+                    session_id=str(passport.get("session_id") or ""),
+                    turn_id=int(passport["turn_id"]),
+                    sim=float(seed["similarity"]),
+                    chunk_vec=chunk_vec,
+                )
+            )
+        if not hypotheses:
             return []
         rows = await self.store.expand_graph(
-            seed_ids,
-            [],
-            limit=40,
-            decay_half_life_days=getattr(self.config, "decay_half_life_days", 30.0),
+            hypotheses,
+            q_vec=q_vec,
+            hops=2,
+            k=int(getattr(self.config, "vector_k", 8)),
         )
         paths: List[dict] = []
         seen: set[str] = set()
         for row in rows:
+            audit = getattr(row, "audit", {}) or {}
             n, rel, m = row[0], row[1], row[2]
             w = float(row[3]) if len(row) > 3 else 0.5
             c = float(row[4]) if len(row) > 4 else 0.5
@@ -942,9 +983,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
             if not triple or "->" not in triple:
                 continue
             triple = f"{triple} w={w:.2f} c={c:.2f}"
-            if triple in seen:
+            dedup_key = (
+                f"{audit.get('chunk_id')}:{audit.get('turn_id')}:"
+                f"{audit.get('hop')}:{triple}"
+            )
+            if dedup_key in seen:
                 continue
-            seen.add(triple)
+            seen.add(dedup_key)
             src = parse_agtype_vertex(n) or {}
             paths.append({
                 "from_vid": str(src.get("id") or ""),
@@ -954,6 +999,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "cosine": c,
                 "decay": decay,
                 "score": score,
+                "session_id": audit.get("session_id"),
+                "turn_id": audit.get("turn_id"),
+                "chunk_id": audit.get("chunk_id"),
+                "hop": audit.get("hop"),
             })
         return paths[:16]
 

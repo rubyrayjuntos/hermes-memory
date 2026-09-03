@@ -17,13 +17,13 @@ class WalkHypothesis:
 
 
 class WalkRow(tuple):
-    """A 7-tuple with audit metadata carried beside its public slots."""
+    """A walk tuple with audit metadata carried beside its public slots."""
 
     audit: dict[str, Any]
 
     def __new__(
         cls,
-        values: tuple[Any, Any, Any, float, float, float, float],
+        values: tuple[Any, ...],
         *,
         audit: dict[str, Any],
     ) -> "WalkRow":
