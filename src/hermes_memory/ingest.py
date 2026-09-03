@@ -372,7 +372,8 @@ class Ingestor:
     # -- deletion -----------------------------------------------------------
 
     async def _prune_deleted(self, conn, codebase: str, gone: List[str]) -> None:
-        for fp in gone:
+        from .store import age_str, cypher_call, savepoint_name
+        for idx, fp in enumerate(gone):
             try:
                 await conn.execute(
                     """
@@ -396,12 +397,40 @@ class Ingestor:
                     """,
                     AGENT_IDENTITY, fp, codebase,
                 )
-                from .store import age_str, cypher_call
                 cy = (f"MATCH (f:File) WHERE f.path = {age_str(fp)} "
                       f"DETACH DELETE f RETURN 1")
-                await conn.execute(
-                    f"SELECT * FROM {cypher_call(self._graph(), cy)} AS (ok agtype)")
-                logger.info("pruned deleted file %s", fp)
+                # DETACH DELETE wrapped in SAVEPOINT so AGE failure never poisons outer txn
+                sp = savepoint_name("prune_del", idx)
+                try:
+                    await conn.execute(f"SAVEPOINT {sp}")
+                except Exception:
+                    # If SAVEPOINT unavailable (no txn), fallback to direct execute
+                    try:
+                        await conn.execute(
+                            f"SELECT * FROM {cypher_call(self._graph(), cy)} AS (ok agtype)")
+                    except Exception:
+                        self.stats.errors += 1
+                        logger.warning("prune cypher failed for %s", fp, exc_info=True)
+                    else:
+                        logger.info("pruned deleted file %s", fp)
+                    continue
+                try:
+                    await conn.execute(
+                        f"SELECT * FROM {cypher_call(self._graph(), cy)} AS (ok agtype)")
+                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                except Exception:
+                    try:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                    except Exception:
+                        pass
+                    try:
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    except Exception:
+                        pass
+                    self.stats.errors += 1
+                    logger.warning("prune cypher failed for %s", fp, exc_info=True)
+                else:
+                    logger.info("pruned deleted file %s", fp)
             except Exception:
                 self.stats.errors += 1
                 logger.warning("prune failed for %s", fp, exc_info=True)
