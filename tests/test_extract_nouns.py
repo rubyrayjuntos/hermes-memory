@@ -40,4 +40,30 @@ def test_go_without_cue_dropped():
 
 
 def test_synthetics_on_synthetic_session():
-    assert extract_nouns("Project Zephyr and Atlas Vault Engine", synthetic_session=True) == []
+    short = "Project Zephyr and Atlas Vault Engine for verification"
+    assert extract_nouns(short, synthetic_session=True) == []
+
+    fixture = (
+        "C5 verify synthetic user turn: please remember that Project Zephyr uses "
+        "the Atlas Vault Engine for its storage layer."
+    )
+    assert len(fixture) >= 40
+    labels = {n.label.lower() for n in extract_nouns(fixture, synthetic_session=True)}
+    for banned in (
+        "project zephyr",
+        "atlas vault engine",
+        "atlas vault",
+        "vault engine",
+        "zephyr",
+    ):
+        assert banned not in labels
+
+
+def test_synthetics_non_session_mints_title_case():
+    text = (
+        "We deployed Atlas Vault Engine appear in production today "
+        "for the release checkpoint."
+    )
+    labels = [n.label for n in extract_nouns(text, synthetic_session=False)]
+    assert "Atlas Vault Engine" in labels
+    assert not any(l.lower().endswith("appear") for l in labels)

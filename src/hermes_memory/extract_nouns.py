@@ -35,6 +35,7 @@ SCHEMA_DENYLIST = frozenset({
 })
 
 VERIFY_SYNTHETICS = frozenset({"project zephyr", "atlas vault engine"})
+_VERIFY_SYNTHETIC_TOKENS = [s.split() for s in VERIFY_SYNTHETICS]
 
 AMBIGUOUS_SHORT = frozenset({
     "go", "git", "sql", "aws", "gcp", "rag", "r", "c", "d",
@@ -54,6 +55,16 @@ PHRASE_STOPWORDS = frozenset({
     "note", "warning", "result", "results", "step", "steps", "example",
     "summary", "verdict", "fix", "fixed", "broken", "working", "current",
     "via", "see", "please", "talks", "talk", "to",
+    "in", "of", "on", "at", "by", "as", "up", "out", "off", "over",
+    "appear", "appears", "appeared", "today", "tomorrow", "yesterday",
+    "production", "release", "deployed", "remember", "uses", "use", "used",
+    "storage", "layer", "turn", "user", "verify", "synthetic",
+})
+
+TRAILING_GLUE = frozenset({
+    "appear", "appears", "appeared", "in", "of", "on", "at", "to", "for",
+    "from", "with", "by", "as", "up", "out", "off", "over", "today",
+    "tomorrow", "yesterday", "now", "then", "production", "release",
 })
 
 TECH_CONTEXT = re.compile(
@@ -166,8 +177,38 @@ def _denylisted(surface: str) -> bool:
     return slug in SCHEMA_DENYLIST or low in SCHEMA_DENYLIST
 
 
+def _is_verify_synthetic_fragment(surface: str) -> bool:
+    """True when tokens are a contiguous subspan of a C5 verify synthetic name."""
+    cand = _norm_key(surface).split()
+    if not cand:
+        return False
+    cn = len(cand)
+    for syn in _VERIFY_SYNTHETIC_TOKENS:
+        sn = len(syn)
+        if cn > sn:
+            continue
+        for i in range(sn - cn + 1):
+            if syn[i : i + cn] == cand:
+                return True
+    return False
+
+
+def _valid_multiword_words(words: list[str]) -> bool:
+    if words[0].lower() in PHRASE_STOPWORDS:
+        return False
+    if all(w.lower() in PHRASE_STOPWORDS for w in words):
+        return False
+    if any(w.lower() in PHRASE_STOPWORDS for w in words):
+        return False
+    if words[-1].lower() in TRAILING_GLUE:
+        return False
+    if any(_is_identifier_shape(w) for w in words):
+        return False
+    return True
+
+
 def _multiword_windows(text: str) -> list[tuple[str, int]]:
-    """2–4 token noun phrases; sliding windows, no verb/stopword tokens."""
+    """2–4 token lowercase name phrases (first-mint); not Title Case spans."""
     tokens = [(m.group(0), m.start()) for m in WORD_RE.finditer(text)]
     out: list[tuple[str, int]] = []
     seen: set[str] = set()
@@ -178,13 +219,9 @@ def _multiword_windows(text: str) -> list[tuple[str, int]]:
                 break
             chunk = tokens[i : i + length]
             words = [c[0] for c in chunk]
-            if words[0].lower() in PHRASE_STOPWORDS:
+            if not all(re.fullmatch(r"[a-z][a-z0-9-]*", w) for w in words):
                 continue
-            if all(w.lower() in PHRASE_STOPWORDS for w in words):
-                continue
-            if any(w.lower() in PHRASE_STOPWORDS for w in words):
-                continue
-            if any(_is_identifier_shape(w) for w in words):
+            if not _valid_multiword_words(words):
                 continue
             phrase = " ".join(words)
             key = phrase.lower()
@@ -226,11 +263,7 @@ def _collect_candidates(text: str) -> list[tuple[str, int, str]]:
     for m in TITLE_MULTIWORD_RE.finditer(text):
         phrase = m.group(1)
         words = phrase.split()
-        if words[0].lower() in PHRASE_STOPWORDS:
-            continue
-        if any(w.lower() in PHRASE_STOPWORDS for w in words):
-            continue
-        if any(_is_identifier_shape(w) for w in words):
+        if not _valid_multiword_words(words):
             continue
         add(phrase, m.start(1), "multiword")
 
@@ -288,7 +321,7 @@ def extract_nouns(
 
         label, _base_conf, is_alias = _resolve_label(surface, existing_by_slug)
 
-        if synthetic_session and _norm_key(label) in VERIFY_SYNTHETICS:
+        if synthetic_session and _is_verify_synthetic_fragment(surface):
             continue
 
         if not is_alias and kind == "multiword":
