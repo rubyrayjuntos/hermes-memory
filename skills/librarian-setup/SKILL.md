@@ -14,10 +14,9 @@ metadata:
 # Librarian Setup
 
 Guide the user through a **real** local stack (Docker Postgres + AGE + pgvector,
-Ollama embeddings, hybrid-age provider). Name every moving part. Do not hide
-them. Do not dump a one-liner and disappear. Hermes walks it; they run the
-secret bits. Then **they** seed memory in this chat — no Zephyr, no
-`MEMORY.md` replacement.
+Ollama embeddings, hybrid-age provider). Name every moving part. Do not do it
+for them and call it magic. Hermes names the architecture; they run it. Then
+**they** seed memory in this chat — no Zephyr, no `MEMORY.md` replacement.
 
 ## When to Use
 
@@ -29,10 +28,11 @@ Don't use for: codebase ingest only, AGE internals, stuffing `MEMORY.md`.
 
 ## Stance
 
-This is several pieces on purpose (loopback DB, local embedder, Hermes plugin).
-Say what each piece is **for**, then the next command. Never collect the
-Postgres password in chat. If they stall, name the piece and the check — they
-can do this.
+Do not hide complexity, and do not complete the stack as a silent favor.
+Name each piece and where it sits in Hermes: `MEMORY.md` / `USER.md` (always-on
+snapshot), `session_search` (history when asked), this provider (retrieval +
+graph on loopback Postgres). Then the next command. Never collect the
+Postgres password in chat. If they stall, name the piece and the check.
 
 ## How to Run
 
