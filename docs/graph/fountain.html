@@ -441,22 +441,22 @@ function rebuildScene() {
     const curve = new THREE.QuadraticBezierCurve3(pa, mid, pb);
     const geo = new THREE.TubeGeometry(curve, segs, radius, 6, false);
     const isGhost = kind === 'GHOST_KNN';
-    const ghostBase = isGhost ? (0.42 + c * 0.28) : 0;
+    const ghostMax = isGhost ? 0.50 : 0;
     const mat = new THREE.MeshPhysicalMaterial({
       color: EDGE_COLOR[kind] || 0x2A5DB0,
       roughness: isGhost ? 0.35 : 0.32,
       metalness: kind === 'ABOUT' ? 0.35 : isGhost ? 0.10 : 0.12,
       transparent: true,
-      opacity: isGhost ? ghostBase : (0.38 + force * 0.55),
+      opacity: isGhost ? 0.25 : (0.38 + force * 0.55),
       transmission: kind === 'ABOUT' ? 0.12 : 0,
       thickness: 0.2,
       emissive: isGhost ? 0xE040B0 : (lit ? 0xffffff : 0x000000),
-      emissiveIntensity: isGhost ? 0.22 : (lit ? 0.25 : 0)
+      emissiveIntensity: isGhost ? 0.16 : (lit ? 0.25 : 0)
     });
     const tube = new THREE.Mesh(geo, mat);
     tube.userData.edge = l;
     tube.userData.isGhost = isGhost;
-    if (isGhost) tube.userData.ghostBase = ghostBase;
+    if (isGhost) tube.userData.ghostMax = ghostMax;
     graphGroup.add(tube);
     if (kind === 'GHOST_KNN') return;
     const tangent = curve.getTangent(0.84).normalize();
@@ -576,12 +576,12 @@ function initThree() {
     const t = clock.getElapsedTime();
     if (graphGroup) {
       graphGroup.children.forEach(obj => {
-        // ghost tubes — pulsing magenta (vector proximity, not persisted)
+        // ghost tubes — pulsing magenta 0% → 50% (vector proximity, not persisted)
         if (obj.userData.isGhost) {
-          const base = obj.userData.ghostBase || 0.55;
-          const ph = Math.sin(t * 1.9 + (obj.position.x * 0.07 + obj.position.z * 0.05));
-          obj.material.opacity = Math.max(0.28, Math.min(0.92, base + ph * 0.16));
-          obj.material.emissiveIntensity = 0.18 + (ph * 0.5 + 0.5) * 0.22;
+          const max = obj.userData.ghostMax || 0.50;
+          const ph01 = (Math.sin(t * 1.9 + (obj.position.x * 0.07 + obj.position.z * 0.05)) * 0.5 + 0.5);
+          obj.material.opacity = ph01 * max;
+          obj.material.emissiveIntensity = ph01 * 0.32;
           return;
         }
         const n = obj.userData.node;
