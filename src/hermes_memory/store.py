@@ -432,15 +432,22 @@ class Store:
                         try:
                             if kind == "v":
                                 await conn.execute(
-                                    f"SELECT create_vlabel('{self.graph_name}', '{label}')"
+                                    "SELECT create_vlabel($1, $2)", self.graph_name, label
                                 )
                             else:
                                 await conn.execute(
-                                    f"SELECT create_elabel('{self.graph_name}', '{label}')"
+                                    "SELECT create_elabel($1, $2)", self.graph_name, label
                                 )
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         except Exception as exc:
-                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            try:
+                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                            except Exception:
+                                pass
+                            try:
+                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                            except Exception:
+                                pass
                             if "already exists" not in str(exc).lower():
                                 logger.debug("ensure label %s failed", label, exc_info=True)
             except Exception:
@@ -905,6 +912,7 @@ class Store:
                                 name = props.get("name") or props.get("path")
                                 if not name:
                                     results.append(None)
+                                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
                                     continue
                                 key_prop = "path" if "path" in props else "name"
                                 non_key = {k: v for k, v in props.items() if k != key_prop}
@@ -957,7 +965,14 @@ class Store:
                                 else:
                                     results.append(None)
                             except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                                try:
+                                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                                except Exception:
+                                    pass
+                                try:
+                                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                                except Exception:
+                                    pass
                                 logger.debug("vertex MERGE failed %s", props, exc_info=True)
                                 results.append(None)
                 except Exception:
@@ -1004,7 +1019,14 @@ class Store:
                                 if row is not None:
                                     done += 1
                             except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                                try:
+                                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                                except Exception:
+                                    pass
+                                try:
+                                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                                except Exception:
+                                    pass
                                 logger.debug("edge MERGE failed", exc_info=True)
                 except Exception:
                     logger.warning("edge batch txn failed", exc_info=True)
@@ -1452,10 +1474,18 @@ class Store:
                 async with conn.transaction():
                     await conn.execute(f"SAVEPOINT {sp}")
                     try:
-                        await conn.execute(f"SELECT drop_graph({age_str(name)})")
+                        # Use parameterized query to avoid f-string interpolation of graph name
+                        await conn.execute("SELECT drop_graph($1)", name)
                         await conn.execute(f"RELEASE SAVEPOINT {sp}")
                     except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        try:
+                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        except Exception:
+                            pass
+                        try:
+                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        except Exception:
+                            pass
                         raise
             except Exception:
                 logger.warning("drop_graph failed for %r", name, exc_info=True)
