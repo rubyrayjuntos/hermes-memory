@@ -137,6 +137,8 @@ def _allowed_cors_origin(origin: Optional[str]) -> Optional[str]:
     if not origin:
         return None
     o = origin.strip()
+    if "\r" in o or "\n" in o:
+        return None
     if o == "null":
         return "null"
     try:
