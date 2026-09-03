@@ -118,6 +118,13 @@ async def test_v9_noun_passport_indexes(migrated_db, db_pool):
         defs = " ".join(r["indexdef"] for r in idx)
         assert "noun_id IS NOT NULL" in defs
         assert "noun_id IS NULL" in defs
+        nullable = await conn.fetchval(
+            """
+            SELECT is_nullable FROM information_schema.columns
+            WHERE table_name = 'memory_chunk_nodes' AND column_name = 'vertex_id'
+            """
+        )
+        assert nullable == "YES"
         typ = await conn.fetchval(
             """
             SELECT data_type FROM information_schema.columns

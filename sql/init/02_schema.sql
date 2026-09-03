@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS semantic_edge (
 CREATE TABLE IF NOT EXISTS memory_chunk_nodes (
     chunk_id TEXT NOT NULL,
     source TEXT NOT NULL,
-    vertex_id BIGINT NOT NULL,
+    vertex_id BIGINT,
     graph_name TEXT NOT NULL DEFAULT 'hermes_knowledge',
     noun_id INT REFERENCES noun(id) ON DELETE CASCADE,
     session_id TEXT,

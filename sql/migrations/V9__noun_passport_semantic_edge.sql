@@ -36,6 +36,7 @@ ALTER TABLE memory_chunk_nodes ADD COLUMN IF NOT EXISTS turn_id BIGINT;
 ALTER TABLE memory_chunk_nodes ADD COLUMN IF NOT EXISTS conf FLOAT CHECK (conf >= 0 AND conf <= 1);
 
 ALTER TABLE memory_chunk_nodes DROP CONSTRAINT IF EXISTS memory_chunk_nodes_pkey;
+ALTER TABLE memory_chunk_nodes ALTER COLUMN vertex_id DROP NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS memory_chunk_nodes_passport_uq
     ON memory_chunk_nodes (chunk_id, source, noun_id) WHERE noun_id IS NOT NULL;
