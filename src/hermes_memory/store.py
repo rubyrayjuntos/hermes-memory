@@ -37,14 +37,83 @@ def age_str(value: Any) -> str:
 
     Guarantees no unescaped ``'`` or ``\\`` survives from the input.
     Non-string values are str()-ed first; None becomes 'null' (unquoted).
+    Also escapes ``$`` (``\\$``) so the value can never close a
+    dollar-quoted ``cypher('graph', $$ body $$)`` wrapper.
     """
     if value is None:
         return "null"
     s = str(value)
-    s = s.replace("\\", "\\\\").replace("'", "\\'")
+    s = s.replace("\\", "\\\\")
+    s = s.replace("$", "\\$")
+    s = s.replace("'", "\\'")
     # neutralize any other backslash-sensitive control chars
     s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     return f"'{s}'"
+
+
+def bridge_keys_for_seed(seed: Dict[str, Any]) -> List[str]:
+    """Namespace-scoped chunk_id keys for a vector_search hit.
+
+    ``memory_entries`` and ``conversations`` use independent sequences, so
+    id=42 can be both a file row and a turn. Look up only the keys for
+    ``seed['src']``; never mix ``conv_N`` with canonical/mem_ N.
+    """
+    i = str(seed.get("id") or "")
+    if not i:
+        return []
+    src = str(seed.get("src") or "")
+    if src == "conversation":
+        return [i] if i.startswith("conv_") else [f"conv_{i}"]
+    if src == "doc_chunk":
+        return [i]
+    if src == "memory_entry":
+        keys = [i]
+        if i.isdigit():
+            keys.append(f"mem_{i}")
+        elif i.startswith("mem_") and i[4:].isdigit():
+            keys.append(i[4:])
+        return list(dict.fromkeys(keys))
+    if i.startswith("conv_"):
+        return [i]
+    if ":" in i:
+        return [i]
+    keys = [i]
+    if i.isdigit():
+        keys.append(f"mem_{i}")
+    return keys
+
+
+def _pick_cypher_dollar_tag(body: str) -> str:
+    """Pick a ``$tag$`` that does not collide with ``body``.
+
+    - If ``$$`` is absent, ``$$`` is safe (only ``$$`` would close it).
+    - Otherwise scan ``$cy0$``, ``$cy1$``, ... for the first tag absent
+      from ``body``.  This covers both ``$$`` and any ``$tag$`` collision.
+    - Raise if no tag found (body adversarially contains all candidates).
+    """
+    if "$$" not in body:
+        return "$$"
+    for i in range(10000):
+        tag = f"$cy{i}$"
+        if tag not in body:
+            return tag
+    raise ValueError("cypher body contains too many colliding dollar-quote tags")
+
+
+def cypher_dollar_quote(body: str) -> str:
+    """Wrap ``body`` in a safe dollar-quote tag."""
+    tag = _pick_cypher_dollar_tag(body)
+    return f"{tag}{body}{tag}"
+
+
+def cypher_call(graph: str, body: str) -> str:
+    """Return ``cypher('graph', $tag$body$tag$)`` with safe quoting."""
+    validate_graph_name(graph)
+    return f"cypher('{graph}', {cypher_dollar_quote(body)})"
+
+
+# Backwards-compatible aliases
+_pick_dollar_tag = _pick_cypher_dollar_tag
 
 
 def age_props(properties: Dict[str, Any]) -> str:
@@ -424,11 +493,9 @@ class Store:
                 async with conn.transaction():
                     await conn.execute(f"SAVEPOINT {sp}")
                     try:
+                        _cy_body = "MATCH (t:Turn) WHERE t.session_id STARTS WITH 'verify-c5' DETACH DELETE t RETURN count(t) "
                         row = await conn.fetchrow(
-                            f"SELECT * FROM cypher('{graph}', $$ "
-                            f"MATCH (t:Turn) WHERE t.session_id STARTS WITH 'verify-c5' "
-                            f"DETACH DELETE t RETURN count(t) "
-                            f"$$) AS (c agtype)"
+                            f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (c agtype)"
                         )
                         await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         if row is not None:
@@ -564,24 +631,51 @@ class Store:
     # -- Vector search ----------------------------------------------------------
 
     async def vector_search(self, vec_literal: str, k: int) -> List[Dict[str, Any]]:
-        """ANN over file memory AND conversation turns. Turns used to be skipped
-        whenever memory_entries had any rows (the ingest parking lot)."""
+        """ANN over file memory, doc_chunks, and conversation turns.
+
+        File-backed ``memory_entries`` (metadata.file_path set) are omitted:
+        ingest already stores those first-chunk embeddings in ``doc_chunks``,
+        so including both would duplicate a slot at identical cosine.
+
+        Each arm ``ORDER BY embedding <=> $1 LIMIT k`` so the HNSW indexes
+        (memory_entries, doc_chunks, conversations) can serve ANN; the outer
+        union then reranks the bounded candidate set.
+        """
         sql = """
             SELECT id, content, similarity, src FROM (
-              SELECT id::text AS id, content,
-                     1 - (embedding <=> $1::vector) AS similarity,
-                     'memory_entry'::text AS src
-                FROM memory_entries
-               WHERE embedding IS NOT NULL
+              (
+                SELECT id::text AS id, content,
+                       1 - (embedding <=> $1::vector) AS similarity,
+                       'memory_entry'::text AS src
+                  FROM memory_entries
+                 WHERE embedding IS NOT NULL
+                   AND metadata->>'file_path' IS NULL
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT $2
+              )
               UNION ALL
-              SELECT id::text AS id, content,
-                     1 - (embedding <=> $1::vector) AS similarity,
-                     'conversation'::text AS src
-                FROM conversations
-               WHERE embedding IS NOT NULL
-                 AND coalesce(metadata->>'kind', 'interactive') = 'interactive'
-                 AND coalesce(session_id, '') NOT LIKE 'verify-c5%'
-                 AND coalesce(session_id, '') NOT LIKE 'bench-%'
+              (
+                SELECT id AS id, content,
+                       1 - (embedding <=> $1::vector) AS similarity,
+                       'doc_chunk'::text AS src
+                  FROM doc_chunks
+                 WHERE embedding IS NOT NULL
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT $2
+              )
+              UNION ALL
+              (
+                SELECT id::text AS id, content,
+                       1 - (embedding <=> $1::vector) AS similarity,
+                       'conversation'::text AS src
+                  FROM conversations
+                 WHERE embedding IS NOT NULL
+                   AND coalesce(metadata->>'kind', 'interactive') = 'interactive'
+                   AND coalesce(session_id, '') NOT LIKE 'verify-c5%'
+                   AND coalesce(session_id, '') NOT LIKE 'bench-%'
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT $2
+              )
             ) u
             ORDER BY similarity DESC
             LIMIT $2
@@ -591,7 +685,28 @@ class Store:
         return [dict(r) for r in rows]
 
     async def bridge_vertex_ids(self, chunk_ids: Sequence[str]) -> List[str]:
-        """Bridge-table lookup. Returns vertex ids STRINGIFIED (bigint precision)."""
+        """Bridge-table lookup. Returns vertex ids STRINGIFIED (bigint precision).
+
+        Canonical is memory_entries.id::text; legacy 'mem_' prefix and
+        'conv_' alias are resolved as fallbacks (V8 migration window).
+        """
+        if not chunk_ids:
+            return []
+        expanded = []
+        seen: set[str] = set()
+        for cid in list(chunk_ids):
+            cid = str(cid)
+            if cid not in seen:
+                expanded.append(cid); seen.add(cid)
+            # canonical numeric -> legacy mem_ alias
+            if cid.isdigit():
+                alias = f"mem_{cid}"
+                if alias not in seen:
+                    expanded.append(alias); seen.add(alias)
+            elif cid.startswith("mem_") and cid[4:].isdigit():
+                canon = cid[4:]
+                if canon not in seen:
+                    expanded.append(canon); seen.add(canon)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -599,14 +714,34 @@ class Store:
                 FROM memory_chunk_nodes
                 WHERE chunk_id = ANY($1::text[])
                 """,
-                list(chunk_ids),
+                expanded,
             )
         return [r["vid"] for r in rows]
 
     async def bridge_map(self, chunk_ids: Sequence[str]) -> Dict[str, List[str]]:
-        """chunk_id -> vertex id strings (AGE bigint as text)."""
+        """chunk_id -> vertex id strings (AGE bigint as text).
+
+        Handles canonical / mem_ alias duality: a bridge row written as
+        'mem_42' is also reachable via canonical '42' and vice-versa, so
+        provider's bmap.get(i) never misses during the migration window.
+        """
         if not chunk_ids:
             return {}
+        # expand for SQL lookup (canonical <-> mem_ duality)
+        expanded = []
+        seen: set[str] = set()
+        for cid in list(chunk_ids):
+            cid = str(cid)
+            if cid not in seen:
+                expanded.append(cid); seen.add(cid)
+            if cid.isdigit():
+                alias = f"mem_{cid}"
+                if alias not in seen:
+                    expanded.append(alias); seen.add(alias)
+            elif cid.startswith("mem_") and cid[4:].isdigit():
+                canon = cid[4:]
+                if canon not in seen:
+                    expanded.append(canon); seen.add(canon)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -614,11 +749,26 @@ class Store:
                   FROM memory_chunk_nodes
                  WHERE chunk_id = ANY($1::text[])
                 """,
-                list(chunk_ids),
+                expanded,
             )
         out: Dict[str, List[str]] = {}
         for r in rows:
-            out.setdefault(str(r["chunk_id"]), []).append(str(r["vid"]))
+            ck = str(r["chunk_id"])
+            vid = str(r["vid"])
+            out.setdefault(ck, []).append(vid)
+            # alias back-fill so canonical lookup finds legacy rows
+            if ck.startswith("mem_") and ck[4:].isdigit():
+                canon = ck[4:]
+                if vid not in out.get(canon, []):
+                    out.setdefault(canon, []).append(vid)
+            elif ck.isdigit():
+                alias = f"mem_{ck}"
+                if vid not in out.get(alias, []):
+                    out.setdefault(alias, []).append(vid)
+        # also ensure requested canonical keys exist even if only alias rows found
+        # (already handled above, but dedupe)
+        for k in list(out.keys()):
+            out[k] = list(dict.fromkeys(out[k]))
         return out
 
     # -- Graph expansion (SAVEPOINT-wrapped Cypher) -----------------------------
@@ -654,8 +804,7 @@ class Store:
         # Fetch extra columns for recency scoring; Python re-ranks with decay.
         # Fetch 2x limit to allow newer low-w*c edges to surface via recency.
         fetch_limit = max(int(limit) * 2, int(limit) + 20) if int(limit) > 0 else 0
-        cypher = f"""
-            SELECT * FROM cypher('{graph}', $$
+        _cy_body = f"""
                 MATCH (n)
                 WHERE id(n) IN {ids_literal}
                 OPTIONAL MATCH (n)-[r]->(m)
@@ -663,8 +812,8 @@ class Store:
                   AND coalesce(r.cosine, 0.5) >= {float(min_cosine)}
                 RETURN n, type(r) AS rel, m, coalesce(r.weight, 0.5), coalesce(r.cosine, 0.5), r.created_at, m.created_at
                 LIMIT {int(fetch_limit)}
-            $$) AS (n agtype, rel agtype, m agtype, w agtype, c agtype, r_created agtype, m_created agtype)
-        """
+            """
+        cypher = f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (n agtype, rel agtype, m agtype, w agtype, c agtype, r_created agtype, m_created agtype)"
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
             sp = _savepoint_name("expand", 0)
@@ -795,7 +944,7 @@ class Store:
                                         f"RETURN id(v)"
                                     )
                                 row = await conn.fetchrow(
-                                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)"
+                                    f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)"
                                 )
                                 await conn.execute(f"RELEASE SAVEPOINT {sp}")
                                 if row is not None:
@@ -849,7 +998,7 @@ class Store:
                                     f"MERGE (a)-[e:{_check_label(label)}]->(b){props_str} RETURN id(e)"
                                 )
                                 row = await conn.fetchrow(
-                                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)"
+                                    f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)"
                                 )
                                 await conn.execute(f"RELEASE SAVEPOINT {sp}")
                                 if row is not None:
@@ -872,14 +1021,8 @@ class Store:
         """
         await self.ensure_about_labels()
         graph = self.graph_name
-        cypher = (
-            f"SELECT * FROM cypher('{graph}', $$ "
-            "MATCH (c:Concept) "
-            "OPTIONAL MATCH (c)-[r]-() "
-            "WITH c, count(r) AS degree "
-            "RETURN id(c), c.name, c.weight, c.created_at, degree "
-            f"$$) AS (id agtype, name agtype, weight agtype, created_at agtype, degree agtype)"
-        )
+        _cy_body = "MATCH (c:Concept) OPTIONAL MATCH (c)-[r]-() WITH c, count(r) AS degree RETURN id(c), c.name, c.weight, c.created_at, degree "
+        cypher = f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (id agtype, name agtype, weight agtype, created_at agtype, degree agtype)"
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
             sp = savepoint_name("fetch_concepts", 0)
@@ -936,11 +1079,8 @@ class Store:
     async def fetch_concept_names(self) -> list[str]:
         """Names only — no degree walk. Used as ABOUT hub candidates."""
         graph = self.graph_name
-        cypher = (
-            f"SELECT * FROM cypher('{graph}', $$ "
-            "MATCH (c:Concept) RETURN c.name "
-            "$$) AS (name agtype)"
-        )
+        _cy_body = "MATCH (c:Concept) RETURN c.name "
+        cypher = f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (name agtype)"
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
             sp = savepoint_name("fetch_cnames", 0)
@@ -966,11 +1106,8 @@ class Store:
     async def fetch_concept_id_names(self) -> list[tuple[int, str]]:
         """id + name for Concept verts. No degree walk."""
         graph = self.graph_name
-        cypher = (
-            f"SELECT * FROM cypher('{graph}', $$ "
-            "MATCH (c:Concept) RETURN id(c), c.name "
-            "$$) AS (id agtype, name agtype)"
-        )
+        _cy_body = "MATCH (c:Concept) RETURN id(c), c.name "
+        cypher = f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (id agtype, name agtype)"
         async with self.pool.acquire() as conn:
             await self.load_age(conn)
             sp = savepoint_name("fetch_cids", 0)
@@ -1012,11 +1149,9 @@ class Store:
                         sp = savepoint_name("purge_c", i)
                         await conn.execute(f"SAVEPOINT {sp}")
                         try:
+                            _cy_body = f"MATCH (c:Concept) WHERE id(c) = {int(vid)} DETACH DELETE c RETURN 1 "
                             await conn.execute(
-                                f"SELECT * FROM cypher('{graph}', $$ "
-                                f"MATCH (c:Concept) WHERE id(c) = {int(vid)} "
-                                f"DETACH DELETE c RETURN 1 "
-                                f"$$) AS (ok agtype)"
+                                f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (ok agtype)"
                             )
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
                             deleted += 1
@@ -1077,26 +1212,16 @@ class Store:
                     await conn.execute(f"SAVEPOINT {sp_fetch}")
                     try:
                         edge_rows = await conn.fetch(
-                            f"SELECT * FROM cypher('{graph}', $$ "
-                            f"MATCH (loser:Concept) WHERE id(loser) = {loser_id} "
-                            "MATCH (loser)-[r]->(m) RETURN type(r), id(m), r.weight, r.cosine "
-                            f"$$) AS (t agtype, mid agtype, w agtype, c agtype)"
+                            f"SELECT * FROM {cypher_call(graph, f'MATCH (loser:Concept) WHERE id(loser) = {loser_id} MATCH (loser)-[r]->(m) RETURN type(r), id(m), r.weight, r.cosine ')} AS (t agtype, mid agtype, w agtype, c agtype)"
                         )
                         in_rows = await conn.fetch(
-                            f"SELECT * FROM cypher('{graph}', $$ "
-                            f"MATCH (loser:Concept) WHERE id(loser) = {loser_id} "
-                            "MATCH (n)-[r]->(loser) RETURN type(r), id(n), r.weight, r.cosine "
-                            f"$$) AS (t agtype, nid agtype, w agtype, c agtype)"
+                            f"SELECT * FROM {cypher_call(graph, f'MATCH (loser:Concept) WHERE id(loser) = {loser_id} MATCH (n)-[r]->(loser) RETURN type(r), id(n), r.weight, r.cosine ')} AS (t agtype, nid agtype, w agtype, c agtype)"
                         )
                         wrow = await conn.fetchrow(
-                            f"SELECT * FROM cypher('{graph}', $$ "
-                            f"MATCH (k:Concept) WHERE id(k) = {keeper_id} RETURN k.weight "
-                            f"$$) AS (w agtype)"
+                            f"SELECT * FROM {cypher_call(graph, f'MATCH (k:Concept) WHERE id(k) = {keeper_id} RETURN k.weight ')} AS (w agtype)"
                         )
                         lrow = await conn.fetchrow(
-                            f"SELECT * FROM cypher('{graph}', $$ "
-                            f"MATCH (l:Concept) WHERE id(l) = {loser_id} RETURN l.weight "
-                            f"$$) AS (w agtype)"
+                            f"SELECT * FROM {cypher_call(graph, f'MATCH (l:Concept) WHERE id(l) = {loser_id} RETURN l.weight ')} AS (w agtype)"
                         )
                         await conn.execute(f"RELEASE SAVEPOINT {sp_fetch}")
                     except Exception:
@@ -1147,7 +1272,7 @@ class Store:
                                 f"MATCH (a), (b) WHERE id(a) = {keeper_id} AND id(b) = {mid} "
                                 f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
                             )
-                            await conn.fetchrow(f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)")
+                            await conn.fetchrow(f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)")
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         except Exception:
                             await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
@@ -1183,7 +1308,7 @@ class Store:
                                 f"MATCH (a), (b) WHERE id(a) = {nid} AND id(b) = {keeper_id} "
                                 f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
                             )
-                            await conn.fetchrow(f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)")
+                            await conn.fetchrow(f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)")
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         except Exception:
                             await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
@@ -1194,7 +1319,7 @@ class Store:
                     await conn.execute(f"SAVEPOINT {sp_w}")
                     try:
                         cypher = f"MATCH (k:Concept) WHERE id(k) = {keeper_id} SET k += {age_props({'weight': new_weight})} RETURN id(k)"
-                        await conn.fetchrow(f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (id agtype)")
+                        await conn.fetchrow(f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)")
                         await conn.execute(f"RELEASE SAVEPOINT {sp_w}")
                     except Exception:
                         await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_w}")
@@ -1227,7 +1352,7 @@ class Store:
                     await conn.execute(f"SAVEPOINT {sp_del}")
                     try:
                         await conn.fetch(
-                            f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) WHERE id(c) = {loser_id} DETACH DELETE c $$) AS (a agtype)"
+                            f"SELECT * FROM {cypher_call(graph, f'MATCH (c:Concept) WHERE id(c) = {loser_id} DETACH DELETE c ')} AS (a agtype)"
                         )
                         await conn.execute(f"RELEASE SAVEPOINT {sp_del}")
                     except Exception:
@@ -1264,20 +1389,15 @@ class Store:
                         await conn.execute(f"SAVEPOINT {sp}")
                         try:
                             # Revalidate: degree==0 and created_at older than cutoff, locked
+                            _cy_body = f"MATCH (c:Concept) WHERE id(c) = {oid} OPTIONAL MATCH (c)-[r]-() WITH c, count(r) AS degree WHERE degree = 0 AND c.created_at IS NOT NULL AND c.created_at < {age_str(cutoff_iso)} RETURN id(c) "
                             rows = await conn.fetch(
-                                f"SELECT * FROM cypher('{graph}', $$ "
-                                f"MATCH (c:Concept) WHERE id(c) = {oid} "
-                                "OPTIONAL MATCH (c)-[r]-() "
-                                "WITH c, count(r) AS degree "
-                                f"WHERE degree = 0 AND c.created_at IS NOT NULL AND c.created_at < {age_str(cutoff_iso)} "
-                                "RETURN id(c) "
-                                f"$$) AS (id agtype)"
+                                f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (id agtype)"
                             )
                             if not rows:
                                 await conn.execute(f"RELEASE SAVEPOINT {sp}")
                                 continue
                             await conn.fetch(
-                                f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) WHERE id(c) = {oid} DETACH DELETE c $$) AS (a agtype)"
+                                f"SELECT * FROM {cypher_call(graph, f'MATCH (c:Concept) WHERE id(c) = {oid} DETACH DELETE c ')} AS (a agtype)"
                             )
                             await conn.execute("DELETE FROM memory_chunk_nodes WHERE vertex_id = $1 AND graph_name = $2", oid, self.graph_name)
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")

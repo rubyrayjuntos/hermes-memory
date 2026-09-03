@@ -95,7 +95,7 @@ jobs:
         if: ${{ env.MODEL_API_KEY == '' }}
         run: echo "::notice::MODEL_API_KEY not set — skipping autofix (set via gh secret set MODEL_API_KEY)."
 
-      - uses: anomalyco/opencode/github@latest
+      - uses: anomalyco/opencode/github@a3b97d9090ccf4aa9ac32268486283e3131e36b4 # github-v1.2.25
         if: ${{ steps.pr.outputs.number != '' && env.MODEL_API_KEY != '' }}
         env:
           MODEL_API_KEY: ${{ env.MODEL_API_KEY }}

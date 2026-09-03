@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from .store import Store, check_label, savepoint_name, validate_graph_name
+from .store import Store, bridge_keys_for_seed, check_label, cypher_call, savepoint_name, validate_graph_name
 
 logger = logging.getLogger("hermes_memory.graph_api")
 
@@ -33,6 +33,8 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_LIMIT = 2000
 DEFAULT_LIMIT = 250
 GHOST_CONCEPT_LIMIT = 64
+GHOST_MAX_K = 8
+GHOST_MAX_LIMIT = 250
 PID_PATH = Path.home() / ".hermes" / "run" / "hermes-memory-api.pid"
 
 RUNTIME: Optional["Runtime"] = None
@@ -607,6 +609,7 @@ class Runtime:
                    AND NOT EXISTS (
                      SELECT 1 FROM memory_chunk_nodes b
                       WHERE b.chunk_id = e.id::text
+                         OR b.chunk_id = 'mem_' || e.id::text
                    )
                 """
             )
@@ -641,7 +644,7 @@ class Runtime:
             await conn.execute(f"SAVEPOINT {sp}")
             try:
                 row = await conn.fetchrow(
-                    f"SELECT * FROM cypher('{graph}', $$ {body} $$) AS (c agtype)"
+                    f"SELECT * FROM {cypher_call(graph, body)} AS (c agtype)"
                 )
                 await conn.execute(f"RELEASE SAVEPOINT {sp}")
             except Exception:
@@ -681,7 +684,7 @@ class Runtime:
             await conn.execute(f"SAVEPOINT {sp}")
             try:
                 rows = await conn.fetch(
-                    f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS "
+                    f"SELECT * FROM {cypher_call(graph, cypher)} AS "
                     f"(n agtype, rel agtype, m agtype, nid agtype, mid agtype, w agtype, c agtype)"
                 )
                 await conn.execute(f"RELEASE SAVEPOINT {sp}")
@@ -758,11 +761,20 @@ class Runtime:
         """Ghost kNN: render-time vector proximity, never persisted.
         For the visible Turn catalog (limit), fetch conversation embeddings and
         return up to k ghost edges per Turn above threshold. No AGE writes.
+        Guarded by timeout(4) + bounded scoring + LRU cap.
         """
         assert self.store is not None and self.pool is not None
-        k = max(1, min(int(k), 8))
+        k = max(1, min(int(k), GHOST_MAX_K))
         threshold = max(0.0, min(float(threshold), 0.99))
-        limit = max(10, min(int(limit), 400))
+        limit = max(10, min(int(limit), GHOST_MAX_LIMIT))
+        try:
+            return await asyncio.wait_for(self._aghost_inner(k, threshold, limit), timeout=4.0)
+        except asyncio.TimeoutError:
+            logger.warning("ghost inner timeout after 4s k=%s threshold=%s limit=%s", k, threshold, limit)
+            return {"ghost_edges": [], "ghost_links": [], "edges": [], "meta": {"k": k, "threshold": threshold, "visible": 0, "edges": 0, "timed_out": True}}
+
+    async def _aghost_inner(self, k: int, threshold: float, limit: int) -> Dict[str, Any]:
+        assert self.store is not None and self.pool is not None
         graph = self.store.graph_name
         async with self.pool.acquire() as conn:
             await self.store.load_age(conn)
@@ -897,7 +909,7 @@ class Runtime:
                     await conn.execute(f"SAVEPOINT {sp}")
                     try:
                         crows2 = await conn.fetch(
-                            f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) RETURN id(c), c.name LIMIT {concept_limit} $$) AS (cid agtype, cname agtype)"
+                            f"SELECT * FROM {cypher_call(graph, f'MATCH (c:Concept) RETURN id(c), c.name LIMIT {concept_limit} ')} AS (cid agtype, cname agtype)"
                         )
                         await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         concept_rows = list(crows2)
@@ -950,16 +962,32 @@ class Runtime:
                     concept_emb[cname] = vec
             if missing:
                 try:
-                    batched = await self.embedder.embed_texts(missing)
+                    batched = await asyncio.wait_for(self.embedder.embed_texts(missing), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("ghost concept embed timeout")
+                    batched = [None] * len(missing)
                 except Exception:
                     batched = [None] * len(missing)
                 for cname, vec in zip(missing, batched):
                     if vec:
+                        # LRU cap 128
+                        if len(self._ghost_concept_emb) >= 128:
+                            # evict oldest (first inserted)
+                            oldest = next(iter(self._ghost_concept_emb))
+                            del self._ghost_concept_emb[oldest]
                         self._ghost_concept_emb[cname] = list(vec)
                         concept_emb[cname] = list(vec)
             # For each Turn, score vs concepts, keep top 2 above lower threshold
-            # Concept names are short — cosine sits 0.45-0.65 vs 0.70 for Turn↔Turn, so gate lower
+            # Cap total pair scoring to 8000 to bound CPU (sample if larger)
             concept_thr = max(0.42, float(threshold) - 0.20)
+            pairs_total = len(tids_with_emb) * len(concept_emb)
+            if pairs_total > 8000:
+                # sample concepts down to fit budget
+                import random as _ghost_rng
+                _ghost_rng.seed(0)
+                max_concepts = max(1, 8000 // max(1, len(tids_with_emb)))
+                sampled = _ghost_rng.sample(list(concept_emb.items()), min(len(concept_emb), max_concepts))
+                concept_emb = dict(sampled)
             for tid in tids_with_emb:
                 src_vid = vid_by_tid.get(tid)
                 src_vec = emb_by_tid.get(tid)
@@ -1030,6 +1058,9 @@ class Runtime:
                  WHERE chunk_id = ANY(
                     SELECT id::text FROM memory_entries WHERE metadata->>'file_path' = $1
                  )
+                    OR chunk_id = ANY(
+                    SELECT 'mem_' || id::text FROM memory_entries WHERE metadata->>'file_path' = $1
+                 )
                 """,
                 file_path,
             )
@@ -1077,7 +1108,9 @@ class Runtime:
         if vec:
             seeds = await self.store.vector_search(vec_to_literal(vec), k)
         t_vec = time.perf_counter()
-        vids = await self.store.bridge_vertex_ids([s["id"] for s in seeds] + [f"conv_{s['id']}" for s in seeds])
+        vids = await self.store.bridge_vertex_ids(
+            [key for s in seeds for key in bridge_keys_for_seed(s)]
+        )
         int_ids = []
         for v in vids:
             try:
@@ -1129,7 +1162,7 @@ class Runtime:
                 await conn.execute(f"SAVEPOINT {sp}")
                 try:
                     row = await conn.fetchrow(
-                        f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (n agtype)"
+                        f"SELECT * FROM {cypher_call(graph, cypher)} AS (n agtype)"
                     )
                     await conn.execute(f"RELEASE SAVEPOINT {sp}")
                 except Exception:
@@ -1166,7 +1199,7 @@ class Runtime:
                 await conn.execute(f"SAVEPOINT {sp}")
                 try:
                     row = await conn.fetchrow(
-                        f"SELECT * FROM cypher('{graph}', $$ {cypher} $$) AS (c agtype)"
+                        f"SELECT * FROM {cypher_call(graph, cypher)} AS (c agtype)"
                     )
                     await conn.execute(f"RELEASE SAVEPOINT {sp}")
                 except Exception:
@@ -1300,12 +1333,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "ghost":
                 k = clamp_limit((qs.get("k") or [5])[0], default=5)
+                k = max(1, min(k, GHOST_MAX_K))
                 # threshold is 0..0.99 float, not a limit clamp
                 try:
                     thr = float((qs.get("threshold") or ["0.70"])[0])
                 except Exception:
                     thr = 0.70
                 lim = clamp_limit((qs.get("limit") or [200])[0], default=200)
+                lim = max(10, min(lim, GHOST_MAX_LIMIT))
                 self._json(200, rt.ghost(k, thr, lim))
                 return
             if route == "chunks":

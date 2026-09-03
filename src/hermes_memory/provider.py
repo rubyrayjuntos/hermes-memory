@@ -745,17 +745,18 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         if not seeds or self.store is None:
             return []
+        from .store import bridge_keys_for_seed
+
         chunk_ids: List[str] = []
         for s in seeds:
-            i = str(s["id"])
-            chunk_ids.append(i)
-            chunk_ids.append(f"conv_{i}")
+            chunk_ids.extend(bridge_keys_for_seed(s))
         chunk_ids = list(dict.fromkeys(chunk_ids))
         bmap = await self.store.bridge_map(chunk_ids)
         for s in seeds:
-            i = str(s["id"])
-            vids = list(bmap.get(i) or []) + list(bmap.get(f"conv_{i}") or [])
-            s["vertex_ids"] = vids
+            vids: List[str] = []
+            for key in bridge_keys_for_seed(s):
+                vids += list(bmap.get(key) or [])
+            s["vertex_ids"] = list(dict.fromkeys(vids))
         seed_ids: List[int] = []
         for vids in (s.get("vertex_ids") or [] for s in seeds):
             for vid in vids:

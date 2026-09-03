@@ -6,6 +6,8 @@ import json
 import pytest
 
 from hermes_memory.graph_api import (
+    GHOST_MAX_K,
+    GHOST_MAX_LIMIT,
     catalog_where_clause,
     classify_session_kind,
     clamp_limit,
@@ -23,6 +25,7 @@ from hermes_memory.graph_api import (
     unpack_expand_row,
     validate_bind_host,
 )
+from hermes_memory.store import bridge_keys_for_seed
 
 
 def test_stringify_id_preserves_bigint_decimal():
@@ -72,6 +75,16 @@ def test_clamp_limit():
     assert clamp_limit("250") == 250
     assert clamp_limit("99999") == 2000
     assert clamp_limit("nope") == 250
+    assert GHOST_MAX_K == 8
+    assert GHOST_MAX_LIMIT == 250
+
+
+def test_bridge_keys_for_seed_are_namespaced():
+    assert bridge_keys_for_seed({"id": "42", "src": "conversation"}) == ["conv_42"]
+    assert "42" not in bridge_keys_for_seed({"id": "42", "src": "conversation"})
+    assert bridge_keys_for_seed({"id": "42", "src": "memory_entry"}) == ["42", "mem_42"]
+    assert "conv_42" not in bridge_keys_for_seed({"id": "42", "src": "memory_entry"})
+    assert bridge_keys_for_seed({"id": "ab12cd34:0", "src": "doc_chunk"}) == ["ab12cd34:0"]
 
 
 def test_preview_embedding():
