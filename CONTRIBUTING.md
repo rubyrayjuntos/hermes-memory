@@ -2,6 +2,15 @@
 
 Thanks for your interest in contributing.
 
+## First contribution (external)
+
+1. Fork and clone; create a branch from `main`.
+2. `cp .env.example .env`, set `HERMES_PG_PASSWORD`, `docker compose up -d`, `pip install -e '.[dev]'`.
+3. Property tests must pass: `pytest tests/property -q`. Integration tests need the compose stack.
+4. Open a PR against `main`. Do not put secrets in issues or PRs — see [SECURITY.md](SECURITY.md).
+
+Maintainers still use short-lived `wip/<task>` branches that are deleted after squash-merge.
+
 ## Development Setup
 
 ```bash
@@ -12,7 +21,7 @@ docker compose up -d          # integration tests need this stack
 pip install -e '.[dev]'
 ```
 
-## Branch & kanban flow
+## Branch flow
 
 Work is tracked on the kanban board in
 [`docs/plans/board.md`](docs/plans/board.md); card specs and acceptance criteria

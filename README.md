@@ -5,88 +5,75 @@
 pgvector for semantic recall + Apache AGE knowledge graph for entity expansion,
 in one Postgres database.
 
+This is an **unofficial community plugin** (provider name `hybrid-age`). It is not
+affiliated with Nous Research. Status: **Alpha**. Tested against Hermes Agent v0.20.x.
+Postgres and the viz API bind **loopback only** (`127.0.0.1`).
+
 > *A librarian doesn't just store books — she knows where everything is, retrieves
 > the right volume at the right moment, and quietly discards what's stale.*
 
-Package: `hermes-memory` · Product: **The Hermes Librarian**
+Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 
-- **Provider name:** `hybrid-age` (plugin dir or pip entry point)
-- **Stack:** `apache/age:release_PG17_1.6.0` + pgvector, exposed on `127.0.0.1:5450`
-- **Embeddings:** Ollama (`nomic-embed-text`, 768-dim) via OpenAI-compatible API
-- **Tested against:** Hermes Agent v0.20.x
-- **License:** MIT
+- **Stack:** `apache/age:release_PG17_1.6.0` + pgvector on `127.0.0.1:5450`
+- **Embeddings (default):** local Ollama, `nomic-embed-text` (768-dim). Do not mix embedding models on an existing database.
 
 ## Quick Start
 
-Follow the steps in order — each depends on the previous one.
+Prerequisites: Docker, Python 3.11+, [Ollama](https://ollama.com), and a working
+[Hermes Agent](https://github.com/nousresearch/hermes-agent) install.
 
 ```bash
 # 1. Clone
-git 
-clone https://github.com/rubyrayjuntos/hermes-memory.git
+git clone https://github.com/rubyrayjuntos/hermes-memory.git
 cd hermes-memory
 
-# 2. Configure environment — docker compose REQUIRES HERMES_PG_PASSWORD
+# 2. Local embeddings (required for recall — default URL is 127.0.0.1:11434/v1)
+ollama pull nomic-embed-text
+
+# 3. Database password — docker compose will not start without HERMES_PG_PASSWORD
 cp .env.example .env
-# Edit .env and set HERMES_PG_PASSWORD (and optionally HYBRID_AGE_DSN)
+# Edit .env: set HERMES_PG_PASSWORD and put the same password in HYBRID_AGE_DSN
+# (replace the *** placeholder).
 
-# 3. Start Postgres 17 + Apache AGE 1.6 + pgvector on 127.0.0.1:5450
-docker compose up -d
-docker compose ps        # wait until "healthy"
-# Need connection pooling? `docker compose --profile pooled up -d` also starts PgBouncer on 127.0.0.1:6432
-# sql/init/*.sql create extensions, the hermes_knowledge graph, all labels,
-# tables and indexes automatically on first boot.
-# Data persists in the pgdata volume across docker compose down/up.
-
-# 4. (optional, but needed for tests / CLIs) editable install with dev extras
+# 4. Install the package, wire the Hermes plugin, start Postgres, start the viz API
 pip install -e '.[dev]'
+hermes-memory-install
 
-# 5a. Install as a Hermes plugin — copy the package into the plugins dir,
-#     keeping __init__.py at the top level (Hermes' discovery heuristic
-#     scans that file):
-mkdir -p ~/.hermes/plugins/hybrid-age
-cp src/hermes_memory/__init__.py src/hermes_memory/*.py \
-   ~/.hermes/plugins/hybrid-age/
-
-#    ...OR install via pip — Hermes also discovers providers through the
-#    `hermes_agent.memory_providers` entry point declared in pyproject.toml:
-pip install -e .
-
-# 5b. Configure ~/.hermes/config.yaml
+# 5. Confirm the pipeline (exit 0 = PASS)
+hermes-memory-verify
 ```
 
-```yaml
-# ~/.hermes/config.yaml
-memory:
-  provider: hybrid-age          # activation key
+`hermes-memory-install` copies the plugin, runs `pip install -e .`, sets
+`memory.provider=hybrid-age`, starts `docker compose`, and serves the inspector
+on `http://127.0.0.1:7890`. Optional: `docker compose --profile pooled up -d`
+also starts PgBouncer on `127.0.0.1:6432`.
 
-hybrid_age:                     # optional overrides (defaults shown)
-  dsn_env: HYBRID_AGE_DSN       # DSN comes from this env var (secrets stay out of yaml)
+Memory works in Hermes without opening the graph. If you want to *see* it, open
+[http://127.0.0.1:7890/api/librarian/pane](http://127.0.0.1:7890/api/librarian/pane)
+and drag to orbit (Fountain starts in a simple “Garden” view).
+
+Advanced: point `HYBRID_AGE_EMBED_URL` at any OpenAI-compatible `/v1` host that
+returns **768-dim** vectors. Changing models without re-embedding poisons search.
+
+```yaml
+# ~/.hermes/config.yaml — hermes-memory-install writes this; defaults shown
+memory:
+  provider: hybrid-age
+
+hybrid_age:
+  dsn_env: HYBRID_AGE_DSN
   embed_url_env: HYBRID_AGE_EMBED_URL
-  embed_model: nomic-embed-text # must produce 768-dim vectors
+  embed_model: nomic-embed-text
   graph: hermes_knowledge
   vector_k: 12
   min_similarity: 0.55
   max_tokens: 1200
 ```
 
-**Alternative to step 5b:** because the package ships a `config_schema`,
-`hermes memory setup hybrid-age` walks through the same settings interactively
-(secret fields are written to env, behavior knobs to config.yaml).
-
-### Verify it works
-
-With the stack up and the plugin installed:
+Index a codebase (re-run is a no-op when content is unchanged):
 
 ```bash
-hermes-memory-verify            # synthetic turn → per-layer row-count assertions; exit 0 = PASS
-```
-
-Or index a codebase and check recall:
-
-```bash
-hermes-memory-ingest path/to/repo   # hash → chunk → embed → vector + AGE graph + bridge rows
-hermes-memory-ingest path/to/repo   # re-run: dedup means 0 new entities
+hermes-memory-ingest path/to/repo
 ```
 
 ## Architecture
@@ -97,7 +84,7 @@ The memory core spans **three coordinated layers**:
 |---|---|---|
 | **Conversations** | `conversations` table — one row per turn (user + assistant), contains `session_id`, `turn_id`, `content`, `created_at` ISO | `sync_turn` per-turn: embed Turn → extract 1-3 Concepts → MERGE Turn/Concept/ABOUT → bridge `memory_chunk_nodes` |
 | **Vector + Graph** | `memory_entries` (pgvector HNSW, 768-dim nomic-embed-text) + `AGE hermes_knowledge` graph (File/Module/Dependency/Standard/Concept/ Turn nodes + typed edges) | Ingest walks codebase → SHA-256 chunks → embed → File/Module/Dependency with `IMPORTS` edges (weight 1.0 internal / 0.80 external, cosine 0.80). AGE labels via `create_vlabel`/`create_elabel`. |
-| **3D Inspector** | Live growth view: `docs/graph/3d.html` polls `/api/librarian/graph/stats` 30s + `/api/librarian/graph/3d` 20s (paused during panel inspect). Edge labels: `IMPORTS w1.0·c0.80` and `ABOUT w1.0·c0.55-1.0` (orange). Filter toggles `IMPORTS`/`ABOUT` hide/show without reload. | `3d.html` JS: `fetchMetrics()` + `load()` + `String(id)` for vis-network IDs. Badge `#verifyBadge` top-right polls `/api/librarian/verify` → `PASS/FAIL · <len> chars · <lines> lines`, fallback to graph/stats placeholder. |
+| **Inspector** | Optional Fountain pane at `http://127.0.0.1:7890/api/librarian/pane` (`docs/graph/fountain.html`). Drag to orbit; progressive levels add ghost kNN and injection telemetry. Not required for recall. | `hermes-memory-api` (loopback-only). CORS reflects loopback/`null` origins only. |
 
 **Walk** (expand_graph): `0.5*cosine + 0.3*weight + 0.2*exp(-age/30)` where age from `r.created_at / m.created_at`, legacy fallback 0.5. Score-order `DESC`, gates `min_cosine=0.0`, `min_weight=0.0`. Radius gate `r.cosine >= $radius` with `ORDER BY (0.5*r.cosine + 0.3*COALESCE(r.weight,0.5) + 0.2*exp(-age/30.0)) DESC`.
 
@@ -114,34 +101,34 @@ User message ─▶ sync_turn ──► embed Turn(768d) ──► extract Conce
                                     ▼
                      expand_graph(seed, [], limit, min_weight, min_cosine, decay_half_life) → 0.5·cos+0.3·weight+0.2·exp(-age/half_life) DESC
 ```
-|| Embeddings | `src/hermes_memory/embed.py` | OpenAI-compatible client (Ollama), 768-dim invariant |
-|| Store | `src/hermes_memory/store.py` | SQL/Cypher data access; every Cypher statement inside a SAVEPOINT |
-|| Ingest | `src/hermes_memory/ingest.py` | Codebase indexing: hash→chunk→embed→vector+graph+bridge |
-|| Verify | `src/hermes_memory/verify.py` | End-to-end pipeline smoke-check CLI |
+| Module | Path | Role |
+|--------|------|------|
+| Embeddings | `src/hermes_memory/embed.py` | OpenAI-compatible client (Ollama default), 768-dim invariant |
+| Store | `src/hermes_memory/store.py` | SQL/Cypher data access; every Cypher statement inside a SAVEPOINT |
+| Ingest | `src/hermes_memory/ingest.py` | Codebase indexing: hash→chunk→embed→vector+graph+bridge |
+| Verify | `src/hermes_memory/verify.py` | End-to-end pipeline smoke-check CLI |
 
-|| Layer | Tech | Purpose |
-||-------|------|---------|
-|| Storage | Postgres 17 + pgvector | Embeddings (HNSW) + conversation/memory/doc-chunk rows |
-|| Graph | Apache AGE 1.6 | Entity vertices + typed edges in the `hermes_knowledge` graph |
-|| Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertex IDs |
-## Scope: v0.1 vs v0.2
+| Layer | Tech | Purpose |
+|-------|------|---------|
+| Storage | Postgres 17 + pgvector | Embeddings (HNSW) + conversation/memory/doc-chunk rows |
+| Graph | Apache AGE 1.6 | Entity vertices + typed edges in the `hermes_knowledge` graph |
+| Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertex IDs |
 
-| Capability | v0.1 | v0.2 roadmap |
-|------------|:----:|--------------|
-| Docker compose stack (AGE PG17 1.6 + pgvector) | ✅ | |
-| Memory provider (turn capture, budgeted prefetch injection) | ✅ | |
-| `hermes memory setup` support (config_schema) | ✅ | |
-| Doc/codebase ingest CLI (`hermes-memory-ingest`) | ✅ | |
-| Verify CLI (`hermes-memory-verify`) | ✅ | |
-| Property test suite P1–P8 (18 passed / 1 skipped*) | ✅ | |
-| CI (unit matrix + integration job + nightly stub) | ✅ | |
-| Conversation graph extractor | | ✅ (stubs live in `legacy/scripts/`) |
-| Relation extractor / semantic edges | | ✅ |
-| Watchdog & orphan sweeps | | ✅ |
-| Dashboard live mode (static demo only today) | | ✅ (`docs/dashboard/`) |
-| Multi-graph support, embedding-model swap tooling | | ✅ |
+## Status
 
-\* P3/P4 (phrase-extraction properties) are deferred to v0.2 with the extractor port.
+Alpha (`0.1.0` in `pyproject.toml`). The tagged release is `v0.1.0` (2026-08-24);
+`main` is ahead of that tag (Fountain inspector, install CLI, CORS/ingest/secrets
+hardening). This is not a production multi-tenant service.
+
+| Capability | On `main` |
+|------------|:---------:|
+| Docker compose stack (AGE PG17 1.6 + pgvector) | yes |
+| Memory provider (turn capture, budgeted prefetch) | yes |
+| `hermes-memory-install` + `hermes memory setup hybrid-age` | yes |
+| Doc/codebase ingest + verify CLIs | yes |
+| Fountain live inspector (loopback `:7890`) | yes |
+| Property tests P1–P8 (P3/P4 skipped) + CI | yes |
+| Conversation / relation extractors | stubs in `legacy/scripts/` |
 
 ## Testing
 
@@ -172,6 +159,8 @@ background drain stalls:
 ```bash
 hermes-memory-verify [--dsn postgres://...] [--drain-wait SECONDS]
 ```
+
+See [SECURITY.md](SECURITY.md) to report vulnerabilities.
 
 ## Configuration reference
 
@@ -233,7 +222,7 @@ until re-tested.
 
 ## Operations
 
-### CLI commands (new in 0.2)
+### CLI commands
 
 | Command | What it does |
 |---|---|
