@@ -665,11 +665,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
         seed_payload.sort(key=lambda x: x["score"], reverse=True)
         selected = self._budget_seeds(seed_payload)
         self._last_recall_count = len(selected)
-        # macro graph state — live, bounded 0.30s, fallback static never blocks SLA
+        # macro graph state — live, bounded 0.30s; omit rather than invent counts
         graph_line = None
         ghost_line = None
         try:
             if self.store is not None and self.pool is not None:
+                graph = self.store.graph_name
                 async with asyncio.timeout(0.30):
                     async with self.pool.acquire() as conn:
                         await self.store.load_age(conn)
@@ -679,7 +680,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
                             sp_v = "sp_live_v"
                             await conn.execute(f"SAVEPOINT {sp_v}")
                             try:
-                                rv = await conn.fetch("SELECT * FROM cypher('hermes_knowledge', $$ MATCH (n) RETURN count(n) $$) AS (c agtype)")
+                                rv = await conn.fetch(
+                                    f"SELECT * FROM cypher('{graph}', $$ MATCH (n) RETURN count(n) $$) AS (c agtype)"
+                                )
                                 v = int(str(rv[0]["c"]).strip('"')) if rv and rv[0]["c"] is not None else 0
                                 await conn.execute(f"RELEASE SAVEPOINT {sp_v}")
                             except Exception:
@@ -687,7 +690,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
                             sp_e = "sp_live_e"
                             await conn.execute(f"SAVEPOINT {sp_e}")
                             try:
-                                re_ = await conn.fetch("SELECT * FROM cypher('hermes_knowledge', $$ MATCH ()-[r]->() RETURN count(r) $$) AS (c agtype)")
+                                re_ = await conn.fetch(
+                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r]->() RETURN count(r) $$) AS (c agtype)"
+                                )
                                 e = int(str(re_[0]["c"]).strip('"')) if re_ and re_[0]["c"] is not None else 0
                                 await conn.execute(f"RELEASE SAVEPOINT {sp_e}")
                             except Exception:
@@ -695,20 +700,18 @@ class HybridAgeMemoryProvider(MemoryProvider):
                             sp_a = "sp_live_a"
                             await conn.execute(f"SAVEPOINT {sp_a}")
                             try:
-                                ra = await conn.fetch("SELECT * FROM cypher('hermes_knowledge', $$ MATCH ()-[r:ABOUT]->() RETURN count(r) $$) AS (c agtype)")
+                                ra = await conn.fetch(
+                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r:ABOUT]->() RETURN count(r) $$) AS (c agtype)"
+                                )
                                 a = int(str(ra[0]["c"]).strip('"')) if ra and ra[0]["c"] is not None else 0
                                 await conn.execute(f"RELEASE SAVEPOINT {sp_a}")
                             except Exception:
                                 await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_a}")
                         if v or e:
                             graph_line = f"persisted {v}v {e}e {a} ABOUT"
-                        # ghost is render-time veil — keep last computed, now live-aware
-                        ghost_line = f"ghost render-time 243 (165 Turn↔Turn + 78 Turn→Concept) thr 0.70→0.50"
+                        # ghost is render-time only — never inject a snapshot count
         except Exception:
             pass
-        if graph_line is None:
-            graph_line = "persisted 701v 868e 30 ABOUT"
-            ghost_line = ghost_line or "ghost render-time 243 (165 Turn↔Turn + 78 Turn→Concept) thr 0.70→0.50"
         meta = {
             "seeds": len(selected),
             "hops": 2,

@@ -627,8 +627,12 @@ class Store:
         self, seed_vertex_ids: Sequence[int], rel_types: Sequence[str] = (), limit: int = 40,
         min_weight: float = 0.0, min_cosine: float = 0.0,
         decay_half_life_days: float = 30.0,
-    ) -> List[Tuple[Any, Optional[str], Any, float, float]]:
+    ) -> List[Tuple[Any, Optional[str], Any, float, float, float, float]]:
         """1-hop weighted expand from seed vertices. Cypher inside SAVEPOINT.
+
+        Returns 7-tuples ``(n, rel, m, weight, cosine, decay, score)``.
+        Search packing appends hop as an 8th element; consumers must read hop
+        from the last field, not index 5 (that is decay).
 
         Dynamic memory graph: edges carry weight (force) and cosine (vector radius).
         Recency-aware scoring: 0.5*cosine + 0.3*weight + 0.2*exp(-age_days/half_life)
@@ -720,7 +724,7 @@ class Store:
                     decay = recency_decay_for_edge(edge_ca, vert_ca, decay_half_life_days)
                     score = 0.5 * c + 0.3 * w + 0.2 * decay
                     out.append((row["n"], row["rel"], row["m"], w, c, decay, score))
-                return out  # type: ignore[return-value]  # 7-tuple superset of legacy 5-tuple
+                return out
             except Exception:
                 logger.debug("expand_graph transaction error", exc_info=True)
                 return []

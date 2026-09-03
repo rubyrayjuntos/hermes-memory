@@ -68,6 +68,32 @@ def test_format_injection_empty():
     assert format_injection([]) == ""
 
 
+def test_format_injection_omits_unavailable_telemetry():
+    block = format_injection(
+        [{"score": 0.64, "content": "excerpt", "paths": []}],
+        meta={"seeds": 1, "hops": 2, "model": "nomic-embed-text:768"},
+    )
+    assert "243" not in block
+    assert "701v" not in block
+    assert "ghost render-time" not in block
+    assert "[SEED V1 64%]" in block
+
+
+def test_format_injection_live_graph_line_without_ghost_snapshot():
+    block = format_injection(
+        [{"score": 0.64, "content": "excerpt", "paths": []}],
+        meta={
+            "seeds": 1,
+            "hops": 2,
+            "model": "nomic-embed-text:768",
+            "graph_line": "persisted 12v 8e 3 ABOUT",
+        },
+    )
+    assert "persisted 12v 8e 3 ABOUT" in block
+    assert "243" not in block
+    assert "ghost render-time" not in block
+
+
 def test_should_purge_c5_concepts():
     assert should_purge_concept("Project Zephyr") is True
     assert should_purge_concept("Atlas Vault Engine") is True

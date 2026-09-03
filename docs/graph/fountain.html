@@ -226,15 +226,20 @@ let ghostK = AppState.ghost.k;
 let ghostThr = AppState.ghost.threshold;
 let hideBench = AppState.filters.hideBench;
 
+function isBenchToken(s) {
+  s = String(s || '');
+  return s.startsWith('bench-') || s.startsWith('bench_') || s.startsWith('verify-c5') || s.startsWith('c8-');
+}
 function isBenchNode(n) {
-  const sid_ = (n.props || n.properties || {}).session_id || n.session_id || '';
-  return sid_.startsWith('bench-') || sid_.startsWith('verify-c5');
+  const props = n.props || n.properties || {};
+  const kind = props.kind || n.kind || '';
+  if (kind === 'benchmark' || kind === 'system_test') return true;
+  return isBenchToken(props.session_id || n.session_id) || isBenchToken(n.name || props.name);
 }
 function filteredCatalog(payload) {
   if (!hideBench) return payload;
-  const keep = new Set(payload.nodes.filter(n => !isBenchNode(n)).map(n => sid(n.id)));
-  // keep Session/Concept even if no Turns filtered
-  payload.nodes.forEach(n => { if (n.label === 'Session' || n.label === 'Concept') keep.add(sid(n.id)); });
+  const keep = new Set();
+  payload.nodes.forEach(n => { if (!isBenchNode(n)) keep.add(sid(n.id)); });
   return {
     nodes: payload.nodes.filter(n => keep.has(sid(n.id))),
     links: (payload.links || payload.edges || []).filter(l => keep.has(sid(l.source||l.from)) && keep.has(sid(l.target||l.to)))

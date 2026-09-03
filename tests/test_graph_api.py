@@ -19,6 +19,8 @@ from hermes_memory.graph_api import (
     preview_embedding,
     safe_label,
     stringify_id,
+    undirected_knn_edges,
+    unpack_expand_row,
     validate_bind_host,
 )
 
@@ -191,3 +193,59 @@ def test_pack_search_sparse_has_empty_paths():
     assert out["paths"] == []
     assert out["retrieval"]["edges_traversed"] == 0
     assert out["ranked"][0]["group"] == "memory"
+
+
+def test_unpack_expand_row_legacy_6tuple_hop():
+    n, rel, m, w, c, decay, score, hop = unpack_expand_row(("n", "ABOUT", "m", 1.0, 0.72, 2))
+    assert hop == 2
+    assert decay is None
+    assert score is None
+    assert w == 1.0 and c == 0.72
+
+
+def test_unpack_expand_row_7tuple_decay_is_not_hop():
+    decay = 0.4
+    score = 0.5 * 0.72 + 0.3 * 1.0 + 0.2 * decay
+    n, rel, m, w, c, d, s, hop = unpack_expand_row(("n", "ABOUT", "m", 1.0, 0.72, decay, score))
+    assert hop == 1
+    assert d == decay
+    assert abs(s - score) < 1e-9
+
+
+def test_unpack_expand_row_8tuple_hop_after_score():
+    decay = 0.4
+    score = 0.5 * 0.72 + 0.3 * 1.0 + 0.2 * decay
+    _, _, _, _, _, d, s, hop = unpack_expand_row(("n", "ABOUT", "m", 1.0, 0.72, decay, score, 2))
+    assert hop == 2
+    assert d == decay
+    assert abs(s - score) < 1e-9
+
+
+def test_pack_search_7tuple_plus_hop_keeps_hop():
+    n = {"id": 1, "label": "Turn", "properties": {"name": "hello", "content": "hello tokyo"}}
+    m = {"id": 2, "label": "Concept", "properties": {"name": "Tokyo Eye"}}
+    decay = 0.4
+    score = 0.5 * 0.72 + 0.3 * 1.0 + 0.2 * decay
+    out = pack_search(
+        "tokyo",
+        4,
+        2,
+        [{"id": 9, "content": "tokyo eye", "similarity": 0.81}],
+        ["1"],
+        [(n, "ABOUT", m, 1.0, 0.72, decay, score, 2)],
+    )
+    assert out["paths"][0]["hop"] == 2
+    assert out["paths"][0]["decay"] == decay
+    assert abs(out["paths"][0]["score"] - score) < 1e-9
+
+
+def test_undirected_knn_emits_pair_selected_by_one_side_only():
+    """Higher-id vertex selecting a lower-id neighbor must still emit the edge."""
+    edges = undirected_knn_edges({
+        "9": [(0.91, "3")],  # 9's top-1 is 3
+        "3": [(0.88, "1")],  # 3's top-1 is someone else
+        "1": [(0.88, "3")],
+    })
+    pairs = {(a, b) for a, b, _ in edges}
+    assert ("3", "9") in pairs
+    assert ("1", "3") in pairs

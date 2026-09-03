@@ -32,6 +32,7 @@ DEFAULT_PORT = 7890
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_LIMIT = 2000
 DEFAULT_LIMIT = 250
+GHOST_CONCEPT_LIMIT = 64
 PID_PATH = Path.home() / ".hermes" / "run" / "hermes-memory-api.pid"
 
 RUNTIME: Optional["Runtime"] = None
@@ -147,6 +148,56 @@ def humanize_node(n: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return n
 
 
+def unpack_expand_row(
+    row: Tuple[Any, ...],
+) -> Tuple[Any, Any, Any, float, float, Optional[float], Optional[float], int]:
+    """Parse expand_graph tuple plus optional hop suffix from /search.
+
+    5-tuple: ``(n, rel, m, w, c)``
+    6-tuple: ``(n, rel, m, w, c, hop)`` — legacy search packing
+    7-tuple: ``(n, rel, m, w, c, decay, score)``
+    8-tuple: ``(n, rel, m, w, c, decay, score, hop)``
+    """
+    n, rel, m = row[0], row[1], row[2]
+    w = float(row[3]) if len(row) > 3 and row[3] is not None else 0.5
+    c = float(row[4]) if len(row) > 4 and row[4] is not None else 0.5
+    decay: Optional[float] = None
+    score: Optional[float] = None
+    hop = 1
+    nfields = len(row)
+    if nfields >= 8:
+        decay = float(row[5]) if row[5] is not None else 0.5
+        score = float(row[6]) if row[6] is not None else (0.5 * c + 0.3 * w + 0.2 * decay)
+        hop = int(row[7]) if row[7] is not None else 1
+    elif nfields == 7:
+        decay = float(row[5]) if row[5] is not None else 0.5
+        score = float(row[6]) if row[6] is not None else (0.5 * c + 0.3 * w + 0.2 * decay)
+    elif nfields == 6:
+        hop = int(row[5]) if row[5] is not None else 1
+    return n, rel, m, w, c, decay, score, hop
+
+
+def undirected_knn_edges(
+    neighbors: Dict[str, List[Tuple[float, str]]],
+) -> List[Tuple[str, str, float]]:
+    """Canonical undirected edges from directed top-k neighbor lists.
+
+    A pair is emitted if *either* endpoint selected the other. Dedup key is
+    ``(min(src, dst), max(src, dst))``; cosine is the max of the two directions.
+    """
+    best: Dict[Tuple[str, str], float] = {}
+    for src, scored in neighbors.items():
+        for cosine, dst in scored:
+            if not dst or dst == src:
+                continue
+            a, b = (src, dst) if src < dst else (dst, src)
+            prev = best.get((a, b))
+            c = float(cosine)
+            if prev is None or c > prev:
+                best[(a, b)] = c
+    return [(a, b, c) for (a, b), c in best.items()]
+
+
 def pack_search(
     q: str,
     k: int,
@@ -157,7 +208,7 @@ def pack_search(
 ) -> Dict[str, Any]:
     """Pure assembly of /search JSON: seeds, graph, paths, retrieval.
 
-    triples: (n, rel, m[, weight, cosine[, hop]])
+    triples: expand_graph 5- or 7-tuples, optionally with hop appended last.
     """
     seed_ids = {str(v) for v in seed_vertex_ids}
     nodes: Dict[str, Dict[str, Any]] = {}
@@ -176,10 +227,7 @@ def pack_search(
     for row in triples:
         if not row or len(row) < 3:
             continue
-        n_raw, rel_raw, m_raw = row[0], row[1], row[2]
-        w = float(row[3]) if len(row) > 3 and row[3] is not None else 0.5
-        c = float(row[4]) if len(row) > 4 and row[4] is not None else 0.5
-        hop = int(row[5]) if len(row) > 5 and row[5] is not None else 1
+        n_raw, rel_raw, m_raw, w, c, decay, score, hop = unpack_expand_row(tuple(row))
         src = _ingest(n_raw)
         dst = _ingest(m_raw)
         rel = None if rel_raw is None else str(rel_raw).strip().strip('"')
@@ -197,7 +245,7 @@ def pack_search(
             "cosine": c,
         })
         src_is_seed = src["id"] in seed_ids
-        paths.append({
+        path: Dict[str, Any] = {
             "from": src["id"],
             "to": dst["id"],
             "rel": rel,
@@ -209,7 +257,12 @@ def pack_search(
             "to_label": dst.get("label"),
             "from_name": src.get("name") or src.get("title") or src["id"],
             "to_name": dst.get("name") or dst.get("title") or dst["id"],
-        })
+        }
+        if decay is not None:
+            path["decay"] = decay
+        if score is not None:
+            path["score"] = score
+        paths.append(path)
         by_label[dst.get("label") or ""] = by_label.get(dst.get("label") or "", 0) + 1
 
     seed_out = []
@@ -766,7 +819,7 @@ class Runtime:
                 continue
             if vec:
                 emb_by_tid[tid] = vec
-        # Cosine helper
+        # Cosine helper (Turn→Concept only; Turn↔Turn uses pgvector)
         def _cos(a: List[float], b: List[float]) -> float:
             if not a or not b or len(a) != len(b):
                 return -1.0
@@ -780,29 +833,47 @@ class Runtime:
             if na == 0 or nb == 0:
                 return -1.0
             return dot / (math.sqrt(na) * math.sqrt(nb))
-        # Build pairwise Turn↔Turn
         tids_with_emb = [tid for tid in turn_ids if tid in emb_by_tid]
         ghost_edges: List[Dict[str, Any]] = []
-        for tid in tids_with_emb:
-            src_vid = vid_by_tid.get(tid)
-            src_vec = emb_by_tid.get(tid)
-            if not src_vid or not src_vec:
-                continue
-            scored: List[Tuple[float, int]] = []
-            for otid in tids_with_emb:
-                if otid == tid:
+        # Turn↔Turn kNN in pgvector (C), then keep a pair if either side selected it
+        neighbors: Dict[str, List[Tuple[float, str]]] = {}
+        if tids_with_emb:
+            try:
+                async with self.pool.acquire() as conn:
+                    pair_rows = await conn.fetch(
+                        """
+                        SELECT src_id, dst_id, cosine FROM (
+                          SELECT a.id AS src_id,
+                                 b.id AS dst_id,
+                                 1 - (a.embedding <=> b.embedding) AS cosine,
+                                 ROW_NUMBER() OVER (
+                                   PARTITION BY a.id
+                                   ORDER BY a.embedding <=> b.embedding
+                                 ) AS rn
+                            FROM conversations a
+                            JOIN conversations b ON a.id <> b.id
+                           WHERE a.id = ANY($1::int[])
+                             AND b.id = ANY($1::int[])
+                             AND a.embedding IS NOT NULL
+                             AND b.embedding IS NOT NULL
+                             AND 1 - (a.embedding <=> b.embedding) >= $2
+                        ) ranked
+                        WHERE rn <= $3
+                        """,
+                        tids_with_emb,
+                        threshold,
+                        k,
+                    )
+            except Exception:
+                logger.debug("ghost knn query failed", exc_info=True)
+                pair_rows = []
+            for pr in pair_rows:
+                src_vid = vid_by_tid.get(int(pr["src_id"]))
+                dst_vid = vid_by_tid.get(int(pr["dst_id"]))
+                if not src_vid or not dst_vid:
                     continue
-                c = _cos(src_vec, emb_by_tid[otid])
-                if c >= threshold:
-                    scored.append((c, otid))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            for c, otid in scored[:k]:
-                dst_vid = vid_by_tid.get(otid)
-                if not dst_vid:
-                    continue
-                # dedupe undirected: only emit src < dst once
-                if src_vid >= dst_vid:
-                    continue
+                neighbors.setdefault(src_vid, []).append((float(pr["cosine"]), dst_vid))
+            for src_vid, dst_vid, c in undirected_knn_edges(neighbors):
                 ghost_edges.append({
                     "source": src_vid,
                     "target": dst_vid,
@@ -816,6 +887,7 @@ class Runtime:
         # Fetch Concept vertices (id + name) and embed names via embedder
         concept_vids: Dict[str, str] = {}  # name -> vid
         concept_rows: List[Any] = []
+        concept_limit = max(1, min(GHOST_CONCEPT_LIMIT, int(limit)))
         try:
             async with self.pool.acquire() as conn:
                 await self.store.load_age(conn)
@@ -825,7 +897,7 @@ class Runtime:
                     await conn.execute(f"SAVEPOINT {sp}")
                     try:
                         crows2 = await conn.fetch(
-                            f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) RETURN id(c), c.name $$) AS (cid agtype, cname agtype)"
+                            f"SELECT * FROM cypher('{graph}', $$ MATCH (c:Concept) RETURN id(c), c.name LIMIT {concept_limit} $$) AS (cid agtype, cname agtype)"
                         )
                         await conn.execute(f"RELEASE SAVEPOINT {sp}")
                         concept_rows = list(crows2)
@@ -862,27 +934,29 @@ class Runtime:
                     concept_vids[cname] = cid
             except Exception:
                 continue
-        # Embed concept names (cache on Runtime)
+        # Embed concept names (cache on Runtime); batch uncached names
         if concept_vids and self.embedder is not None:
             if not hasattr(self, "_ghost_concept_emb"):
                 self._ghost_concept_emb: Dict[str, List[float]] = {}
             concept_emb: Dict[str, List[float]] = {}
+            missing: List[str] = []
             for cname, cid in concept_vids.items():
                 if not cname or not cid:
                     continue
                 vec = self._ghost_concept_emb.get(cname)
                 if vec is None:
-                    try:
-                        vec = await self.embedder.embed_text(cname)
-                    except Exception:
-                        vec = None
+                    missing.append(cname)
+                else:
+                    concept_emb[cname] = vec
+            if missing:
+                try:
+                    batched = await self.embedder.embed_texts(missing)
+                except Exception:
+                    batched = [None] * len(missing)
+                for cname, vec in zip(missing, batched):
                     if vec:
                         self._ghost_concept_emb[cname] = list(vec)
                         concept_emb[cname] = list(vec)
-                    else:
-                        continue
-                else:
-                    concept_emb[cname] = vec
             # For each Turn, score vs concepts, keep top 2 above lower threshold
             # Concept names are short — cosine sits 0.45-0.65 vs 0.70 for Turn↔Turn, so gate lower
             concept_thr = max(0.42, float(threshold) - 0.20)

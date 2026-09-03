@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from openai import AsyncOpenAI
 
@@ -42,6 +42,50 @@ class Embedder:
             )
             return None
         return list(vec)
+
+    async def embed_texts(self, texts: Sequence[str]) -> List[Optional[List[float]]]:
+        """Batch embed; one result per input (None on empty/failure/dim mismatch)."""
+        if not texts:
+            return []
+        out: List[Optional[List[float]]] = [None] * len(texts)
+        payload: List[str] = []
+        index_map: List[int] = []
+        for i, text in enumerate(texts):
+            if text and str(text).strip():
+                payload.append(str(text))
+                index_map.append(i)
+        if not payload:
+            return out
+        try:
+            resp = await self.client.embeddings.create(model=self.model, input=payload)
+        except Exception:
+            logger.debug("embed batch failed; falling back per item", exc_info=True)
+            for orig_i in index_map:
+                out[orig_i] = await self.embed_text(str(texts[orig_i]))
+            return out
+        data = list(resp.data)
+        if len(data) == len(payload):
+            pairs = list(zip(index_map, data))
+        else:
+            pairs = []
+            for d in data:
+                try:
+                    j = int(d.index)
+                except Exception:
+                    continue
+                if 0 <= j < len(index_map):
+                    pairs.append((index_map[j], d))
+        for orig_i, d in pairs:
+            vec = list(d.embedding) if getattr(d, "embedding", None) else None
+            if not vec or len(vec) != self.dim:
+                if vec:
+                    logger.warning(
+                        "embedding dim mismatch: got %s expected %s — dropping",
+                        len(vec), self.dim,
+                    )
+                continue
+            out[orig_i] = vec
+        return out
 
 
 def vec_to_literal(vec: List[float]) -> str:
