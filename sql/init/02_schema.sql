@@ -48,13 +48,39 @@ CREATE TABLE IF NOT EXISTS memory_entries (
 CREATE UNIQUE INDEX IF NOT EXISTS memory_entries_unique_hash
     ON public.memory_entries (agent_identity, target, md5(content));
 
--- Bridge: pgvector chunks <-> AGE graph vertices
+CREATE TABLE IF NOT EXISTS noun (
+    id SERIAL PRIMARY KEY,
+    label TEXT NOT NULL UNIQUE,
+    type TEXT,
+    ag_vertex_id BIGINT UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS semantic_edge (
+    id SERIAL PRIMARY KEY,
+    src_noun INT NOT NULL REFERENCES noun(id) ON DELETE CASCADE,
+    tgt_noun INT NOT NULL REFERENCES noun(id) ON DELETE CASCADE,
+    verb_type TEXT NOT NULL,
+    e_src_vec vector(768) NOT NULL,
+    e_tgt_vec vector(768) NOT NULL,
+    magnitude FLOAT NOT NULL CHECK (magnitude > 0 AND magnitude <= 8),
+    polarity SMALLINT NOT NULL DEFAULT 1 CHECK (polarity IN (-1, 1)),
+    last_active_turn BIGINT,
+    last_active_ts TIMESTAMPTZ,
+    provenance_turns BIGINT[] NOT NULL DEFAULT '{}',
+    UNIQUE (src_noun, tgt_noun, verb_type)
+);
+
+-- Bridge: pgvector chunks <-> AGE graph vertices (passports extend this table)
 CREATE TABLE IF NOT EXISTS memory_chunk_nodes (
     chunk_id TEXT NOT NULL,
     source TEXT NOT NULL,
     vertex_id BIGINT NOT NULL,
     graph_name TEXT NOT NULL DEFAULT 'hermes_knowledge',
-    PRIMARY KEY (chunk_id, source, vertex_id)
+    noun_id INT REFERENCES noun(id) ON DELETE CASCADE,
+    session_id TEXT,
+    turn_id BIGINT,
+    conf FLOAT CHECK (conf >= 0 AND conf <= 1)
 );
 
 CREATE TABLE IF NOT EXISTS doc_chunks (

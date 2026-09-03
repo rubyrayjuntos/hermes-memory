@@ -11,6 +11,15 @@ CREATE INDEX IF NOT EXISTS idx_mcn_vertex
 CREATE INDEX IF NOT EXISTS idx_mcn_source_chunk
     ON memory_chunk_nodes (source, chunk_id);
 
+CREATE UNIQUE INDEX IF NOT EXISTS memory_chunk_nodes_passport_uq
+    ON memory_chunk_nodes (chunk_id, source, noun_id) WHERE noun_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS memory_chunk_nodes_flower_uq
+    ON memory_chunk_nodes (chunk_id, source, vertex_id) WHERE noun_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS semantic_edge_src_vec_hnsw
+    ON semantic_edge USING hnsw (e_src_vec vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
 -- conversations: dead-letter + queue partial indexes
 CREATE INDEX IF NOT EXISTS idx_conversations_dead_letter
     ON conversations (ts) WHERE processing_attempts >= 5;
@@ -19,6 +28,10 @@ CREATE INDEX IF NOT EXISTS idx_conversations_queue
     AND content IS NOT NULL AND length(content) > 20;
 CREATE INDEX IF NOT EXISTS idx_conversations_relations_queue
     ON conversations (relations_processed_at) WHERE relations_processed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_embedding
+    ON conversations USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 
 -- librarian file-path expression index
 CREATE INDEX IF NOT EXISTS idx_librarian_file_path
