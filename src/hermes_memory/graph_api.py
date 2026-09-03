@@ -126,6 +126,31 @@ def validate_bind_host(host: str) -> str:
     return host
 
 
+def _allowed_cors_origin(origin: Optional[str]) -> Optional[str]:
+    """Return the value to echo in ACAO, or None to omit the header.
+
+    Only loopback origins (127.0.0.1 / localhost / ::1, any scheme/port)
+    and the literal ``null`` (file:// sandbox) are allowed. Evil origins
+    get no ACAO header — never ``*``. The caller reflects the exact
+    ``Origin`` string so the allowlist cannot be probed via prefix tricks.
+    """
+    if not origin:
+        return None
+    o = origin.strip()
+    if "\r" in o or "\n" in o:
+        return None
+    if o == "null":
+        return "null"
+    try:
+        parsed = urlparse(o)
+    except Exception:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host in LOOPBACK_HOSTS and parsed.scheme in ("http", "https"):
+        return o
+    return None
+
+
 def human_turn_title(content: Any, fallback: str = "Turn") -> str:
     """First line of the message. Empty content keeps ``fallback`` (e.g. turn_id)."""
     text = str(content or "").strip()
@@ -1258,7 +1283,11 @@ class Handler(BaseHTTPRequestHandler):
         logger.info("%s - " + format, self.address_string(), *args)
 
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin")
+        allowed = _allowed_cors_origin(origin)
+        if allowed is not None:
+            self.send_header("Access-Control-Allow-Origin", allowed)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "accept, content-type")
 
