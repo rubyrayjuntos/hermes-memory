@@ -834,8 +834,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
         return [dict(f) for f in CONFIG_SCHEMA_FIELDS]
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
-        """Write non-secret behavior knobs to hybrid_age: in config.yaml."""
+        """Write non-secret behavior knobs to hybrid_age: in config.yaml.
+        
+        Atomic write (temp file + os.rename) preserving unrelated keys on partial update.
+        """
         import os
+        import tempfile
 
         path = os.path.join(hermes_home, "config.yaml")
         secret_keys = {f["key"] for f in CONFIG_SCHEMA_FIELDS if f.get("secret")}
@@ -855,11 +859,21 @@ class HybridAgeMemoryProvider(MemoryProvider):
         existing.update(knobs)
         doc["hybrid_age"] = existing
         os.makedirs(hermes_home, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            if yaml is not None:
-                yaml.safe_dump(doc, fh, sort_keys=False)
-            else:
-                json.dump(doc, fh, indent=2)
+        # Atomic write: temp file + rename to avoid partial/corrupt writes
+        fd, temp_path = tempfile.mkstemp(dir=hermes_home, prefix=".config.yaml.", suffix=".tmp", text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                if yaml is not None:
+                    yaml.safe_dump(doc, fh, sort_keys=False)
+                else:
+                    json.dump(doc, fh, indent=2)
+            os.replace(temp_path, path)
+        except Exception:
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+            raise
 
     # -- shutdown ---------------------------------------------------------------
 

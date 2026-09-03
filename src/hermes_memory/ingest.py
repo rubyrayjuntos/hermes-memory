@@ -321,7 +321,13 @@ class Ingestor:
         self.stats.drifted = sum(1 for _, rel, _, _ in diff.changed
                                  if prev.get(rel) is not None)
 
-        conn = await asyncpg.connect(self.config.dsn)
+        # Resolve the masked default DSN ({pg_password} / legacy ***) from
+        # the environment so a bare default config still connects locally.
+        dsn = self.config.dsn
+        if '{pg_password}' in dsn or '***' in dsn:
+            dsn = dsn.replace('{pg_password}', os.environ.get('HERMES_PG_PASSWORD', ''))
+            dsn = dsn.replace('***', os.environ.get('HERMES_PG_PASSWORD', ''))
+        conn = await asyncpg.connect(dsn)
         try:
             await conn.execute("LOAD 'age';")
             await conn.execute("SET search_path = ag_catalog, public;")
