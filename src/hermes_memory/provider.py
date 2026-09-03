@@ -442,6 +442,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         session_id = item.get("session_id") or ""
         content = item.get("content") or ""
+        # Drain overwrites enqueue hint so the second item in one sync_turn
+        # sees the first item's id. C reads only this field (no SQL lookup).
+        item["previous_conversation_id"] = self._last_turn_id.get(session_id)
         try:
             vec = await embedder.embed_text(content)
         except Exception:

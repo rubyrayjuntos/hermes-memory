@@ -102,6 +102,51 @@ async def _age_about_count(db_pool, session_id: str) -> int:
         return 0
 
 
+async def _purge_turn_vertices(db_pool) -> None:
+    """IDENTITY restart reuses conv ids; MERGE Turn {name: turn_N} would keep old NEXT."""
+    async with db_pool.acquire() as conn:
+        await conn.execute("LOAD 'age';")
+        await conn.execute("SET search_path = ag_catalog, public;")
+        try:
+            await conn.fetch(
+                """
+                SELECT * FROM cypher('hermes_knowledge', $$
+                    MATCH (t:Turn) WHERE t.name STARTS WITH 'turn_' DETACH DELETE t
+                    RETURN count(t)
+                $$) AS (c agtype)
+                """
+            )
+        except Exception:
+            pass
+
+
+async def _next_pairs(db_pool, session_id: str) -> list[tuple[int, int]]:
+    """(src.turn_id, tgt.turn_id) for NEXT edges touching this session."""
+    sid = session_id.replace("'", "")
+    async with db_pool.acquire() as conn:
+        await conn.execute("LOAD 'age';")
+        await conn.execute("SET search_path = ag_catalog, public;")
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM cypher('hermes_knowledge', $$
+                    MATCH (a:Turn)-[:NEXT]->(b:Turn)
+                    WHERE a.session_id = '%s' OR b.session_id = '%s'
+                    RETURN a.turn_id, b.turn_id
+                $$) AS (src agtype, tgt agtype)
+                """ % (sid, sid)
+            )
+        except Exception:
+            return []
+    out: list[tuple[int, int]] = []
+    for r in rows or []:
+        try:
+            out.append((int(str(r["src"]).strip().strip('"')), int(str(r["tgt"]).strip().strip('"'))))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def _next_count(db_pool, session_id: str) -> int:
     async with db_pool.acquire() as conn:
         await conn.execute("LOAD 'age';")
@@ -359,40 +404,74 @@ async def test_user_assistant_two_nexts(
     db_pool, store, clean_hermes_test_db, hermes_test_dsn,
 ):
     _assert_hermes_test_dsn(hermes_test_dsn)
+    await _purge_turn_vertices(db_pool)
     provider = _make_provider(store, FakeEmbedder())
     sid = "sess-next-pair"
-    await write_turn_item(provider, {
-        "type": "turn",
-        "session_id": sid,
-        "role": "user",
-        "content": TWO_IDS,
-        "previous_conversation_id": None,
-    })
-    first = provider._last_turn_id[sid]
-    prior = await store.insert_turn(
-        sid, "default", "user", "seed prior turn for two NEXT edges " + "x" * 20,
-        None, {"kind": "interactive"},
-    )
-    # Chain: prior (flower-only id) is not on AGE; use first written turn as previous
-    # then user+assistant contracts with chained previous_conversation_id.
-    await write_turn_item(provider, {
-        "type": "turn",
-        "session_id": sid,
-        "role": "user",
-        "content": TWO_IDS + " user follow-up",
-        "previous_conversation_id": first,
-    })
-    second = provider._last_turn_id[sid]
+    # Seed one drained turn so a later sync_turn pair can form previous→user→assistant.
     await write_turn_item(provider, {
         "type": "turn",
         "session_id": sid,
         "role": "assistant",
-        "content": TWO_IDS + " assistant reply",
-        "previous_conversation_id": second,
+        "content": TWO_IDS + " seed",
+        "previous_conversation_id": None,
     })
-    n_next = await _next_count(db_pool, sid)
-    assert n_next >= 2
-    assert prior is not None
+    prior = provider._last_turn_id[sid]
+    stamped = provider._last_turn_id.get(sid)
+    user_item = {
+        "type": "turn",
+        "session_id": sid,
+        "role": "user",
+        "content": TWO_IDS + " user follow-up",
+        "previous_conversation_id": stamped,
+    }
+    asst_item = {
+        "type": "turn",
+        "session_id": sid,
+        "role": "assistant",
+        "content": TWO_IDS + " assistant reply",
+        "previous_conversation_id": stamped,
+    }
+    assert user_item["previous_conversation_id"] == asst_item["previous_conversation_id"]
+    await write_turn_item(provider, user_item)
+    user_id = provider._last_turn_id[sid]
+    await write_turn_item(provider, asst_item)
+    asst_id = provider._last_turn_id[sid]
+    ours = {prior, user_id, asst_id}
+    pairs = [p for p in await _next_pairs(db_pool, sid) if p[0] in ours and p[1] in ours]
+    assert set(pairs) == {(prior, user_id), (user_id, asst_id)}
+    assert (prior, asst_id) not in pairs
+    assert await _age_about_count(db_pool, sid) == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_turn_same_enqueue_previous_chains_next(
+    db_pool, store, clean_hermes_test_db, hermes_test_dsn,
+):
+    """sync_turn stamps the same previous on both items; drain must chain, not fan-out."""
+    _assert_hermes_test_dsn(hermes_test_dsn)
+    await _purge_turn_vertices(db_pool)
+    provider = _make_provider(store, FakeEmbedder())
+    sid = "sess-sync-drain"
+    queued: list[dict] = []
+
+    def capture(item: dict) -> None:
+        queued.append(dict(item))
+
+    provider._enqueue_write = capture  # type: ignore[method-assign]
+    provider.sync_turn(TWO_IDS, TWO_IDS + " assistant", session_id=sid)
+    assert len(queued) == 2
+    assert queued[0]["previous_conversation_id"] == queued[1]["previous_conversation_id"]
+    assert queued[0]["role"] == "user"
+    assert queued[1]["role"] == "assistant"
+
+    await write_turn_item(provider, queued[0])
+    user_id = provider._last_turn_id[sid]
+    await write_turn_item(provider, queued[1])
+    asst_id = provider._last_turn_id[sid]
+    ours = {user_id, asst_id}
+    pairs = [p for p in await _next_pairs(db_pool, sid) if p[0] in ours and p[1] in ours]
+    assert pairs == [(user_id, asst_id)], f"expected user→assistant chain, got {pairs}"
+    assert queued[1]["previous_conversation_id"] == user_id
     assert await _age_about_count(db_pool, sid) == 0
 
 
