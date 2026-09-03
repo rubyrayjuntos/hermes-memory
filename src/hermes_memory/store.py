@@ -51,6 +51,38 @@ def age_str(value: Any) -> str:
     return f"'{s}'"
 
 
+def bridge_keys_for_seed(seed: Dict[str, Any]) -> List[str]:
+    """Namespace-scoped chunk_id keys for a vector_search hit.
+
+    ``memory_entries`` and ``conversations`` use independent sequences, so
+    id=42 can be both a file row and a turn. Look up only the keys for
+    ``seed['src']``; never mix ``conv_N`` with canonical/mem_ N.
+    """
+    i = str(seed.get("id") or "")
+    if not i:
+        return []
+    src = str(seed.get("src") or "")
+    if src == "conversation":
+        return [i] if i.startswith("conv_") else [f"conv_{i}"]
+    if src == "doc_chunk":
+        return [i]
+    if src == "memory_entry":
+        keys = [i]
+        if i.isdigit():
+            keys.append(f"mem_{i}")
+        elif i.startswith("mem_") and i[4:].isdigit():
+            keys.append(i[4:])
+        return list(dict.fromkeys(keys))
+    if i.startswith("conv_"):
+        return [i]
+    if ":" in i:
+        return [i]
+    keys = [i]
+    if i.isdigit():
+        keys.append(f"mem_{i}")
+    return keys
+
+
 def _pick_cypher_dollar_tag(body: str) -> str:
     """Pick a ``$tag$`` that does not collide with ``body``.
 
@@ -601,32 +633,49 @@ class Store:
     async def vector_search(self, vec_literal: str, k: int) -> List[Dict[str, Any]]:
         """ANN over file memory, doc_chunks, and conversation turns.
 
-        Ingest bridges doc_chunks (digest:ordinal) -> File vertices; those chunks
-        must be retrievable via vector_search or the graph never joins recall
-        (C2). Turns are filtered to interactive sessions only.
+        File-backed ``memory_entries`` (metadata.file_path set) are omitted:
+        ingest already stores those first-chunk embeddings in ``doc_chunks``,
+        so including both would duplicate a slot at identical cosine.
+
+        Each arm ``ORDER BY embedding <=> $1 LIMIT k`` so the HNSW indexes
+        (memory_entries, doc_chunks, conversations) can serve ANN; the outer
+        union then reranks the bounded candidate set.
         """
         sql = """
             SELECT id, content, similarity, src FROM (
-              SELECT id::text AS id, content,
-                     1 - (embedding <=> $1::vector) AS similarity,
-                     'memory_entry'::text AS src
-                FROM memory_entries
-               WHERE embedding IS NOT NULL
+              (
+                SELECT id::text AS id, content,
+                       1 - (embedding <=> $1::vector) AS similarity,
+                       'memory_entry'::text AS src
+                  FROM memory_entries
+                 WHERE embedding IS NOT NULL
+                   AND metadata->>'file_path' IS NULL
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT $2
+              )
               UNION ALL
-              SELECT id AS id, content,
-                     1 - (embedding <=> $1::vector) AS similarity,
-                     'doc_chunk'::text AS src
-                FROM doc_chunks
-               WHERE embedding IS NOT NULL
+              (
+                SELECT id AS id, content,
+                       1 - (embedding <=> $1::vector) AS similarity,
+                       'doc_chunk'::text AS src
+                  FROM doc_chunks
+                 WHERE embedding IS NOT NULL
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT $2
+              )
               UNION ALL
-              SELECT id::text AS id, content,
-                     1 - (embedding <=> $1::vector) AS similarity,
-                     'conversation'::text AS src
-                FROM conversations
-               WHERE embedding IS NOT NULL
-                 AND coalesce(metadata->>'kind', 'interactive') = 'interactive'
-                 AND coalesce(session_id, '') NOT LIKE 'verify-c5%'
-                 AND coalesce(session_id, '') NOT LIKE 'bench-%'
+              (
+                SELECT id::text AS id, content,
+                       1 - (embedding <=> $1::vector) AS similarity,
+                       'conversation'::text AS src
+                  FROM conversations
+                 WHERE embedding IS NOT NULL
+                   AND coalesce(metadata->>'kind', 'interactive') = 'interactive'
+                   AND coalesce(session_id, '') NOT LIKE 'verify-c5%'
+                   AND coalesce(session_id, '') NOT LIKE 'bench-%'
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT $2
+              )
             ) u
             ORDER BY similarity DESC
             LIMIT $2

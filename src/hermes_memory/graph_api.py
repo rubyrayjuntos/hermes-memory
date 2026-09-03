@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from .store import Store, check_label, cypher_call, savepoint_name, validate_graph_name
+from .store import Store, bridge_keys_for_seed, check_label, cypher_call, savepoint_name, validate_graph_name
 
 logger = logging.getLogger("hermes_memory.graph_api")
 
@@ -33,6 +33,8 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_LIMIT = 2000
 DEFAULT_LIMIT = 250
 GHOST_CONCEPT_LIMIT = 64
+GHOST_MAX_K = 8
+GHOST_MAX_LIMIT = 250
 PID_PATH = Path.home() / ".hermes" / "run" / "hermes-memory-api.pid"
 
 RUNTIME: Optional["Runtime"] = None
@@ -762,9 +764,9 @@ class Runtime:
         Guarded by timeout(4) + bounded scoring + LRU cap.
         """
         assert self.store is not None and self.pool is not None
-        k = max(1, min(int(k), 8))
+        k = max(1, min(int(k), GHOST_MAX_K))
         threshold = max(0.0, min(float(threshold), 0.99))
-        limit = max(10, min(int(limit), 400))
+        limit = max(10, min(int(limit), GHOST_MAX_LIMIT))
         try:
             return await asyncio.wait_for(self._aghost_inner(k, threshold, limit), timeout=4.0)
         except asyncio.TimeoutError:
@@ -1107,9 +1109,7 @@ class Runtime:
             seeds = await self.store.vector_search(vec_to_literal(vec), k)
         t_vec = time.perf_counter()
         vids = await self.store.bridge_vertex_ids(
-            [s["id"] for s in seeds]
-            + [f"conv_{s['id']}" for s in seeds]
-            + [f"mem_{s['id']}" for s in seeds if str(s["id"]).isdigit()]
+            [key for s in seeds for key in bridge_keys_for_seed(s)]
         )
         int_ids = []
         for v in vids:
@@ -1333,14 +1333,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "ghost":
                 k = clamp_limit((qs.get("k") or [5])[0], default=5)
-                k = max(1, min(k, 8))
+                k = max(1, min(k, GHOST_MAX_K))
                 # threshold is 0..0.99 float, not a limit clamp
                 try:
                     thr = float((qs.get("threshold") or ["0.70"])[0])
                 except Exception:
                     thr = 0.70
                 lim = clamp_limit((qs.get("limit") or [200])[0], default=200)
-                lim = max(10, min(lim, 250))
+                lim = max(10, min(lim, GHOST_MAX_LIMIT))
                 self._json(200, rt.ghost(k, thr, lim))
                 return
             if route == "chunks":

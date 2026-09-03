@@ -73,18 +73,9 @@ def test_p1_age_str_escapes_dollar(payload):
     # if input contained $, output must escape it as \\$ and never contain raw $$
     # (raw $$ inside a Cypher string would still close outer $$ quoting)
     if "$" in str(payload):
-        # escaped form contains \\$ — the two-char sequence, not bare $
-        # the simplest guard: raw $$ must not appear unescaped in the body
         body_inside = out[1:-1]  # strip outer quotes
-        # $$ would be two consecutive $ with no backslash escape in between
-        # after escaping, any $ is preceded by \\, so bare $$ cannot occur
-        # we assert no unescaped $$ (i.e. $$ not preceded by \\)
-        # but the trivial check is: after escaping, "$$" substring cannot occur
-        # because every $ was turned into \\$
-        assert "$$" not in body_inside or "\\$" in body_inside
-        # stronger: if payload contained $$, the output must not contain $$ either
-        if "$$" in str(payload):
-            assert "$$" not in body_inside, f"$$ leaked for {payload!r} -> {out!r}"
+        # every $ is turned into \$; consecutive $$ would close outer $$ quoting
+        assert "$$" not in body_inside, f"$$ leaked for {payload!r} -> {out!r}"
 
 
 @settings(max_examples=300)
