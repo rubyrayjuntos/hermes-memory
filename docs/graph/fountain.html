@@ -870,11 +870,7 @@ async function refreshGhost() {
 }
 
 async function toggleGhost() {
-  if (AppState.level < 2) return;
-  AppState.ghost.enabled = !AppState.ghost.enabled; ghostEnabled = AppState.ghost.enabled;
-  try{ localStorage.setItem('fountain.ghostEnabled', AppState.ghost.enabled?'1':'0'); }catch{}
-  if (AppState.ghost.enabled) { await refreshGhost(); renderUIForCurrentLevel(); }
-  else { ghostEdges=[]; ghostMeta=null; raw.links=raw.links.filter(l=>l.label!=='GHOST_KNN'); if(raw.nodes.length){ layout(raw.nodes,raw.links,seedIds,'catalog'); document.getElementById('mode-tag').textContent='CATALOG'; rebuildScene(); } updateGhostMeta(); renderUIForCurrentLevel(); }
+  dispatch('TOGGLE_GHOST');
 }
 
 async function dissolve() {
@@ -896,9 +892,9 @@ async function dissolve() {
 document.getElementById('btn-dissolve').onclick = dissolve;
 document.getElementById('btn-catalog').onclick = loadCatalog;
 document.getElementById('btn-ghost').onclick = toggleGhost;
-document.getElementById('ghost-k').addEventListener('input', e => { const k=parseInt(e.target.value,10)||5; AppState.ghost.k=k; ghostK=k; try{localStorage.setItem('fountain.ghostK',String(k));}catch{} document.getElementById('ghost-k-val').textContent=String(k); updateGhostMeta(); if(ghostEnabled) refreshGhost(); else renderUIForCurrentLevel(); });
-document.getElementById('ghost-thr').addEventListener('input', e => { const thr=parseFloat(e.target.value)||0.70; AppState.ghost.threshold=thr; ghostThr=thr; try{localStorage.setItem('fountain.ghostThr',thr.toFixed(2));}catch{} document.getElementById('ghost-thr-val').textContent=thr.toFixed(2); updateGhostMeta(); if(ghostEnabled) refreshGhost(); else renderUIForCurrentLevel(); });
-document.getElementById('hide-bench').addEventListener('change', e => { AppState.filters.hideBench=e.target.checked; hideBench=e.target.checked; try{localStorage.setItem('fountain.hideBench',hideBench?'1':'0');}catch{} loadCatalog(); renderUIForCurrentLevel(); });
+document.getElementById('ghost-k').addEventListener('input', e => { const v=parseInt(e.target.value,10); if(Number.isNaN(v)) return; const k=Math.min(8,Math.max(1,v)); dispatch('UPDATE_GHOST_PARAMS', {k}); });
+document.getElementById('ghost-thr').addEventListener('input', e => { const v=parseFloat(e.target.value); if(Number.isNaN(v)) return; const threshold=Math.min(0.85,Math.max(0.40,Math.round(v*20)/20)); dispatch('UPDATE_GHOST_PARAMS', {threshold}); });
+document.getElementById('hide-bench').addEventListener('change', e => { dispatch('SET_FILTER_HIDE_BENCH', e.target.checked); });
 // telemetry panel toggles — 3 panels, top bar always present (gated by progressive reveal)
 const PANEL_MAP = {
   metrics: ['panel-metrics'],
@@ -954,6 +950,7 @@ function initPanelToggles() {
 function dispatch(action, payload) {
   switch(action) {
     case 'SET_LEVEL': {
+      if (AppState._coachTimer) { clearTimeout(AppState._coachTimer); AppState._coachTimer=null; }
       let lvl = Math.min(4, Math.max(1, parseInt(payload,10)||1));
       AppState.level = lvl;
       try{ localStorage.setItem('fountain.level', String(lvl)); }catch{}

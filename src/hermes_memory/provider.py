@@ -750,12 +750,18 @@ class HybridAgeMemoryProvider(MemoryProvider):
             i = str(s["id"])
             chunk_ids.append(i)
             chunk_ids.append(f"conv_{i}")
+            # legacy mem_ alias for pre-V8 ingest rows (migration window)
+            if i.isdigit():
+                chunk_ids.append(f"mem_{i}")
         chunk_ids = list(dict.fromkeys(chunk_ids))
         bmap = await self.store.bridge_map(chunk_ids)
         for s in seeds:
             i = str(s["id"])
-            vids = list(bmap.get(i) or []) + list(bmap.get(f"conv_{i}") or [])
-            s["vertex_ids"] = vids
+            vids: List[str] = list(bmap.get(i) or [])
+            vids += list(bmap.get(f"conv_{i}") or [])
+            if i.isdigit():
+                vids += list(bmap.get(f"mem_{i}") or [])
+            s["vertex_ids"] = list(dict.fromkeys(vids))
         seed_ids: List[int] = []
         for vids in (s.get("vertex_ids") or [] for s in seeds):
             for vid in vids:

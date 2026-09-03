@@ -7,7 +7,7 @@ onto the C3 package layers:
     detect deleted) -> chunk (no character loss) -> embed (768-dim invariant)
     -> doc_chunks + memory_entries rows -> memory_chunk_nodes bridges
     -> AGE MERGE (:File {path}), (:Module {name}), (:Dependency {name}),
-       (:IMPORTS) edges.
+       (:Imports) edges.
 
 Store rules honored (plan §3.3): SAVEPOINT-wrapped Cypher, MERGE on minimal
 unique keys ({path} / {name}), batched MERGEs (>=50 statements per txn),
@@ -378,7 +378,7 @@ class Ingestor:
                     """
                     DELETE FROM memory_chunk_nodes b
                      USING memory_entries e
-                     WHERE b.chunk_id = 'mem_' || e.id::text
+                     WHERE (b.chunk_id = e.id::text OR b.chunk_id = 'mem_' || e.id::text)
                        AND e.agent_identity = $1
                        AND e.metadata->>'file_path' = $2
                        AND e.metadata->>'codebase' = $3
@@ -396,11 +396,11 @@ class Ingestor:
                     """,
                     AGENT_IDENTITY, fp, codebase,
                 )
-                from .store import age_str
+                from .store import age_str, cypher_call
                 cy = (f"MATCH (f:File) WHERE f.path = {age_str(fp)} "
                       f"DETACH DELETE f RETURN 1")
                 await conn.execute(
-                    f"SELECT * FROM cypher('{self._graph()}', $$ {cy} $$) AS (ok agtype)")
+                    f"SELECT * FROM {cypher_call(self._graph(), cy)} AS (ok agtype)")
                 logger.info("pruned deleted file %s", fp)
             except Exception:
                 self.stats.errors += 1
@@ -545,7 +545,7 @@ class Ingestor:
                     for v in (vids[2:] if mod_name else vids[1:])]
         self.stats.entities += sum(1 for v in vids if v)
 
-        edges = [("IMPORTS", file_vid, dv) for dv in dep_vids if file_vid and dv]
+        edges = [("Imports", file_vid, dv) for dv in dep_vids if file_vid and dv]
         if edges:
             # Dynamic graph: IMPORTS edges carry vector radius + force + recency.
             edge_props = {}
@@ -557,10 +557,17 @@ class Ingestor:
         # -- Bridges ------------------------------------------------------------
         # Bridge the same enumerated chunk ids actually written to doc_chunks
         # so indices never shift when an embedding fails.
+        # Canonical: memory_entries.id::text; legacy mem_ prefix kept as alias
+        # for migration (see V8__bridge_canonical_alias.sql).
         if mem_id and file_vid:
+            self.stats.bridges += await self._bridge(
+                conn, str(mem_id), file_vid, source="memory_entry")
+            # legacy alias for pre-V8 rows; bounded to one extra insert
             self.stats.bridges += await self._bridge(
                 conn, f"mem_{mem_id}", file_vid, source="memory_entry")
         if mem_id and mod_vid:
+            self.stats.bridges += await self._bridge(
+                conn, str(mem_id), mod_vid, source="memory_entry")
             self.stats.bridges += await self._bridge(
                 conn, f"mem_{mem_id}", mod_vid, source="memory_entry")
         for cid in written_ids:
@@ -577,7 +584,7 @@ class Ingestor:
         """SAVEPOINT-guarded, batched (>=50/txn when large) vertex MERGEs."""
         results: List[Optional[str]] = []
         graph = self._graph()
-        from .store import age_props, age_str, check_label, savepoint_name
+        from .store import age_props, age_str, check_label, cypher_call, savepoint_name
         items = list(items)
         for start in range(0, len(items), 50):
             batch = items[start:start + 50]
@@ -599,7 +606,7 @@ class Ingestor:
                                 + f"RETURN id(v)"
                             )
                             row = await conn.fetchrow(
-                                f"SELECT * FROM cypher('{graph}', $$ {cy} $$) AS (id agtype)")
+                                f"SELECT * FROM {cypher_call(graph, cy)} AS (id agtype)")
                             raw = str(row["id"]).strip('"') if row else None
                             results.append(str(int(raw)) if raw else None)
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
@@ -618,7 +625,7 @@ class Ingestor:
     async def _merge_edges(self, conn, edges, edge_props=None) -> int:
         done = 0
         graph = self._graph()
-        from .store import age_props, check_label, savepoint_name
+        from .store import age_props, check_label, cypher_call, savepoint_name
         edges = list(edges)
         for start in range(0, len(edges), 50):
             batch = edges[start:start + 50]
@@ -636,7 +643,7 @@ class Ingestor:
                                 f"MERGE (a)-[e:{check_label(label)}]->(b){props_str} RETURN id(e)"
                             )
                             row = await conn.fetchrow(
-                                f"SELECT * FROM cypher('{graph}', $$ {cy} $$) AS (id agtype)")
+                                f"SELECT * FROM {cypher_call(graph, cy)} AS (id agtype)")
                             if row:
                                 done += 1
                             await conn.execute(f"RELEASE SAVEPOINT {sp}")
