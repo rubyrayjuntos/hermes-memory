@@ -835,45 +835,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
         ghost_line = None
         try:
             if self.store is not None and self.pool is not None:
-                graph = self.store.graph_name
                 async with asyncio.timeout(0.30):
                     async with self.pool.acquire() as conn:
-                        await self.store.load_age(conn)
-                        # live counts: vertices / edges / ABOUT (each SAVEPOINT-guarded, single txn)
-                        v = e = a = 0
-                        async with conn.transaction():
-                            sp_v = "sp_live_v"
-                            await conn.execute(f"SAVEPOINT {sp_v}")
+                        async def count(query: str) -> int:
                             try:
-                                rv = await conn.fetch(
-                                    f"SELECT * FROM cypher('{graph}', $$ MATCH (n) RETURN count(n) $$) AS (c agtype)"
-                                )
-                                v = int(str(rv[0]["c"]).strip('"')) if rv and rv[0]["c"] is not None else 0
-                                await conn.execute(f"RELEASE SAVEPOINT {sp_v}")
+                                return int(await conn.fetchval(query) or 0)
                             except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_v}")
-                            sp_e = "sp_live_e"
-                            await conn.execute(f"SAVEPOINT {sp_e}")
-                            try:
-                                re_ = await conn.fetch(
-                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r]->() RETURN count(r) $$) AS (c agtype)"
-                                )
-                                e = int(str(re_[0]["c"]).strip('"')) if re_ and re_[0]["c"] is not None else 0
-                                await conn.execute(f"RELEASE SAVEPOINT {sp_e}")
-                            except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_e}")
-                            sp_a = "sp_live_a"
-                            await conn.execute(f"SAVEPOINT {sp_a}")
-                            try:
-                                ra = await conn.fetch(
-                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r:ABOUT]->() RETURN count(r) $$) AS (c agtype)"
-                                )
-                                a = int(str(ra[0]["c"]).strip('"')) if ra and ra[0]["c"] is not None else 0
-                                await conn.execute(f"RELEASE SAVEPOINT {sp_a}")
-                            except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_a}")
-                        if v or e:
-                            graph_line = f"persisted {v}v {e}e {a} ABOUT"
+                                return 0
+
+                        turns = await count("SELECT count(*) FROM conversations")
+                        nouns = await count("SELECT count(*) FROM noun")
+                        mentions = await count(
+                            "SELECT count(*) FROM semantic_edge WHERE verb_type = 'mentions'"
+                        )
+                        if turns or nouns or mentions:
+                            graph_line = (
+                                f"persisted {turns} turns · {nouns} nouns · "
+                                f"{mentions} mentions"
+                            )
                         # ghost is render-time only — never inject a snapshot count
         except Exception:
             pass

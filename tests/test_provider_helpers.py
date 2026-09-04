@@ -84,3 +84,84 @@ async def test_prefetch_expands_only_conversation_passports() -> None:
     assert paths[0]["chunk_id"] == "conv_41"
     assert paths[0]["turn_id"] == 41
     assert paths[0]["session_id"] == "session-a"
+
+
+async def test_prefetch_graph_line_reports_sql_manifold_without_about() -> None:
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    class Context:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Conn:
+        def transaction(self):
+            return Context()
+
+        async def execute(self, *_args):
+            return None
+
+        async def fetch(self, query):
+            if "MATCH (n)" in query:
+                return [{"c": 12}]
+            if "MATCH ()-[r]->()" in query:
+                return [{"c": 8}]
+            if "ABOUT" in query:
+                return [{"c": 3}]
+            return []
+
+        async def fetchval(self, query):
+            if "FROM conversations" in query:
+                return 7
+            if "FROM noun" in query:
+                return 5
+            if "FROM semantic_edge" in query:
+                return 3
+            return 0
+
+    class Pool:
+        def acquire(self):
+            class Acquire(Context):
+                async def __aenter__(self):
+                    return Conn()
+
+            return Acquire()
+
+    class Store:
+        graph_name = "hermes_knowledge"
+
+        async def vector_search(self, _literal, _k):
+            return [{
+                "id": "doc:1",
+                "src": "doc_chunk",
+                "similarity": 0.9,
+                "content": "Postgres catalog",
+                "embedding": "[1,0]",
+            }]
+
+        async def passports_for_conversations(self, _conv_ids):
+            return []
+
+        async def load_age(self, _conn):
+            return None
+
+    class Embedder:
+        async def embed_text(self, _text):
+            return [1.0, 0.0]
+
+    provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+    provider.store = Store()
+    provider.pool = Pool()
+    provider.embedder = Embedder()
+    provider.config = HybridAgeConfig(embed_dim=2)
+    provider._last_recall_count = 0
+    provider._recent_topics = []
+    provider._recent_turns = []
+
+    block = await provider._aprefetch("postgres")
+
+    assert "persisted 7 turns · 5 nouns · 3 mentions" in block
+    assert "ABOUT" not in block
