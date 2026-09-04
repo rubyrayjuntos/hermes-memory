@@ -194,6 +194,55 @@ def test_catalog_assembler_namespaces_flower_and_visible_nouns():
     assert out["meta"]["limit"] == 80
 
 
+def test_attach_passport_anchors_docks_nouns_and_injects_turns():
+    packed = pack_search(
+        "postgres",
+        4,
+        2,
+        [{"id": "41", "content": "noun seed", "similarity": 0.8, "src": "conversation"}],
+        ["1"],
+        [
+            (
+                {"id": "1", "name": "Postgres", "label": "Noun"},
+                "mentions",
+                {"id": "2", "name": "AGE", "label": "Noun"},
+                2.0,
+                0.8,
+                1.0,
+                0.6,
+                1,
+            ),
+        ],
+    )
+    out = graph_api.attach_passport_anchors(
+        packed,
+        [
+            {
+                "noun_id": 1,
+                "label": "Postgres",
+                "type": "technology",
+                "vertex_id": 99,
+                "turn_id": 41,
+            },
+            {
+                "noun_id": 2,
+                "label": "AGE",
+                "vertex_id": 99,
+                "turn_id": 41,
+            },
+        ],
+    )
+
+    ids = {node["id"] for node in out["graph"]["nodes"]}
+    assert "age:99" in ids
+    postgres = next(node for node in out["graph"]["nodes"] if node["id"] == "noun:1")
+    assert postgres["name"] == "Postgres"
+    assert postgres["props"]["turn_vertex_id"] == "age:99"
+    assert postgres["props"]["turn_id"] == 41
+    turn = next(node for node in out["graph"]["nodes"] if node["id"] == "age:99")
+    assert turn["label"] == "Turn"
+
+
 @pytest.mark.asyncio
 async def test_default_graph_catalog_uses_latest_80_turn_garden_data():
     from hermes_memory.graph_api import Runtime

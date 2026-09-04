@@ -680,11 +680,13 @@ class Store:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT chunk_id, source, noun_id, vertex_id, session_id, turn_id, conf, graph_name
-                  FROM memory_chunk_nodes
-                 WHERE chunk_id = ANY($1::text[])
-                   AND source = 'conversation'
-                   AND noun_id IS NOT NULL
+                SELECT p.chunk_id, p.source, p.noun_id, p.vertex_id, p.session_id,
+                       p.turn_id, p.conf, p.graph_name, n.label, n.type
+                  FROM memory_chunk_nodes p
+                  JOIN noun n ON n.id = p.noun_id
+                 WHERE p.chunk_id = ANY($1::text[])
+                   AND p.source = 'conversation'
+                   AND p.noun_id IS NOT NULL
                 """,
                 keys,
             )

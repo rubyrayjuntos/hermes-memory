@@ -27,6 +27,10 @@ def test_fountain_is_garden_only_ship_surface():
 
     assert "co-occurrence (mention order)" in html
     assert "Session" in html and "Turn" in html and "Noun" in html
+    assert "dockNounsToTurns" in html
+    assert "turn_vertex_id" in html
+    assert "#level-ctl, #ghost-row, #ghost-ctl, #coach { display: none !important; }" in html
+    assert "ph.textContent = LEVEL_DEF" not in html
     assert "ABOUT" not in html
     assert "Concept" not in html
     assert "level: 1" in html

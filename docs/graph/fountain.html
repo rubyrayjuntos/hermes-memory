@@ -94,6 +94,8 @@
     @keyframes hintPulse { 0%,100% { background:#7f1d1d; box-shadow:0 6px 18px rgba(127,29,29,.35) } 50% { background:#991b1b; box-shadow:0 8px 26px rgba(153,27,27,.55) } }
     .gem.ghost-pulse { animation: ghostGemPulse 1.4s ease-in-out infinite; }
     @keyframes ghostGemPulse { 0%,100% { opacity: .95; transform: rotate(45deg) scale(1); box-shadow: 0 0 0 0 rgba(224,64,176,.00) } 50% { opacity: 1; transform: rotate(45deg) scale(1.12); box-shadow: 0 0 10px 2px rgba(224,64,176,.45) } }
+    .legend .thread { display:inline-block; width:18px; height:3px; margin-right:4px; background: var(--mentions); vertical-align: middle; }
+    #level-ctl, #ghost-row, #ghost-ctl, #coach { display: none !important; }
     .level-ctl { display:flex; gap:4px; align-items:center; padding:4px 6px 4px 8px; border:1px solid var(--border); border-radius:999px; background:#fff; }
     .level-ctl button { min-width:30px; padding:4px 6px; font:700 10px/1 Cinzel,serif; letter-spacing:.08em; border-radius:999px; border:1px solid transparent; cursor:pointer; }
     .level-ctl button.on { background:var(--lapis-ink); color:#fff; border-color:var(--lapis-ink); }
@@ -119,6 +121,7 @@
       <span><i class="gem" style="background:#C9943F"></i> SESSION</span>
       <span><i class="gem" style="background:#EAE3D6;border:1px solid #fff"></i> TURN</span>
       <span><i class="gem" style="background:#234A8A"></i> NOUN</span>
+      <span title="co-occurrence in mention order"><i class="thread"></i> MENTIONS</span>
     </div>
     <div class="level-ctl" id="level-ctl" title="Progressive reveal: 1 Garden → 4 Cockpit (controls gate by level)">
       <span class="mono" style="font-size:9px; color:#5E7A97; letter-spacing:.12em; margin-right:2px">LEVEL</span>
@@ -163,13 +166,15 @@
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint" id="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span></div>
+  <div class="hint" id="hint">Nouns sit on their turn · teal threads are mention order · DISSOLVE walks that mesh</div>
   <div id="coach"><span id="coach-msg"></span><button id="coach-cta" type="button"></button><button id="coach-dismiss" type="button">later</button></div>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-const API = 'http://127.0.0.1:7890';
+const API = (location.protocol === 'http:' || location.protocol === 'https:')
+  ? location.origin
+  : 'http://127.0.0.1:7890';
 const MAT = {
   lapis:      { color: 0x234A8A, transmission: 0.18, roughness: 0.18, metalness: 0.05, clearcoat: 1,   ior: 1.62 },
   turquoise:  { color: 0x2F8F8A, transmission: 0.26, roughness: 0.24, metalness: 0.02, clearcoat: 1,   ior: 1.54 },
@@ -305,13 +310,37 @@ function massOf(n) {
   return 3.2;
 }
 
+function turnAnchorId(n) {
+  const props = n.props || n.properties || {};
+  return props.turn_vertex_id || n.turn_vertex_id || null;
+}
+
+function dockNounsToTurns(nodes) {
+  const byId = new Map(nodes.map(x => [sid(x.id), x]));
+  nodes.forEach(n => {
+    if ((n.label || n.group) !== 'Noun' || !n.pos) return;
+    const turn = byId.get(sid(turnAnchorId(n)));
+    if (!turn || !turn.pos) return;
+    const a = hash01(n.id) * Math.PI * 2;
+    const r = 1.35;
+    n.pos = [
+      turn.pos[0] + Math.cos(a) * r,
+      turn.pos[1] + 0.55,
+      turn.pos[2] + Math.sin(a) * r,
+    ];
+    n.vel = [0, 0, 0];
+  });
+}
+
 function forceLayout(nodes, links, steps) {
   const n = nodes.length;
   if (!n) return;
+  const byId = new Map(nodes.map(x => [sid(x.id), x]));
   nodes.forEach((node, i) => {
     const t = (i / n) * Math.PI * 2 + hash01(node.id);
-    const base = node.label === 'Noun' ? 5 : node.label === 'Session' ? 11 : 15;
-    const yStrata = node.label === 'Session' ? 6.0 : node.label === 'Noun' ? 1.6 : (hash01(node.id + 'y') - 0.52) * 6;
+    const kind = node.label || node.group;
+    const base = kind === 'Session' ? 11 : 15;
+    const yStrata = kind === 'Session' ? 6.0 : (hash01(node.id + 'y') - 0.52) * 6;
     node.pos = [
       Math.cos(t) * base,
       yStrata + (hash01(node.id + 'yy') - 0.5) * 1.2,
@@ -320,7 +349,7 @@ function forceLayout(nodes, links, steps) {
     node.vel = [0, 0, 0];
     node.offset = t;
   });
-  const byId = new Map(nodes.map(x => [sid(x.id), x]));
+  dockNounsToTurns(nodes);
   for (let step = 0; step < steps; step++) {
     const cool = 0.90 - 0.35 * (step / steps);
     for (let i = 0; i < n; i++) {
@@ -344,13 +373,12 @@ function forceLayout(nodes, links, steps) {
       let rest = 7;
       let k = 0.07 + force * 0.32;
       if (l.label === 'GHOST_KNN') {
-        // ghost: elevated vector-proximity spring
-        const isNoun = (raw.nodes.find(n => n.id === sid(l.target))?.label === 'Noun') || (raw.nodes.find(n => n.id === sid(l.source))?.label === 'Noun');
+        const isNoun = a.label === 'Noun' || b.label === 'Noun';
         rest = isNoun ? (3.0 + (1 - c) * 4.0) : (3.8 + (1 - c) * 4.5);
         k = isNoun ? (0.075 + c * 0.055) : (0.065 + c * 0.040);
-      } else if (l.label === 'NEXT') rest = 2.3;
-      else if (l.label === 'IN_SESSION') rest = 4.0;
-      else if (l.label === 'mentions') rest = 3.0 + (1 - force) * 5.5;
+      } else if (l.label === 'NEXT') { rest = 2.3; k = 0.22; }
+      else if (l.label === 'IN_SESSION') { rest = 4.0; k = 0.14; }
+      else if (l.label === 'mentions') { rest = 5.2; k = 0.08 + force * 0.06; }
       const dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
       const dist = Math.hypot(dx, dy, dz) || 0.01;
       const s = ((dist - rest) * k) / dist;
@@ -359,6 +387,15 @@ function forceLayout(nodes, links, steps) {
       b.vel[0] -= dx * s / mb; b.vel[1] -= dy * s / mb; b.vel[2] -= dz * s / mb;
     });
     nodes.forEach(node => {
+      const turn = byId.get(sid(turnAnchorId(node)));
+      if ((node.label || node.group) === 'Noun' && turn && turn.pos) {
+        const a = hash01(node.id) * Math.PI * 2;
+        const tx = turn.pos[0] + Math.cos(a) * 1.35;
+        const ty = turn.pos[1] + 0.55;
+        const tz = turn.pos[2] + Math.sin(a) * 1.35;
+        const dx = tx - node.pos[0], dy = ty - node.pos[1], dz = tz - node.pos[2];
+        node.vel[0] += dx * 0.42; node.vel[1] += dy * 0.42; node.vel[2] += dz * 0.42;
+      }
       node.vel[0] -= node.pos[0] * 0.003;
       node.vel[1] -= node.pos[1] * 0.003;
       node.vel[2] -= node.pos[2] * 0.003;
@@ -368,6 +405,7 @@ function forceLayout(nodes, links, steps) {
       node.pos[2] += node.vel[2];
     });
   }
+  dockNounsToTurns(nodes);
 }
 
 function layout(nodes, links, seedSet, mode) {
@@ -405,18 +443,19 @@ function rebuildScene() {
   raw.links.forEach(l => {
     const a = nodeMap.get(sid(l.source)), b = nodeMap.get(sid(l.target));
     if (!a || !b || !a.pos || !b.pos) return;
+    const kind = l.label;
+    if (kind === 'PASSPORT') return;
     const pa = new THREE.Vector3(...a.pos), pb = new THREE.Vector3(...b.pos);
     const w = Number(l.weight != null ? l.weight : 0.5);
     const c = Number(l.cosine != null ? l.cosine : 0.5);
     const force = Math.max(0.05, Math.min(1, 0.6 * w + 0.4 * c));
-    const kind = l.label;
     let radius = 0.010 + force * 0.012;
     let sag = 0.6;
     let segs = 8;
     if (kind === 'mentions') {
-      radius = 0.012 + force * 0.028;
-      sag = 1.8 + (1 - force) * 3.2;
-      segs = 18;
+      radius = 0.011 + force * 0.018;
+      sag = 0.55 + (1 - force) * 0.45;
+      segs = 12;
     } else if (kind === 'IN_SESSION') {
       radius = 0.009 + w * 0.012;
       sag = 0.45;
@@ -773,7 +812,7 @@ function applyCatalog(payload) {
   rebuildScene();
   renderList();
   document.getElementById('contrib').className = 'banner weak';
-  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · ${raw.links.length} threads · force = 0.6w+0.4c${hideBench ? ' · bench hidden' : ''}`;
+  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · nouns sit on their turns · teal = mention order${hideBench ? ' · bench hidden' : ''}`;
   const topo = document.getElementById('topo-list');
   if (topo) {
     document.getElementById('topo-meta').textContent = 'catalog';
@@ -806,7 +845,7 @@ function applySearch(res) {
     const m = seeds.find(s => (s.vertex_ids || []).some(v => sid(v) === id));
     return {
       ...n, id,
-      name: n.title || n.label || n.name,
+      name: n.name || n.title || n.label,
       label: n.group || n.label,
       _searchSeed: isSeed,
       _searchExpanded: !isSeed,
@@ -896,7 +935,6 @@ async function toggleGhost() {
 }
 
 async function dissolve() {
-  if (AppState.level < 3) dispatch('SET_LEVEL', 3);
   const q = document.getElementById('q').value.trim() || 'hybrid age memory';
   document.getElementById('injection').textContent = 'embedding → pgvector → bridge → 1–2 hop AGE…';
   const res = await safeFetch(`${API}/api/librarian/search?q=${encodeURIComponent(q)}&hops=2&k=6&fresh=1`);
@@ -1025,15 +1063,14 @@ function renderUIForCurrentLevel() {
     btn.className = bLvl===lvl ? 'on' : 'off';
     btn.setAttribute('aria-pressed', bLvl===lvl ? 'true':'false');
   });
-  const ph = document.querySelector('header p'); if(ph) ph.textContent = LEVEL_DEF[lvl].hint + (lvl < 4 ? ` · [${lvl}/4]` : ' · [4/4 Cockpit]');
   const ghostRow = document.getElementById('ghost-row');
   const ghostCtl = document.getElementById('ghost-ctl');
   const benchRow = document.getElementById('bench-row');
   const btnGhost = document.getElementById('btn-ghost');
-  if (ghostRow) ghostRow.style.display = lvl >= 2 ? '' : 'none';
-  if (btnGhost) { btnGhost.disabled = lvl < 2; btnGhost.style.opacity = lvl < 2 ? '.45' : ''; }
-  if (ghostCtl) ghostCtl.style.display = (lvl >= 3 && ghostEnabled) ? '' : 'none';
-  if (benchRow) benchRow.style.display = lvl >= 3 ? '' : 'none';
+  if (ghostRow) ghostRow.style.display = 'none';
+  if (btnGhost) { btnGhost.disabled = true; btnGhost.style.opacity = '.45'; }
+  if (ghostCtl) ghostCtl.style.display = 'none';
+  if (benchRow) benchRow.style.display = 'none';
   const gate = (key, els) => {
     const min = PANEL_MIN[key]||1;
     const btn = document.querySelector(`.hud-toggle[data-panel="${key}"]`);
@@ -1053,15 +1090,7 @@ function renderUIForCurrentLevel() {
   gate('injection', [document.getElementById('panel-injection')].filter(Boolean));
   gate('inspector', [document.getElementById('panel-topo'), document.getElementById('panel-hook')].filter(Boolean));
   if (lvl < 2 && ghostEnabled) { ghostEnabled=false; AppState.ghost.enabled=false; }
-  const hint = document.getElementById('hint');
-  if (hint) {
-    if (lvl===1) hint.innerHTML = `Level 1 · Garden — drag to orbit · click a gem <span class="mono" style="opacity:.65">· LEVEL 2 unlocks Ghost veil</span>`;
-    else if (lvl===2) hint.innerHTML = `Level 2 · Horizon — pulsing magenta = vector kNN (not persisted) <span class="mono" style="opacity:.65">· LEVEL 3 unlocks sliders</span>`;
-    else if (lvl===3) hint.innerHTML = `Level 3 · Instrument — k/thr · hide bench · DISSOLVE <span class="mono" style="opacity:.65">· LEVEL 4 = full cockpit</span>`;
-    else hint.innerHTML = `Drag to orbit · tubes = weight×cosine · GHOST = pulsing magenta kNN · DISSOLVE seed→rel→dest <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span>`;
-  }
   refreshHintAlert();
-  maybeCoach();
 }
 function maybeCoach(){
   if (AppState.coachSeen || AppState.level > 1) return;

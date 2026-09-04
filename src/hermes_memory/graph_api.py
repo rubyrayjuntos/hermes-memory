@@ -2,8 +2,8 @@
 
 Read-only surface the in-repo panes already call. Mutations return 501.
 Vertex IDs are decimal strings at the JSON boundary (AGE bigint).
-No extractors: graph comes from provider writes (Turn/Concept/ABOUT) plus
-whatever ingest already MERGEd.
+No extractors: graph comes from provider writes (Session/Turn/NEXT plus
+Postgres noun passports and mentions) plus whatever ingest already MERGEd.
 """
 from __future__ import annotations
 
@@ -320,6 +320,66 @@ def assemble_catalog(
             "edges": len(links),
         },
     }
+
+
+def attach_passport_anchors(
+    packed: Dict[str, Any],
+    passports: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Dock search nouns onto Turn vertices Fountain can snap to."""
+    graph = packed.setdefault("graph", {"nodes": [], "edges": [], "links": []})
+    nodes: Dict[str, Dict[str, Any]] = {
+        str(node["id"]): dict(node) for node in (graph.get("nodes") or [])
+    }
+    edges = list(graph.get("edges") or graph.get("links") or [])
+
+    for passport in passports:
+        noun_key = f"noun:{int(passport['noun_id'])}"
+        vertex_id = passport.get("vertex_id")
+        turn_id = (
+            f"age:{str(vertex_id).removeprefix('age:')}"
+            if vertex_id is not None
+            else None
+        )
+        if turn_id is not None and turn_id not in nodes:
+            turn_name = f"turn {passport.get('turn_id') or turn_id}"
+            nodes[turn_id] = {
+                "id": turn_id,
+                "label": "Turn",
+                "group": "Turn",
+                "name": turn_name,
+                "title": turn_name,
+                "props": {"turn_id": passport.get("turn_id")},
+            }
+        if noun_key not in nodes:
+            if turn_id is None:
+                continue
+            noun_name = str(passport.get("label") or passport["noun_id"])
+            nodes[noun_key] = {
+                "id": noun_key,
+                "label": "Noun",
+                "group": "Noun",
+                "name": noun_name,
+                "title": noun_name,
+                "props": {},
+            }
+        node = nodes[noun_key]
+        props = dict(node.get("props") or node.get("properties") or {})
+        if turn_id is not None:
+            props["turn_vertex_id"] = turn_id
+        if passport.get("turn_id") is not None:
+            props["turn_id"] = passport.get("turn_id")
+        if passport.get("type") is not None:
+            props["type"] = passport.get("type")
+        node["props"] = props
+        if not node.get("name") and passport.get("label"):
+            node["name"] = str(passport["label"])
+            node["title"] = str(passport["label"])
+
+    node_list = list(nodes.values())
+    packed["graph"] = {"nodes": node_list, "edges": edges, "links": edges}
+    packed.setdefault("retrieval", {})["vertices_reached"] = len(node_list)
+    return packed
 
 
 def pack_search(
@@ -1468,6 +1528,7 @@ class Runtime:
             dict.fromkeys(str(passport["noun_id"]) for passport in passports)
         )
         packed = pack_search(q, k, hops, seeds, seed_noun_ids, triples)
+        packed = attach_passport_anchors(packed, passports)
         packed["retrieval"]["embed_model"] = getattr(self.cfg, "embed_model", "nomic-embed-text")
         packed["retrieval"]["embed_dim"] = getattr(self.cfg, "embed_dim", 768)
         packed["retrieval"]["embed_ms"] = round((t_embed - t0) * 1000, 1)
