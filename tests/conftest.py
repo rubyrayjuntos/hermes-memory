@@ -202,7 +202,8 @@ async def clean_hermes_test_db(db_pool):
         await conn.execute(
             """
             TRUNCATE conversations, memory_entries, memory_chunk_nodes,
-                     doc_chunks, librarian_runs RESTART IDENTITY CASCADE;
+                     doc_chunks, librarian_runs, semantic_edge, noun
+                     RESTART IDENTITY CASCADE;
             """
         )
     yield
@@ -210,6 +211,7 @@ async def clean_hermes_test_db(db_pool):
         await conn.execute(
             """
             TRUNCATE conversations, memory_entries, memory_chunk_nodes,
-                     doc_chunks, librarian_runs RESTART IDENTITY CASCADE;
+                     doc_chunks, librarian_runs, semantic_edge, noun
+                     RESTART IDENTITY CASCADE;
             """
         )

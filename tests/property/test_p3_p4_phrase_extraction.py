@@ -1,19 +1,22 @@
-"""P3 — capitalized-phrase extraction guards; P4 — phrase normalization idempotence.
-
-SKIP rationale (per card C5 instructions): the capitalized-phrase extractor and
-phrase-normalization function belong to the graph_extractor port, which is
-v0.2 scope per docs/plans/v0.1.md §7 and is not present in the surfaces this
-card tests (store.py / ingest.py / provider.py). Marking SKIP with reason
-instead of inventing test targets.
-
-The nearest in-scope surrogate, ``HybridAgeMemoryProvider._extract_topics``
-(capitalized-phrase harvesting into the rolling session-topic window), does
-exist and is exercised in test_p5_p6_module_deps.py::test_topic_window_guards.
-"""
+"""P3 — extraction guards; P4 — slug normalization idempotence."""
 import pytest
 
-pytest.skip(
-    "P3/P4: extractor + normalization ship with v0.2 graph_extractor "
-    "(plan §7); not present in v0.1 ported surface",
-    allow_module_level=True,
-)
+from hermes_memory.extract_nouns import _slug, extract_nouns
+
+pytestmark = pytest.mark.property
+
+
+def test_p3_no_newline_span_in_multiword():
+    labels = [n.label for n in extract_nouns("Ok then Atlas Vault\nnewline Should Not Span")]
+    assert not any("\n" in lbl for lbl in labels)
+
+
+def test_p3_rejects_stopword_led_phrase():
+    labels = [n.label.lower() for n in extract_nouns("The Fix is broken")]
+    assert "the fix" not in labels
+
+
+def test_p4_slug_idempotent():
+    s = _slug("Tokyo Eye")
+    assert _slug(s) == s
+    assert _slug("  Hermes Agent ") == _slug("hermes-agent")

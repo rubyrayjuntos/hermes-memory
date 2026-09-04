@@ -24,7 +24,7 @@
       --parchment: #ffffff;
       --ink: #1E2D45;
       --seed: #d946a6;
-      --about: #7c3aed;
+      --mentions: #2F8F8A;
       --ghost: #E040B0;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -94,6 +94,8 @@
     @keyframes hintPulse { 0%,100% { background:#7f1d1d; box-shadow:0 6px 18px rgba(127,29,29,.35) } 50% { background:#991b1b; box-shadow:0 8px 26px rgba(153,27,27,.55) } }
     .gem.ghost-pulse { animation: ghostGemPulse 1.4s ease-in-out infinite; }
     @keyframes ghostGemPulse { 0%,100% { opacity: .95; transform: rotate(45deg) scale(1); box-shadow: 0 0 0 0 rgba(224,64,176,.00) } 50% { opacity: 1; transform: rotate(45deg) scale(1.12); box-shadow: 0 0 10px 2px rgba(224,64,176,.45) } }
+    .legend .thread { display:inline-block; width:18px; height:3px; margin-right:4px; background: var(--mentions); vertical-align: middle; }
+    #level-ctl, #ghost-row, #ghost-ctl, #coach { display: none !important; }
     .level-ctl { display:flex; gap:4px; align-items:center; padding:4px 6px 4px 8px; border:1px solid var(--border); border-radius:999px; background:#fff; }
     .level-ctl button { min-width:30px; padding:4px 6px; font:700 10px/1 Cinzel,serif; letter-spacing:.08em; border-radius:999px; border:1px solid transparent; cursor:pointer; }
     .level-ctl button.on { background:var(--lapis-ink); color:#fff; border-color:var(--lapis-ink); }
@@ -113,14 +115,13 @@
   <header>
     <div>
       <h1>THE HERMES LIBRARIAN</h1>
-      <p>Fountain live — Concepts (lapis) join sessions; Sessions (amber) are hubs; Turns (alabaster) orbit</p>
+      <p>Garden live — Session, Turn, and Noun · co-occurrence (mention order)</p>
     </div>
     <div class="legend">
-      <span><i class="gem" style="background:#234A8A"></i> CONCEPT</span>
       <span><i class="gem" style="background:#C9943F"></i> SESSION</span>
       <span><i class="gem" style="background:#EAE3D6;border:1px solid #fff"></i> TURN</span>
-      <span><i class="gem" style="background:#2F8F8A"></i> NEXT</span>
-      <span title="GHOST_KNN · vector proximity (768-d cosine kNN) · pulsing magenta · render-time only, not persisted to AGE"><i class="gem ghost-pulse" style="background:#E040B0"></i> GHOST</span>
+      <span><i class="gem" style="background:#234A8A"></i> NOUN</span>
+      <span title="co-occurrence in mention order"><i class="thread"></i> MENTIONS</span>
     </div>
     <div class="level-ctl" id="level-ctl" title="Progressive reveal: 1 Garden → 4 Cockpit (controls gate by level)">
       <span class="mono" style="font-size:9px; color:#5E7A97; letter-spacing:.12em; margin-right:2px">LEVEL</span>
@@ -165,13 +166,15 @@
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint" id="hint">Drag to orbit · tubes = weight×cosine · GHOST = vector kNN (0.70) · DISSOLVE lists seed → rel → dest paths <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span></div>
+  <div class="hint" id="hint">Nouns sit on their turn · teal threads are mention order · DISSOLVE walks that mesh</div>
   <div id="coach"><span id="coach-msg"></span><button id="coach-cta" type="button"></button><button id="coach-dismiss" type="button">later</button></div>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-const API = 'http://127.0.0.1:7890';
+const API = (location.protocol === 'http:' || location.protocol === 'https:')
+  ? location.origin
+  : 'http://127.0.0.1:7890';
 const MAT = {
   lapis:      { color: 0x234A8A, transmission: 0.18, roughness: 0.18, metalness: 0.05, clearcoat: 1,   ior: 1.62 },
   turquoise:  { color: 0x2F8F8A, transmission: 0.26, roughness: 0.24, metalness: 0.02, clearcoat: 1,   ior: 1.54 },
@@ -181,13 +184,14 @@ const MAT = {
 };
 const LABEL_GEM = {
   File: 'lapis', Module: 'turquoise', Turn: 'alabaster', Session: 'amber',
-  Dependency: 'amber', Concept: 'lapis', Standard: 'amber', Person: 'amber',
+  Dependency: 'amber', Noun: 'lapis', Standard: 'amber', Person: 'amber',
   Project: 'amber', Technology: 'amber', Tool: 'amber', Skill: 'amber',
   Organization: 'amber', Domain: 'amber', Repo: 'amber'
 };
-const EDGE_COLOR = { IMPORTS: 0x2A5DB0, ABOUT: 0x7c3aed, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F, GHOST_KNN: 0xE040B0 };
+const EDGE_COLOR = { IMPORTS: 0x2A5DB0, mentions: 0x2F8F8A, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F, GHOST_KNN: 0xE040B0 };
 
 let raw = { nodes: [], links: [] };
+let catalogPayload = null;
 let hops = new Map();
 let seedIds = new Set();
 let highlighted = new Set();
@@ -201,12 +205,12 @@ const LEVEL_DEF = {
   3: { name:'Instrument', hint:'Level 3 · Instrument — sliders · DISSOLVE · w×c' },
   4: { name:'Cockpit', hint:'Level 4 · Cockpit — full score=0.5c+0.3w+0.2decay audited cockpit' },
 };
-const PANEL_MIN = { metrics:3, injection:4, inspector:3 };
+const PANEL_MIN = { metrics:1, injection:1, inspector:1 };
 let AppState = {
-  level: Math.min(4, Math.max(1, parseInt((() => { try{return localStorage.getItem('fountain.level');}catch{return null;}})() || '1', 10) || 1)),
+  level: 1,
   mode: 'catalog',
   ghost: {
-    enabled: (()=>{ try{return localStorage.getItem('fountain.ghostEnabled')==='1';}catch{return false;}})(),
+    enabled: false,
     k: parseInt((()=>{ try{return localStorage.getItem('fountain.ghostK');}catch{return null;}})() || '5',10)||5,
     threshold: parseFloat((()=>{ try{return localStorage.getItem('fountain.ghostThr');}catch{return null;}})() || '0.70')||0.70,
   },
@@ -301,18 +305,42 @@ function hash01(s) {
 
 function massOf(n) {
   if (n.label === 'Session') return 14;
-  if (n.label === 'Concept') return 8 + Math.min(10, Number(n.val || 1) * 0.45);
+  if (n.label === 'Noun') return 8 + Math.min(10, Number(n.val || 1) * 0.45);
   if (n._searchSeed) return 5;
   return 3.2;
+}
+
+function turnAnchorId(n) {
+  const props = n.props || n.properties || {};
+  return props.turn_vertex_id || n.turn_vertex_id || null;
+}
+
+function dockNounsToTurns(nodes) {
+  const byId = new Map(nodes.map(x => [sid(x.id), x]));
+  nodes.forEach(n => {
+    if ((n.label || n.group) !== 'Noun' || !n.pos) return;
+    const turn = byId.get(sid(turnAnchorId(n)));
+    if (!turn || !turn.pos) return;
+    const a = hash01(n.id) * Math.PI * 2;
+    const r = 1.35;
+    n.pos = [
+      turn.pos[0] + Math.cos(a) * r,
+      turn.pos[1] + 0.55,
+      turn.pos[2] + Math.sin(a) * r,
+    ];
+    n.vel = [0, 0, 0];
+  });
 }
 
 function forceLayout(nodes, links, steps) {
   const n = nodes.length;
   if (!n) return;
+  const byId = new Map(nodes.map(x => [sid(x.id), x]));
   nodes.forEach((node, i) => {
     const t = (i / n) * Math.PI * 2 + hash01(node.id);
-    const base = node.label === 'Concept' ? 5 : node.label === 'Session' ? 11 : 15;
-    const yStrata = node.label === 'Session' ? 6.0 : node.label === 'Concept' ? 1.6 : (hash01(node.id + 'y') - 0.52) * 6;
+    const kind = node.label || node.group;
+    const base = kind === 'Session' ? 11 : 15;
+    const yStrata = kind === 'Session' ? 6.0 : (hash01(node.id + 'y') - 0.52) * 6;
     node.pos = [
       Math.cos(t) * base,
       yStrata + (hash01(node.id + 'yy') - 0.5) * 1.2,
@@ -321,7 +349,7 @@ function forceLayout(nodes, links, steps) {
     node.vel = [0, 0, 0];
     node.offset = t;
   });
-  const byId = new Map(nodes.map(x => [sid(x.id), x]));
+  dockNounsToTurns(nodes);
   for (let step = 0; step < steps; step++) {
     const cool = 0.90 - 0.35 * (step / steps);
     for (let i = 0; i < n; i++) {
@@ -345,14 +373,12 @@ function forceLayout(nodes, links, steps) {
       let rest = 7;
       let k = 0.07 + force * 0.32;
       if (l.label === 'GHOST_KNN') {
-        // ghost: elevated thematic spring — now strong enough to distort session rings
-        // Turn→Concept (weight 0.55) pulls harder than Turn↔Turn (0.35)
-        const isConcept = (raw.nodes.find(n => n.id === sid(l.target))?.label === 'Concept') || (raw.nodes.find(n => n.id === sid(l.source))?.label === 'Concept');
-        rest = isConcept ? (3.0 + (1 - c) * 4.0) : (3.8 + (1 - c) * 4.5);
-        k = isConcept ? (0.075 + c * 0.055) : (0.065 + c * 0.040);
-      } else if (l.label === 'NEXT') rest = 2.3;
-      else if (l.label === 'IN_SESSION') rest = 4.0;
-      else if (l.label === 'ABOUT') rest = 3.0 + (1 - force) * 5.5;
+        const isNoun = a.label === 'Noun' || b.label === 'Noun';
+        rest = isNoun ? (3.0 + (1 - c) * 4.0) : (3.8 + (1 - c) * 4.5);
+        k = isNoun ? (0.075 + c * 0.055) : (0.065 + c * 0.040);
+      } else if (l.label === 'NEXT') { rest = 2.3; k = 0.22; }
+      else if (l.label === 'IN_SESSION') { rest = 4.0; k = 0.14; }
+      else if (l.label === 'mentions') { rest = 5.2; k = 0.08 + force * 0.06; }
       const dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
       const dist = Math.hypot(dx, dy, dz) || 0.01;
       const s = ((dist - rest) * k) / dist;
@@ -361,6 +387,15 @@ function forceLayout(nodes, links, steps) {
       b.vel[0] -= dx * s / mb; b.vel[1] -= dy * s / mb; b.vel[2] -= dz * s / mb;
     });
     nodes.forEach(node => {
+      const turn = byId.get(sid(turnAnchorId(node)));
+      if ((node.label || node.group) === 'Noun' && turn && turn.pos) {
+        const a = hash01(node.id) * Math.PI * 2;
+        const tx = turn.pos[0] + Math.cos(a) * 1.35;
+        const ty = turn.pos[1] + 0.55;
+        const tz = turn.pos[2] + Math.sin(a) * 1.35;
+        const dx = tx - node.pos[0], dy = ty - node.pos[1], dz = tz - node.pos[2];
+        node.vel[0] += dx * 0.42; node.vel[1] += dy * 0.42; node.vel[2] += dz * 0.42;
+      }
       node.vel[0] -= node.pos[0] * 0.003;
       node.vel[1] -= node.pos[1] * 0.003;
       node.vel[2] -= node.pos[2] * 0.003;
@@ -370,6 +405,7 @@ function forceLayout(nodes, links, steps) {
       node.pos[2] += node.vel[2];
     });
   }
+  dockNounsToTurns(nodes);
 }
 
 function layout(nodes, links, seedSet, mode) {
@@ -407,18 +443,19 @@ function rebuildScene() {
   raw.links.forEach(l => {
     const a = nodeMap.get(sid(l.source)), b = nodeMap.get(sid(l.target));
     if (!a || !b || !a.pos || !b.pos) return;
+    const kind = l.label;
+    if (kind === 'PASSPORT') return;
     const pa = new THREE.Vector3(...a.pos), pb = new THREE.Vector3(...b.pos);
     const w = Number(l.weight != null ? l.weight : 0.5);
     const c = Number(l.cosine != null ? l.cosine : 0.5);
     const force = Math.max(0.05, Math.min(1, 0.6 * w + 0.4 * c));
-    const kind = l.label;
     let radius = 0.010 + force * 0.012;
     let sag = 0.6;
     let segs = 8;
-    if (kind === 'ABOUT') {
-      radius = 0.012 + force * 0.028;
-      sag = 1.8 + (1 - force) * 3.2;
-      segs = 18;
+    if (kind === 'mentions') {
+      radius = 0.011 + force * 0.018;
+      sag = 0.55 + (1 - force) * 0.45;
+      segs = 12;
     } else if (kind === 'IN_SESSION') {
       radius = 0.009 + w * 0.012;
       sag = 0.45;
@@ -440,7 +477,7 @@ function rebuildScene() {
     const mid = pa.clone().add(pb).multiplyScalar(0.5);
     const lift = new THREE.Vector3().subVectors(pb, pa).cross(new THREE.Vector3(0, 1, 0));
     if (lift.lengthSq() < 1e-6) lift.set(1, 0, 0);
-    lift.normalize().multiplyScalar(kind === 'ABOUT' ? sag * 0.35 : 0);
+    lift.normalize().multiplyScalar(kind === 'mentions' ? sag * 0.35 : 0);
     mid.y += sag;
     mid.add(lift);
     const curve = new THREE.QuadraticBezierCurve3(pa, mid, pb);
@@ -450,10 +487,10 @@ function rebuildScene() {
     const mat = new THREE.MeshPhysicalMaterial({
       color: EDGE_COLOR[kind] || 0x2A5DB0,
       roughness: isGhost ? 0.35 : 0.32,
-      metalness: kind === 'ABOUT' ? 0.35 : isGhost ? 0.10 : 0.12,
+      metalness: kind === 'mentions' ? 0.18 : isGhost ? 0.10 : 0.12,
       transparent: true,
       opacity: isGhost ? 0.25 : (0.38 + force * 0.55),
-      transmission: kind === 'ABOUT' ? 0.12 : 0,
+      transmission: 0,
       thickness: 0.2,
       emissive: isGhost ? 0xE040B0 : (lit ? 0xffffff : 0x000000),
       emissiveIntensity: isGhost ? 0.16 : (lit ? 0.25 : 0)
@@ -480,10 +517,10 @@ function rebuildScene() {
     const deg = Number(n.val || 1);
     const isSeed = !!n._searchSeed;
     const radius = n.label === 'Session' ? 1.15
-      : n.label === 'Concept' ? 0.78 + Math.min(0.30, deg * 0.06)
+      : n.label === 'Noun' ? 0.78 + Math.min(0.30, deg * 0.06)
       : isSeed ? 0.72
       : 0.52 + Math.min(0.10, deg * 0.012);
-    const detail = (n.label === 'Session' || n.label === 'Concept') ? 1 : 0;
+    const detail = (n.label === 'Session' || n.label === 'Noun') ? 1 : 0;
     const geo = new THREE.IcosahedronGeometry(radius, detail);
     const mesh = new THREE.Mesh(geo, materialFor(kind, n._searchSeed));
     mesh.position.set(...n.pos);
@@ -491,9 +528,9 @@ function rebuildScene() {
     mesh.castShadow = true;
     const glow = new THREE.Mesh(
       new THREE.IcosahedronGeometry(radius, detail),
-      new THREE.MeshBasicMaterial({ color: MAT[kind].color, transparent: true, opacity: isSeed ? 0.26 : (n.label === 'Session' ? 0.13 : n.label === 'Concept' ? 0.11 : 0.09), depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: MAT[kind].color, transparent: true, opacity: isSeed ? 0.26 : (n.label === 'Session' ? 0.13 : n.label === 'Noun' ? 0.11 : 0.09), depthWrite: false })
     );
-    glow.scale.setScalar(isSeed ? 1.68 : n.label === 'Session' ? 1.62 : n.label === 'Concept' ? 1.58 : 1.50);
+    glow.scale.setScalar(isSeed ? 1.68 : n.label === 'Session' ? 1.62 : n.label === 'Noun' ? 1.58 : 1.50);
     mesh.add(glow);
     graphGroup.add(mesh);
   });
@@ -524,7 +561,7 @@ function initThree() {
 
   // no opaque ground — removed 120×120 Plane + rings at y≈0 that cut the manifold.
   // parchment background (scene.background #E9E3D4) is the ground. Manifold yStrata
-  // Session 6.0 / Concept 1.6 / Turn ±3 is now fully visible from any orbit angle.
+  // Session 6.0 / Noun 1.6 / Turn ±3 is fully visible from any orbit angle.
   renderer.shadowMap.enabled = false;
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -539,14 +576,14 @@ function initThree() {
   function showEdgeTip(l, ev) {
     const w = Number(l.weight ?? 0.5), c = Number(l.cosine ?? 0.5);
     const dec = l.decay != null ? Number(l.decay) : 0.5;
-    const sc = 0.5*c + 0.3*w + 0.2*dec;
+    const sc = l.score != null ? Number(l.score) : (0.5*c + 0.3*w + 0.2*dec);
     const a = raw.nodes.find(n=>sid(n.id)===sid(l.source));
     const b = raw.nodes.find(n=>sid(n.id)===sid(l.target));
-    const lvl = AppState?.level || 1;
     let body = `<b>${escapeHTML(l.label||'REL')}</b> ${escapeHTML(a?nodeName(a):String(l.source))} → ${escapeHTML(b?nodeName(b):String(l.target))}`;
-    if (lvl >= 4) body += `<br>w=${w.toFixed(2)} c=${c.toFixed(2)} decay=${dec.toFixed(2)} → <b>score ${sc.toFixed(2)}</b> = 0.5*${c.toFixed(2)}+0.3*${w.toFixed(2)}+0.2*${dec.toFixed(2)}<br><span style="opacity:.8">force ${(0.6*w+0.4*c).toFixed(2)} · sag ${l.label==='ABOUT' ? (1.8+(1-Math.max(0.08,Math.min(1,0.6*w+0.4*c)))*3.2).toFixed(1) : '—'}</span>`;
-    else if (lvl >= 3) body += `<br>w=${w.toFixed(2)} · c=${c.toFixed(2)}<span style="opacity:.8"> · force ${(0.6*w+0.4*c).toFixed(2)}</span>`;
-    else if (lvl >= 2) body += `<br><span style="opacity:.8">${l.label==='GHOST_KNN'?'vector proximity (kNN) — pulsing = not persisted': l.label==='ABOUT'?'semantic bridge': l.label==='NEXT'?'sequential turn':'session membership'}</span>`;
+    if (l.label === 'mentions') body += `<br>w=${w.toFixed(2)} · c=${c.toFixed(2)} · decay=${dec.toFixed(2)} · <b>score=${sc.toFixed(2)}</b><br><span style="opacity:.8">co-occurrence (mention order)</span>`;
+    else if (l.label === 'GHOST_KNN') body += '<br><span style="opacity:.8">vector proximity (kNN) — not persisted</span>';
+    else if (l.label === 'NEXT') body += '<br><span style="opacity:.8">sequential turn</span>';
+    else if (l.label === 'IN_SESSION') body += '<br><span style="opacity:.8">session membership</span>';
     else body += `<br><span style="opacity:.8">${escapeHTML(l.label||'connected')}</span>`;
     tip.innerHTML = body;
     tip.style.left = (ev.clientX + 14) + 'px';
@@ -641,6 +678,10 @@ function selectNode(n) {
 function renderList() {
   const el = document.getElementById('nodelist');
   const ranked = [...raw.nodes].sort((a,b) => (a._hop ?? 9) - (b._hop ?? 9) || (b.val||0) - (a.val||0));
+  if (!ranked.length) {
+    el.innerHTML = '<div class="mono" style="padding:8px;color:#7A92B1">Catalog is empty — seed it in chat.</div>';
+    return;
+  }
   el.innerHTML = ranked.slice(0, 80).map(n => {
     const kind = gemKind(n);
     const hex = '#' + MAT[kind].color.toString(16).padStart(6, '0');
@@ -655,6 +696,7 @@ function renderList() {
 
 function setMetrics(stats, extra) {
   const v = stats?.vertices || {};
+  const manifold = stats?.manifold || {};
   const b = stats?.bridge || {};
   const vec = stats?.vector || {};
   const i = stats?.integrity || {};
@@ -664,10 +706,11 @@ function setMetrics(stats, extra) {
   raw.links.forEach(l => { const k = l.label || ''; elabs[k] = (elabs[k] || 0) + 1; });
   const benchFiltered = hideBench ? ' · bench hidden' : '';
   const cells = [
-    ['VERTICES', extra?.verts ?? raw.nodes.length, `${labels.Turn||0} Turn · ${labels.Session||0} Session · ${labels.Concept||0} Concept${benchFiltered}`],
-    ['EDGES', extra?.edges ?? raw.links.length, `${elabs.NEXT||0} NEXT · ${elabs.IN_SESSION||0} IN_SESSION · ${elabs.ABOUT||0} ABOUT${ghostEnabled && ghostMeta ? ` · ${ghostMeta.edges} ghost` : ''}`],
+    ['MANIFOLD', manifold.turns ?? 0, `${manifold.turns||0} turns · ${manifold.nouns||0} nouns · ${manifold.mentions||0} mentions`],
+    ['VISIBLE', extra?.verts ?? raw.nodes.length, `${labels.Turn||0} Turn · ${labels.Session||0} Session · ${labels.Noun||0} Noun${benchFiltered}`],
+    ['THREADS', extra?.edges ?? raw.links.length, `${elabs.NEXT||0} NEXT · ${elabs.IN_SESSION||0} IN_SESSION · ${elabs.mentions||0} mentions${ghostEnabled && ghostMeta ? ` · ${ghostMeta.edges} ghost` : ''}`],
     ['BRIDGE', b.rows ?? '—', `${b.vertices_bridged||0} verts bridged · graph ${v.total??'—'}v`],
-    ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'} · score 0.5c+0.3w+0.2decay`],
+    ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'} · score composite × (magnitude / 8)`],
   ];
   document.getElementById('metrics').innerHTML = cells.map(([k,val,sub]) =>
     `<div class="metric"><span class="k">${k}</span><span class="v">${val}</span><span class="s">${sub}</span></div>`).join('');
@@ -749,6 +792,7 @@ function focusPath(p) {
 }
 
 function applyCatalog(payload) {
+  catalogPayload = payload;
   seedIds = new Set();
   const filt = filteredCatalog(payload);
   raw.nodes = (filt.nodes || []).map(n => ({
@@ -768,7 +812,7 @@ function applyCatalog(payload) {
   rebuildScene();
   renderList();
   document.getElementById('contrib').className = 'banner weak';
-  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · ${raw.links.length} threads · force = 0.6w+0.4c${hideBench ? ' · bench hidden' : ''}`;
+  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · nouns sit on their turns · teal = mention order${hideBench ? ' · bench hidden' : ''}`;
   const topo = document.getElementById('topo-list');
   if (topo) {
     document.getElementById('topo-meta').textContent = 'catalog';
@@ -778,6 +822,21 @@ function applyCatalog(payload) {
 
 function applySearch(res) {
   const seeds = res.seeds || [];
+  if (!seeds.length) {
+    applyCatalog(catalogPayload || {nodes: [], links: []});
+    raw.nodes.forEach(n => { n._dimmed = true; });
+    rebuildScene();
+    if (graphGroup) graphGroup.traverse(obj => {
+      if (!obj.material) return;
+      obj.material.transparent = true;
+      obj.material.opacity = Math.min(Number(obj.material.opacity ?? 1), 0.2);
+    });
+    document.getElementById('mode-tag').textContent = 'SEARCH · NO HITS';
+    document.getElementById('nodelist').innerHTML = '<div class="mono" style="padding:8px;color:#7A92B1">No hits — catalog remains visible.</div>';
+    reconstructInjection(res);
+    renderTopo(res);
+    return;
+  }
   seedIds = new Set(seeds.flatMap(s => (s.vertex_ids || []).map(sid)));
   const g = res.graph || { nodes: [], edges: [] };
   raw.nodes = (g.nodes || []).map(n => {
@@ -786,7 +845,7 @@ function applySearch(res) {
     const m = seeds.find(s => (s.vertex_ids || []).some(v => sid(v) === id));
     return {
       ...n, id,
-      name: n.title || n.label || n.name,
+      name: n.name || n.title || n.label,
       label: n.group || n.label,
       _searchSeed: isSeed,
       _searchExpanded: !isSeed,
@@ -803,14 +862,16 @@ function applySearch(res) {
   document.getElementById('mode-tag').textContent = 'INJECTION';
   highlighted = new Set();
   rebuildScene();
-  renderList();
+  document.getElementById('nodelist').innerHTML = seeds.slice(0, 80).map(seed =>
+    `<button type="button"><i class="gem" style="background:#d946a6"></i><span>${escapeHTML((seed.excerpt||seed.chunk_id).slice(0,42))}</span><span class="mono" style="margin-left:auto;color:#7A92B1">sim ${Number(seed.score).toFixed(2)} · ${escapeHTML(seed.chunk_id)}</span></button>`
+  ).join('');
   reconstructInjection(res);
   renderTopo(res);
 }
 
 async function loadCatalog() {
   const [g3d, stats] = await Promise.all([
-    safeFetch(`${API}/api/librarian/graph/3d?label=Turn&limit=250&fresh=1`),
+    safeFetch(`${API}/api/librarian/graph/3d?limit=80&fresh=1`),
     safeFetch(`${API}/api/librarian/graph/stats?fresh=1`)
   ]);
   if (!g3d) return;
@@ -842,7 +903,7 @@ function updateGhostMeta() {
   } else {
     const tc = ghostMeta.turn_concept ?? 0;
     const tt = ghostMeta.turn_turn ?? ghostMeta.edges;
-    el.textContent = `ghost on — ${ghostMeta.edges} threads (${tt} Turn↔Turn + ${tc} Turn→Concept) · k=${ghostK} thr=${ghostThr.toFixed(2)} · ${ghostMeta.visible} Turns, ${ghostMeta.concepts ?? '?'} Concepts`;
+    el.textContent = `ghost on — ${ghostMeta.edges} threads (${tt} Turn↔Turn + ${tc} Turn→Noun) · k=${ghostK} thr=${ghostThr.toFixed(2)} · ${ghostMeta.visible} Turns, ${ghostMeta.nouns ?? '?'} Nouns`;
     btn.textContent = `GHOST ON · ${ghostMeta.edges}`;
     btn.classList.remove('ghost');
     btn.style.background = '#1E3A5F';
@@ -874,7 +935,6 @@ async function toggleGhost() {
 }
 
 async function dissolve() {
-  if (AppState.level < 3) dispatch('SET_LEVEL', 3);
   const q = document.getElementById('q').value.trim() || 'hybrid age memory';
   document.getElementById('injection').textContent = 'embedding → pgvector → bridge → 1–2 hop AGE…';
   const res = await safeFetch(`${API}/api/librarian/search?q=${encodeURIComponent(q)}&hops=2&k=6&fresh=1`);
@@ -951,9 +1011,8 @@ function dispatch(action, payload) {
   switch(action) {
     case 'SET_LEVEL': {
       if (AppState._coachTimer) { clearTimeout(AppState._coachTimer); AppState._coachTimer=null; }
-      let lvl = Math.min(4, Math.max(1, parseInt(payload,10)||1));
+      const lvl = 1;
       AppState.level = lvl;
-      try{ localStorage.setItem('fountain.level', String(lvl)); }catch{}
       if (lvl < 2 && AppState.ghost.enabled) {
         AppState.ghost.enabled = false; ghostEnabled = false;
         try{ localStorage.setItem('fountain.ghostEnabled','0'); }catch{}
@@ -1004,15 +1063,14 @@ function renderUIForCurrentLevel() {
     btn.className = bLvl===lvl ? 'on' : 'off';
     btn.setAttribute('aria-pressed', bLvl===lvl ? 'true':'false');
   });
-  const ph = document.querySelector('header p'); if(ph) ph.textContent = LEVEL_DEF[lvl].hint + (lvl < 4 ? ` · [${lvl}/4]` : ' · [4/4 Cockpit]');
   const ghostRow = document.getElementById('ghost-row');
   const ghostCtl = document.getElementById('ghost-ctl');
   const benchRow = document.getElementById('bench-row');
   const btnGhost = document.getElementById('btn-ghost');
-  if (ghostRow) ghostRow.style.display = lvl >= 2 ? '' : 'none';
-  if (btnGhost) { btnGhost.disabled = lvl < 2; btnGhost.style.opacity = lvl < 2 ? '.45' : ''; }
-  if (ghostCtl) ghostCtl.style.display = (lvl >= 3 && ghostEnabled) ? '' : 'none';
-  if (benchRow) benchRow.style.display = lvl >= 3 ? '' : 'none';
+  if (ghostRow) ghostRow.style.display = 'none';
+  if (btnGhost) { btnGhost.disabled = true; btnGhost.style.opacity = '.45'; }
+  if (ghostCtl) ghostCtl.style.display = 'none';
+  if (benchRow) benchRow.style.display = 'none';
   const gate = (key, els) => {
     const min = PANEL_MIN[key]||1;
     const btn = document.querySelector(`.hud-toggle[data-panel="${key}"]`);
@@ -1032,15 +1090,7 @@ function renderUIForCurrentLevel() {
   gate('injection', [document.getElementById('panel-injection')].filter(Boolean));
   gate('inspector', [document.getElementById('panel-topo'), document.getElementById('panel-hook')].filter(Boolean));
   if (lvl < 2 && ghostEnabled) { ghostEnabled=false; AppState.ghost.enabled=false; }
-  const hint = document.getElementById('hint');
-  if (hint) {
-    if (lvl===1) hint.innerHTML = `Level 1 · Garden — drag to orbit · click a gem <span class="mono" style="opacity:.65">· LEVEL 2 unlocks Ghost veil</span>`;
-    else if (lvl===2) hint.innerHTML = `Level 2 · Horizon — pulsing magenta = vector kNN (not persisted) <span class="mono" style="opacity:.65">· LEVEL 3 unlocks sliders</span>`;
-    else if (lvl===3) hint.innerHTML = `Level 3 · Instrument — k/thr · hide bench · DISSOLVE <span class="mono" style="opacity:.65">· LEVEL 4 = full cockpit</span>`;
-    else hint.innerHTML = `Drag to orbit · tubes = weight×cosine · GHOST = pulsing magenta kNN · DISSOLVE seed→rel→dest <span class="mono" style="opacity:.65">· [M/I/G] toggle panels · top bar always on</span>`;
-  }
   refreshHintAlert();
-  maybeCoach();
 }
 function maybeCoach(){
   if (AppState.coachSeen || AppState.level > 1) return;
@@ -1058,11 +1108,8 @@ function maybeCoach(){
 }
 function initProgressiveReveal(){
   document.querySelectorAll('#level-ctl [data-lvl]').forEach(btn=>{
-    btn.addEventListener('click', ()=> dispatch('SET_LEVEL', parseInt(btn.dataset.lvl,10)));
-  });
-  window.addEventListener('keydown', ev=>{
-    if(ev.target && (ev.target.tagName==='INPUT'||ev.target.tagName==='TEXTAREA')) return;
-    if(ev.key>='1' && ev.key<='4'){ dispatch('SET_LEVEL', parseInt(ev.key,10)); }
+    btn.disabled = parseInt(btn.dataset.lvl,10) !== 1;
+    btn.addEventListener('click', ()=> dispatch('SET_LEVEL', 1));
   });
   const kv=document.getElementById('ghost-k-val'); if(kv) kv.textContent=String(ghostK);
   const tv=document.getElementById('ghost-thr-val'); if(tv) tv.textContent=ghostThr.toFixed(2);

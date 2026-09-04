@@ -9,7 +9,11 @@ from __future__ import annotations
 import datetime
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.store]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.store,
+    pytest.mark.skip(reason="legacy AGE ABOUT recency engine removed"),
+]
 
 
 @pytest.mark.asyncio

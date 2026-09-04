@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+import hermes_memory.graph_api as graph_api
 from hermes_memory.graph_api import (
     GHOST_MAX_K,
     GHOST_MAX_LIMIT,
@@ -155,6 +156,196 @@ def test_conversation_first_budget():
     assert convo + other == 250
 
 
+def test_catalog_assembler_namespaces_flower_and_visible_nouns():
+    assemble_catalog = getattr(graph_api, "assemble_catalog", lambda *_args, **_kwargs: {})
+    out = assemble_catalog(
+        age_nodes=[
+            {"id": "1", "label": "Session", "name": "session-a", "props": {}},
+            {"id": "2", "label": "Turn", "name": "turn-a", "props": {"turn_id": 41}},
+            {"id": "3", "label": "Concept", "name": "legacy", "props": {}},
+        ],
+        age_links=[
+            {"source": "2", "target": "1", "label": "IN_SESSION", "weight": 1.0, "cosine": 1.0},
+            {"source": "2", "target": "3", "label": "ABOUT", "weight": 1.0, "cosine": 0.8},
+        ],
+        passports=[
+            {"noun_id": 1, "label": "Postgres", "type": "technology", "vertex_id": 2, "turn_id": 41},
+            {"noun_id": 2, "label": "AGE", "type": "technology", "vertex_id": 2, "turn_id": 41},
+        ],
+        mentions=[
+            {"src_noun": 1, "tgt_noun": 2, "magnitude": 3.0, "decay": 0.9, "score": 0.34},
+            {"src_noun": 2, "tgt_noun": 99, "magnitude": 2.0, "decay": 0.8, "score": 0.2},
+        ],
+        limit=80,
+    )
+
+    assert {node["id"] for node in out.get("nodes", [])} == {
+        "age:1",
+        "age:2",
+        "noun:1",
+        "noun:2",
+    }
+    assert {link["label"] for link in out.get("links", [])} == {
+        "IN_SESSION",
+        "mentions",
+    }
+    noun = next(node for node in out["nodes"] if node["id"] == "noun:1")
+    assert noun["props"]["turn_vertex_id"] == "age:2"
+    assert out["meta"]["limit"] == 80
+
+
+def test_attach_passport_anchors_docks_nouns_and_injects_turns():
+    packed = pack_search(
+        "postgres",
+        4,
+        2,
+        [{"id": "41", "content": "noun seed", "similarity": 0.8, "src": "conversation"}],
+        ["1"],
+        [
+            (
+                {"id": "1", "name": "Postgres", "label": "Noun"},
+                "mentions",
+                {"id": "2", "name": "AGE", "label": "Noun"},
+                2.0,
+                0.8,
+                1.0,
+                0.6,
+                1,
+            ),
+        ],
+    )
+    out = graph_api.attach_passport_anchors(
+        packed,
+        [
+            {
+                "noun_id": 1,
+                "label": "Postgres",
+                "type": "technology",
+                "vertex_id": 99,
+                "turn_id": 41,
+            },
+            {
+                "noun_id": 2,
+                "label": "AGE",
+                "vertex_id": 99,
+                "turn_id": 41,
+            },
+        ],
+    )
+
+    ids = {node["id"] for node in out["graph"]["nodes"]}
+    assert "age:99" in ids
+    postgres = next(node for node in out["graph"]["nodes"] if node["id"] == "noun:1")
+    assert postgres["name"] == "Postgres"
+    assert postgres["props"]["turn_vertex_id"] == "age:99"
+    assert postgres["props"]["turn_id"] == 41
+    turn = next(node for node in out["graph"]["nodes"] if node["id"] == "age:99")
+    assert turn["label"] == "Turn"
+
+
+@pytest.mark.asyncio
+async def test_default_graph_catalog_uses_latest_80_turn_garden_data():
+    from hermes_memory.graph_api import Runtime
+
+    class Acquire:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Pool:
+        def acquire(self):
+            return Acquire()
+
+    class Store:
+        graph_name = "hermes_knowledge"
+
+        async def load_age(self, _conn):
+            return None
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.pool = Pool()
+    runtime.store = Store()
+    catalog_limits = []
+    legacy_calls = []
+
+    async def fake_catalog_data(_conn, _graph, limit):
+        catalog_limits.append(limit)
+        return (
+            [
+                {"id": "1", "label": "Session", "name": "session-a", "props": {}},
+                {"id": "2", "label": "Turn", "name": "turn-a", "props": {"turn_id": 41}},
+            ],
+            [{"source": "2", "target": "1", "label": "IN_SESSION", "weight": 1.0, "cosine": 1.0}],
+            [{"noun_id": 1, "label": "Postgres", "type": "technology", "vertex_id": 2, "turn_id": 41}],
+            [],
+        )
+
+    async def fake_legacy_rows(_conn, _graph, label, limit):
+        legacy_calls.append((label, limit))
+        return []
+
+    runtime._fetch_catalog_data = fake_catalog_data
+    runtime._fetch_3d_rows = fake_legacy_rows
+
+    out = await runtime._agraph_3d(None, 250)
+
+    assert catalog_limits == [80]
+    assert legacy_calls == []
+    assert {node["id"] for node in out["nodes"]} == {"age:1", "age:2", "noun:1"}
+
+
+@pytest.mark.asyncio
+async def test_stats_reports_sql_turns_nouns_and_mentions():
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.graph_api import Runtime
+
+    class Conn:
+        async def fetchval(self, query):
+            normalized = " ".join(query.split())
+            if "FROM conversations" in normalized:
+                return 7
+            if "FROM noun" in normalized:
+                return 5
+            if "FROM semantic_edge" in normalized:
+                return 3
+            return 0
+
+    class Acquire:
+        async def __aenter__(self):
+            return Conn()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Pool:
+        def acquire(self):
+            return Acquire()
+
+    class Store:
+        graph_name = "hermes_knowledge"
+
+        async def librarian_health(self):
+            return {}
+
+        async def load_age(self, _conn):
+            return None
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.pool = Pool()
+    runtime.store = Store()
+    runtime.cfg = HybridAgeConfig()
+
+    async def count_cypher(_conn, _graph, _body):
+        return 0
+
+    runtime._count_cypher = count_cypher
+    out = await runtime._astats()
+
+    assert out.get("manifold") == {"turns": 7, "nouns": 5, "mentions": 3}
+
+
 def test_validate_bind_host_loopback_only():
     assert validate_bind_host("127.0.0.1") == "127.0.0.1"
     assert validate_bind_host("localhost") == "127.0.0.1"
@@ -180,24 +371,26 @@ def test_routes_read_and_mutations():
 
 
 def test_pack_search_emits_paths_and_graph():
-    n = {"id": 1, "label": "Turn", "properties": {"name": "hello", "content": "hello tokyo"}}
-    m = {"id": 2, "label": "Concept", "properties": {"name": "Tokyo Eye"}}
+    n = {"id": "1", "name": "Postgres", "label": "Noun"}
+    m = {"id": "2", "name": "AGE", "label": "Noun"}
     out = pack_search(
         "tokyo",
         4,
         2,
-        [{"id": 9, "content": "tokyo eye", "similarity": 0.81}],
+        [{"id": 9, "content": "tokyo eye", "similarity": 0.81, "src": "conversation"}],
         ["1"],
-        [(n, "ABOUT", m, 1.0, 0.72, 1)],
+        [(n, "mentions", m, 1.0, 0.72, 1)],
     )
-    assert out["paths"][0]["rel"] == "ABOUT"
-    assert out["paths"][0]["from"] == "1"
-    assert out["paths"][0]["to"] == "2"
+    assert out["paths"][0]["rel"] == "mentions"
+    assert out["paths"][0]["from"] == "noun:1"
+    assert out["paths"][0]["to"] == "noun:2"
     assert out["paths"][0]["seed"] is True
     assert out["paths"][0]["hop"] == 1
     assert out["graph"]["edges"][0]["weight"] == 1.0
     assert out["graph"]["edges"][0]["cosine"] == 0.72
-    assert out["seeds"][0]["vertex_ids"] == ["1"]
+    assert out["seeds"][0]["id"] == "conv:9"
+    assert out["seeds"][0]["chunk_id"] == "conv_9"
+    assert out["seeds"][0]["vertex_ids"] == ["noun:1"]
     assert out["retrieval"]["edges_traversed"] == 1
 
 
@@ -235,8 +428,8 @@ def test_unpack_expand_row_8tuple_hop_after_score():
 
 
 def test_pack_search_7tuple_plus_hop_keeps_hop():
-    n = {"id": 1, "label": "Turn", "properties": {"name": "hello", "content": "hello tokyo"}}
-    m = {"id": 2, "label": "Concept", "properties": {"name": "Tokyo Eye"}}
+    n = {"id": "1", "name": "Postgres", "label": "Noun"}
+    m = {"id": "2", "name": "AGE", "label": "Noun"}
     decay = 0.4
     score = 0.5 * 0.72 + 0.3 * 1.0 + 0.2 * decay
     out = pack_search(
@@ -245,11 +438,168 @@ def test_pack_search_7tuple_plus_hop_keeps_hop():
         2,
         [{"id": 9, "content": "tokyo eye", "similarity": 0.81}],
         ["1"],
-        [(n, "ABOUT", m, 1.0, 0.72, decay, score, 2)],
+        [(n, "mentions", m, 1.0, 0.72, decay, score, 2)],
     )
     assert out["paths"][0]["hop"] == 2
     assert out["paths"][0]["decay"] == decay
     assert abs(out["paths"][0]["score"] - score) < 1e-9
+    assert abs(out["ranked"][0]["rank_score"] - score) < 1e-9
+
+
+def test_pack_search_accepts_noun_dicts_and_audit_ids():
+    from hermes_memory.walk import WalkRow
+
+    row = WalkRow(
+        (
+            {"id": "11", "name": "SourceNoun", "label": "Noun"},
+            "mentions",
+            {"id": "12", "name": "TargetNoun", "label": "Noun"},
+            4.0,
+            0.8,
+            1.0,
+            0.55,
+        ),
+        audit={
+            "session_id": "session-a",
+            "turn_id": 41,
+            "chunk_id": "conv_41",
+            "hop": 1,
+        },
+    )
+
+    out = pack_search(
+        "noun",
+        4,
+        2,
+        [{"id": "41", "content": "noun seed", "similarity": 0.8}],
+        ["11"],
+        [row],
+    )
+
+    assert out["graph"]["nodes"] == [
+        {"id": "noun:11", "label": "Noun", "name": "SourceNoun", "props": {}},
+        {"id": "noun:12", "label": "Noun", "name": "TargetNoun", "props": {}},
+    ]
+    assert out["paths"][0]["session_id"] == "session-a"
+    assert out["paths"][0]["turn_id"] == 41
+    assert out["paths"][0]["chunk_id"] == "conv_41"
+    assert out["paths"][0]["hop"] == 1
+
+
+def test_pack_search_omits_legacy_concept_about_rows():
+    noun = {"id": "1", "name": "Postgres", "label": "Noun"}
+    other = {"id": "2", "name": "AGE", "label": "Noun"}
+    turn = {"id": 1, "label": "Turn", "properties": {"content": "legacy"}}
+    concept = {"id": 3, "label": "Concept", "properties": {"name": "Legacy"}}
+
+    out = pack_search(
+        "postgres",
+        4,
+        2,
+        [],
+        ["1"],
+        [
+            (noun, "mentions", other, 2.0, 0.8, 1.0, 0.6, 1),
+            (turn, "ABOUT", concept, 1.0, 0.7, 1.0, 0.5, 1),
+        ],
+    )
+
+    assert {node["id"] for node in out["graph"]["nodes"]} == {"noun:1", "noun:2"}
+    assert {edge["label"] for edge in out["graph"]["edges"]} == {"mentions"}
+
+
+@pytest.mark.asyncio
+async def test_search_builds_hypotheses_only_from_conversation_passports():
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.graph_api import Runtime
+    from hermes_memory.walk import WalkRow
+
+    class FakeEmbedder:
+        async def embed_text(self, _text):
+            return [1.0, 0.0]
+
+    class FakeStore:
+        def __init__(self):
+            self.hypotheses = None
+            self.calls = 0
+
+        async def vector_search(self, _literal, _k):
+            return [
+                {
+                    "id": "41",
+                    "content": "conversation seed",
+                    "similarity": 0.8,
+                    "src": "conversation",
+                    "embedding": "[1,0]",
+                },
+                {
+                    "id": "doc:1",
+                    "content": "file seed",
+                    "similarity": 0.9,
+                    "src": "doc_chunk",
+                },
+            ]
+
+        async def passports_for_conversations(self, conv_ids):
+            assert conv_ids == [41]
+            return [
+                {
+                    "noun_id": 11,
+                    "chunk_id": "conv_41",
+                    "session_id": "session-a",
+                    "turn_id": 41,
+                },
+                {
+                    "noun_id": 12,
+                    "chunk_id": "conv_41",
+                    "session_id": "session-a",
+                    "turn_id": 41,
+                },
+            ]
+
+        async def expand_graph(self, hypotheses, *, q_vec, hops, k):
+            self.calls += 1
+            self.hypotheses = hypotheses
+            assert q_vec == [1.0, 0.0]
+            assert hops == 2
+            assert k == 4
+            return [
+                WalkRow(
+                    (
+                        {"id": "11", "name": "SourceNoun", "label": "Noun"},
+                        "mentions",
+                        {"id": "13", "name": "TargetNoun", "label": "Noun"},
+                        4.0,
+                        1.0,
+                        1.0,
+                        0.7,
+                    ),
+                    audit={
+                        "session_id": "session-a",
+                        "turn_id": 41,
+                        "chunk_id": "conv_41",
+                        "hop": 1,
+                    },
+                )
+            ]
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.store = FakeStore()
+    runtime.embedder = FakeEmbedder()
+    runtime.cfg = HybridAgeConfig(embed_dim=2)
+
+    out = await runtime._asearch("noun", 4, 2)
+
+    assert runtime.store.calls == 1
+    assert len(runtime.store.hypotheses) == 2
+    assert {h.noun_id for h in runtime.store.hypotheses} == {11, 12}
+    assert all(h.chunk_id == "conv_41" for h in runtime.store.hypotheses)
+    assert all(h.chunk_vec == [1.0, 0.0] for h in runtime.store.hypotheses)
+    assert {result["content"] for result in out["results"]} == {
+        "conversation seed",
+        "file seed",
+    }
+    assert out["paths"][0]["session_id"] == "session-a"
 
 
 def test_undirected_knn_emits_pair_selected_by_one_side_only():

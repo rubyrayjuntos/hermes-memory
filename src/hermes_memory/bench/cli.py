@@ -369,9 +369,7 @@ class BenchHarness:
         return block, pool_texts
 
     async def _graph_expand(self, seeds: List[dict]) -> List[tuple[str, float]]:
-        """Bridge-table expansion: vector seeds -> vertex ids via
-        memory_chunk_nodes -> Cypher 1-hop from those ids (SAVEPOINT-wrapped
-        inside store.expand_graph) -> reverse map discovered vertices to chunks."""
+        """Legacy AGE bridge expansion, intentionally disabled after cutover."""
         assert self.store is not None
         chunk_ids = list({str(s["id"]) for s in seeds})
         vid_strs = await self.store.bridge_vertex_ids(chunk_ids)
@@ -381,10 +379,13 @@ class BenchHarness:
             seed_ids = []
         if not seed_ids:
             return []
+        # Integer AGE ids are intentionally rejected by the mentions walker.
+        # Keep this call observable in code until the benchmark gains passports.
         rows = await self.store.expand_graph(
             seed_ids,
-            [],  # dynamic weighted — no whitelist, score by weight×cosine
-            limit=40,
+            q_vec=[],
+            hops=1,
+            k=8,
         )
         out: List[tuple[str, float]] = []
         seen = set()

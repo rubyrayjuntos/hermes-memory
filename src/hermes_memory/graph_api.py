@@ -2,8 +2,8 @@
 
 Read-only surface the in-repo panes already call. Mutations return 501.
 Vertex IDs are decimal strings at the JSON boundary (AGE bigint).
-No extractors: graph comes from provider writes (Turn/Concept/ABOUT) plus
-whatever ingest already MERGEd.
+No extractors: graph comes from provider writes (Session/Turn/NEXT plus
+Postgres noun passports and mentions) plus whatever ingest already MERGEd.
 """
 from __future__ import annotations
 
@@ -93,7 +93,13 @@ def parse_vertex(raw: Any) -> Optional[Dict[str, Any]]:
         label = label[0] if label else "Node"
     raw_props = obj.get("properties")
     props: Dict[str, Any] = raw_props if isinstance(raw_props, dict) else {}
-    name = props.get("name") or props.get("path") or props.get("file_path") or vid
+    name = (
+        obj.get("name")
+        or props.get("name")
+        or props.get("path")
+        or props.get("file_path")
+        or vid
+    )
     return {
         "id": vid,
         "label": str(label),
@@ -225,6 +231,157 @@ def undirected_knn_edges(
     return [(a, b, c) for (a, b), c in best.items()]
 
 
+def assemble_catalog(
+    *,
+    age_nodes: List[Dict[str, Any]],
+    age_links: List[Dict[str, Any]],
+    passports: List[Dict[str, Any]],
+    mentions: List[Dict[str, Any]],
+    limit: int = 80,
+) -> Dict[str, Any]:
+    """Assemble the Garden catalog from flower AGE rows and SQL nouns."""
+    nodes: Dict[str, Dict[str, Any]] = {}
+    links: List[Dict[str, Any]] = []
+    degree: Dict[str, int] = {}
+
+    for raw in age_nodes:
+        if raw.get("label") not in {"Session", "Turn"}:
+            continue
+        node = dict(raw)
+        node_id = f"age:{str(node['id']).removeprefix('age:')}"
+        node["id"] = node_id
+        nodes[node_id] = node
+        degree[node_id] = 0
+
+    for raw in age_links:
+        if raw.get("label") not in {"NEXT", "IN_SESSION"}:
+            continue
+        source = f"age:{str(raw.get('source')).removeprefix('age:')}"
+        target = f"age:{str(raw.get('target')).removeprefix('age:')}"
+        if source not in nodes or target not in nodes:
+            continue
+        link = dict(raw)
+        link.update({"source": source, "target": target})
+        links.append(link)
+        degree[source] += 1
+        degree[target] += 1
+
+    visible_nouns: set[int] = set()
+    for passport in passports:
+        noun_id = int(passport["noun_id"])
+        node_id = f"noun:{noun_id}"
+        turn_vertex_id = passport.get("vertex_id")
+        turn_id = (
+            f"age:{str(turn_vertex_id).removeprefix('age:')}"
+            if turn_vertex_id is not None
+            else None
+        )
+        props = {
+            "type": passport.get("type"),
+            "turn_id": passport.get("turn_id"),
+            "turn_vertex_id": turn_id,
+        }
+        nodes[node_id] = {
+            "id": node_id,
+            "label": "Noun",
+            "name": str(passport.get("label") or noun_id),
+            "props": props,
+        }
+        degree.setdefault(node_id, 0)
+        visible_nouns.add(noun_id)
+
+    for raw in mentions:
+        src_noun = int(raw["src_noun"])
+        tgt_noun = int(raw["tgt_noun"])
+        if src_noun not in visible_nouns or tgt_noun not in visible_nouns:
+            continue
+        source, target = f"noun:{src_noun}", f"noun:{tgt_noun}"
+        links.append({
+            "source": source,
+            "target": target,
+            "label": "mentions",
+            "weight": float(raw.get("magnitude") or 0.0),
+            "cosine": float(raw.get("cosine") or 0.0),
+            "decay": float(raw.get("decay") or 1.0),
+            "score": float(raw.get("score") or 0.0),
+        })
+        degree[source] += 1
+        degree[target] += 1
+
+    for node_id, node in nodes.items():
+        node["val"] = 1 + degree.get(node_id, 0)
+    return {
+        "nodes": list(nodes.values()),
+        "links": links,
+        "meta": {
+            "limit": int(limit),
+            "label": "Garden",
+            "verts": len(nodes),
+            "edges": len(links),
+        },
+    }
+
+
+def attach_passport_anchors(
+    packed: Dict[str, Any],
+    passports: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Dock search nouns onto Turn vertices Fountain can snap to."""
+    graph = packed.setdefault("graph", {"nodes": [], "edges": [], "links": []})
+    nodes: Dict[str, Dict[str, Any]] = {
+        str(node["id"]): dict(node) for node in (graph.get("nodes") or [])
+    }
+    edges = list(graph.get("edges") or graph.get("links") or [])
+
+    for passport in passports:
+        noun_key = f"noun:{int(passport['noun_id'])}"
+        vertex_id = passport.get("vertex_id")
+        turn_id = (
+            f"age:{str(vertex_id).removeprefix('age:')}"
+            if vertex_id is not None
+            else None
+        )
+        if turn_id is not None and turn_id not in nodes:
+            turn_name = f"turn {passport.get('turn_id') or turn_id}"
+            nodes[turn_id] = {
+                "id": turn_id,
+                "label": "Turn",
+                "group": "Turn",
+                "name": turn_name,
+                "title": turn_name,
+                "props": {"turn_id": passport.get("turn_id")},
+            }
+        if noun_key not in nodes:
+            if turn_id is None:
+                continue
+            noun_name = str(passport.get("label") or passport["noun_id"])
+            nodes[noun_key] = {
+                "id": noun_key,
+                "label": "Noun",
+                "group": "Noun",
+                "name": noun_name,
+                "title": noun_name,
+                "props": {},
+            }
+        node = nodes[noun_key]
+        props = dict(node.get("props") or node.get("properties") or {})
+        if turn_id is not None:
+            props["turn_vertex_id"] = turn_id
+        if passport.get("turn_id") is not None:
+            props["turn_id"] = passport.get("turn_id")
+        if passport.get("type") is not None:
+            props["type"] = passport.get("type")
+        node["props"] = props
+        if not node.get("name") and passport.get("label"):
+            node["name"] = str(passport["label"])
+            node["title"] = str(passport["label"])
+
+    node_list = list(nodes.values())
+    packed["graph"] = {"nodes": node_list, "edges": edges, "links": edges}
+    packed.setdefault("retrieval", {})["vertices_reached"] = len(node_list)
+    return packed
+
+
 def pack_search(
     q: str,
     k: int,
@@ -237,7 +394,10 @@ def pack_search(
 
     triples: expand_graph 5- or 7-tuples, optionally with hop appended last.
     """
-    seed_ids = {str(v) for v in seed_vertex_ids}
+    seed_vertex_out = list(dict.fromkeys(
+        f"noun:{str(v).removeprefix('noun:')}" for v in seed_vertex_ids
+    ))
+    seed_ids = set(seed_vertex_out)
     nodes: Dict[str, Dict[str, Any]] = {}
     edges: List[Dict[str, Any]] = []
     paths: List[Dict[str, Any]] = []
@@ -247,19 +407,29 @@ def pack_search(
         parsed = humanize_node(parse_vertex(raw))
         if not parsed:
             return None
-        vid = str(parsed["id"])
+        raw_id = str(parsed["id"])
+        prefix = "noun" if parsed.get("label") == "Noun" else "age"
+        vid = f"{prefix}:{raw_id.removeprefix(prefix + ':')}"
+        parsed["id"] = vid
         nodes[vid] = parsed
         return parsed
 
     for row in triples:
         if not row or len(row) < 3:
             continue
+        audit = getattr(row, "audit", {}) or {}
         n_raw, rel_raw, m_raw, w, c, decay, score, hop = unpack_expand_row(tuple(row))
-        src = _ingest(n_raw)
-        dst = _ingest(m_raw)
+        hop = int(audit.get("hop", hop))
         rel = None if rel_raw is None else str(rel_raw).strip().strip('"')
         if rel in ("", "null", "None"):
             rel = None
+        raw_nodes = (parse_vertex(n_raw), parse_vertex(m_raw))
+        if rel == "ABOUT" or any(
+            node and node.get("label") == "Concept" for node in raw_nodes
+        ):
+            continue
+        src = _ingest(n_raw)
+        dst = _ingest(m_raw)
         if not src or not dst or not rel:
             continue
         edges.append({
@@ -289,17 +459,32 @@ def pack_search(
             path["decay"] = decay
         if score is not None:
             path["score"] = score
+        for key in ("session_id", "turn_id", "chunk_id"):
+            if audit.get(key) is not None:
+                path[key] = audit[key]
         paths.append(path)
         by_label[dst.get("label") or ""] = by_label.get(dst.get("label") or "", 0) + 1
 
     seed_out = []
     for s in seeds:
         excerpt = str(s.get("content") or "")[:160]
+        raw_seed_id = str(s.get("id"))
+        chunk_id = (
+            raw_seed_id
+            if raw_seed_id.startswith("conv_")
+            else f"conv_{raw_seed_id}"
+        )
+        seed_id = (
+            f"conv:{raw_seed_id.removeprefix('conv_').removeprefix('conv:')}"
+            if s.get("src") == "conversation"
+            else raw_seed_id
+        )
         seed_out.append({
-            "id": str(s.get("id")),
+            "id": seed_id,
+            "chunk_id": chunk_id if s.get("src") == "conversation" else raw_seed_id,
             "score": float(s.get("similarity") or s.get("score") or 0.0),
             "excerpt": excerpt,
-            "vertex_ids": list(seed_vertex_ids),
+            "vertex_ids": seed_vertex_out,
         })
     ranked = []
     for p in paths[:k]:
@@ -307,7 +492,11 @@ def pack_search(
             "id": p["to"],
             "title": p["to_name"],
             "group": p["to_label"],
-            "rank_score": 0.5 * p["cosine"] + 0.3 * p["weight"],
+            "rank_score": (
+                p["score"]
+                if p.get("score") is not None
+                else 0.5 * p["cosine"] + 0.3 * p["weight"]
+            ),
             "governed": False,
         })
     if not ranked:
@@ -320,7 +509,16 @@ def pack_search(
                 "governed": False,
             })
     results = [{
-        "id": str(s.get("id")),
+        "id": (
+            f"conv:{str(s.get('id')).removeprefix('conv_').removeprefix('conv:')}"
+            if s.get("src") == "conversation"
+            else str(s.get("id"))
+        ),
+        "chunk_id": (
+            str(s.get("id"))
+            if str(s.get("id")).startswith("conv_")
+            else f"conv_{s.get('id')}"
+        ) if s.get("src") == "conversation" else str(s.get("id")),
         "content": s.get("content") or "",
         "score": float(s.get("similarity") or 0.0),
         "file_path": "",
@@ -627,6 +825,12 @@ class Runtime:
             bridge_verts = await conn.fetchval(
                 "SELECT count(DISTINCT vertex_id) FROM memory_chunk_nodes"
             )
+            turns = await self._fetch_sql_count(conn, "SELECT count(*) FROM conversations")
+            nouns = await self._fetch_sql_count(conn, "SELECT count(*) FROM noun")
+            mentions = await self._fetch_sql_count(
+                conn,
+                "SELECT count(*) FROM semantic_edge WHERE verb_type = 'mentions'",
+            )
             orphan_chunks = await conn.fetchval(
                 """
                 SELECT count(*) FROM memory_entries e
@@ -644,6 +848,11 @@ class Runtime:
             "graph": graph,
             "vertices": {"total": verts},
             "edges": {"total": edges},
+            "manifold": {
+                "turns": turns,
+                "nouns": nouns,
+                "mentions": mentions,
+            },
             "vector": {
                 "chunks": int(chunks or 0),
                 "dim": int(getattr(self.cfg, "embed_dim", 768) or 768),
@@ -661,6 +870,13 @@ class Runtime:
                 "orphan_deps": 0,
             },
         }
+
+    async def _fetch_sql_count(self, conn, query: str) -> int:
+        try:
+            return int(await conn.fetchval(query) or 0)
+        except Exception:
+            logger.debug("optional SQL count unavailable", exc_info=True)
+            return 0
 
     async def _count_cypher(self, conn, graph: str, body: str) -> int:
         graph = validate_graph_name(graph)
@@ -719,6 +935,124 @@ class Runtime:
                 logger.warning("graph/3d cypher failed label=%s", label, exc_info=True)
                 return []
 
+    async def _fetch_catalog_cypher(self, conn, graph: str, body: str, suffix: int):
+        graph = validate_graph_name(graph)
+        sp = savepoint_name("catalog", suffix)
+        async with conn.transaction():
+            await conn.execute(f"SAVEPOINT {sp}")
+            try:
+                rows = await conn.fetch(
+                    f"SELECT * FROM {cypher_call(graph, body)} AS "
+                    f"(n agtype, rel agtype, m agtype, w agtype, c agtype)"
+                )
+                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                return rows
+            except Exception:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                logger.warning("Garden catalog Cypher failed", exc_info=True)
+                return []
+
+    async def _fetch_catalog_data(self, conn, graph: str, limit: int):
+        """Fetch the latest Turn flower plus its SQL noun manifold."""
+        turn_body = f"""
+            MATCH (n:Turn)
+            {catalog_where_clause("Turn")}
+            RETURN n, null, null, 0.5, 0.5
+            ORDER BY coalesce(n.turn_id, 0) DESC
+            LIMIT {int(limit)}
+        """
+        turn_rows = await self._fetch_catalog_cypher(conn, graph, turn_body, 0)
+        age_nodes: List[Dict[str, Any]] = []
+        turn_vertex_ids: List[int] = []
+        turn_ids: List[int] = []
+        for row in turn_rows:
+            node = humanize_node(parse_vertex(row["n"]))
+            if not node:
+                continue
+            age_nodes.append(node)
+            turn_vertex_ids.append(int(node["id"]))
+            raw_turn_id = (node.get("props") or {}).get("turn_id")
+            if raw_turn_id is not None and str(raw_turn_id).strip("-").isdigit():
+                turn_ids.append(int(raw_turn_id))
+        if not turn_vertex_ids:
+            return age_nodes, [], [], []
+
+        ids = ", ".join(str(vid) for vid in turn_vertex_ids)
+        in_session_body = f"""
+            MATCH (n:Turn)-[r:IN_SESSION]->(m:Session)
+            WHERE id(n) IN [{ids}]
+            RETURN n, type(r), m, coalesce(r.weight, 1.0), coalesce(r.cosine, 1.0)
+        """
+        next_body = f"""
+            MATCH (n:Turn)-[r:NEXT]->(m:Turn)
+            WHERE id(n) IN [{ids}] AND id(m) IN [{ids}]
+            RETURN n, type(r), m, coalesce(r.weight, 1.0), coalesce(r.cosine, 1.0)
+        """
+        relation_rows = list(
+            await self._fetch_catalog_cypher(conn, graph, in_session_body, 1)
+        ) + list(await self._fetch_catalog_cypher(conn, graph, next_body, 2))
+        age_links: List[Dict[str, Any]] = []
+        known_age_ids = {node["id"] for node in age_nodes}
+        for row in relation_rows:
+            src = humanize_node(parse_vertex(row["n"]))
+            dst = humanize_node(parse_vertex(row["m"]))
+            rel = None if row["rel"] is None else str(row["rel"]).strip().strip('"')
+            if not src or not dst or rel not in {"NEXT", "IN_SESSION"}:
+                continue
+            if dst["label"] == "Session" and dst["id"] not in known_age_ids:
+                age_nodes.append(dst)
+                known_age_ids.add(dst["id"])
+            if src["id"] not in known_age_ids or dst["id"] not in known_age_ids:
+                continue
+            age_links.append({
+                "source": src["id"],
+                "target": dst["id"],
+                "label": rel,
+                "weight": parse_agtype_number(row["w"], 1.0),
+                "cosine": parse_agtype_number(row["c"], 1.0),
+            })
+
+        try:
+            passport_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (p.noun_id)
+                       p.noun_id, n.label, n.type, p.vertex_id, p.turn_id
+                  FROM memory_chunk_nodes p
+                  JOIN noun n ON n.id = p.noun_id
+                 WHERE p.source = 'conversation'
+                   AND p.noun_id IS NOT NULL
+                   AND p.turn_id = ANY($1::bigint[])
+                 ORDER BY p.noun_id, p.turn_id DESC
+                """,
+                turn_ids,
+            )
+            passports = [dict(row) for row in passport_rows]
+            noun_ids = [int(row["noun_id"]) for row in passports]
+            mention_rows = await conn.fetch(
+                """
+                SELECT src_noun, tgt_noun, magnitude,
+                       0.0::float AS cosine,
+                       exp(
+                         -greatest(0, extract(epoch FROM (now() - last_active_ts)))
+                         / 2592000.0
+                       ) AS decay,
+                       (magnitude / 8.0) * exp(
+                         -greatest(0, extract(epoch FROM (now() - last_active_ts)))
+                         / 2592000.0
+                       ) AS score
+                  FROM semantic_edge
+                 WHERE verb_type = 'mentions'
+                   AND src_noun = ANY($1::int[])
+                   AND tgt_noun = ANY($1::int[])
+                """,
+                noun_ids,
+            ) if noun_ids else []
+            mentions = [dict(row) for row in mention_rows]
+        except Exception:
+            logger.debug("Garden noun catalog unavailable", exc_info=True)
+            passports, mentions = [], []
+        return age_nodes, age_links, passports, mentions
+
     def _assemble_3d(self, rows, limit: int, label: Optional[str]) -> Dict[str, Any]:
         nodes: Dict[str, Dict[str, Any]] = {}
         links: List[Dict[str, Any]] = []
@@ -771,12 +1105,19 @@ class Runtime:
             await self.store.load_age(conn)
             if label:
                 rows = await self._fetch_3d_rows(conn, graph, label, limit)
+                return self._assemble_3d(rows, limit, label)
             else:
-                convo_n, other_n = conversation_first_budget(limit)
-                convo = await self._fetch_3d_rows(conn, graph, "Turn", convo_n)
-                other = await self._fetch_3d_rows(conn, graph, "File", other_n)
-                rows = list(convo) + list(other)
-        return self._assemble_3d(rows, limit, label)
+                catalog_limit = min(int(limit), 80)
+                age_nodes, age_links, passports, mentions = await self._fetch_catalog_data(
+                    conn, graph, catalog_limit
+                )
+                return assemble_catalog(
+                    age_nodes=age_nodes,
+                    age_links=age_links,
+                    passports=passports,
+                    mentions=mentions,
+                    limit=catalog_limit,
+                )
 
     def ghost(self, k: int = 5, threshold: float = 0.70, limit: int = 200) -> Dict[str, Any]:
         assert self.store is not None
@@ -1122,6 +1463,7 @@ class Runtime:
 
     async def _asearch(self, q: str, k: int, hops: int) -> Dict[str, Any]:
         from .embed import vec_to_literal
+        from .walk import WalkHypothesis, WalkRow, parse_embedding
 
         assert self.store is not None
         t0 = time.perf_counter()
@@ -1133,37 +1475,60 @@ class Runtime:
         if vec:
             seeds = await self.store.vector_search(vec_to_literal(vec), k)
         t_vec = time.perf_counter()
-        vids = await self.store.bridge_vertex_ids(
-            [key for s in seeds for key in bridge_keys_for_seed(s)]
-        )
-        int_ids = []
-        for v in vids:
-            try:
-                int_ids.append(int(v))
-            except (TypeError, ValueError):
+        conversation_seeds = [s for s in seeds if s.get("src") == "conversation"]
+        conv_ids = [
+            int(str(s["id"]).removeprefix("conv_"))
+            for s in conversation_seeds
+            if str(s.get("id") or "").removeprefix("conv_").isdigit()
+        ]
+        passports = await self.store.passports_for_conversations(conv_ids)
+        seeds_by_chunk = {
+            (
+                str(s["id"])
+                if str(s["id"]).startswith("conv_")
+                else f"conv_{s['id']}"
+            ): s
+            for s in conversation_seeds
+        }
+        hypotheses = []
+        for passport in passports:
+            seed = seeds_by_chunk.get(str(passport.get("chunk_id") or ""))
+            if seed is None:
                 continue
+            chunk_vec = parse_embedding(seed.get("embedding"))
+            if not chunk_vec:
+                continue
+            hypotheses.append(
+                WalkHypothesis(
+                    noun_id=int(passport["noun_id"]),
+                    chunk_id=str(passport["chunk_id"]),
+                    session_id=str(passport.get("session_id") or ""),
+                    turn_id=int(passport["turn_id"]),
+                    sim=float(seed["similarity"]),
+                    chunk_vec=chunk_vec,
+                )
+            )
         triples: List[Tuple[Any, ...]] = []
-        if int_ids and hops > 0:
-            hop1 = await self.store.expand_graph(int_ids, limit=max(k * 4, 16))
-            for row in hop1:
-                triples.append(tuple(row) + (1,))
-            if hops >= 2 and hop1:
-                dest: List[int] = []
-                for row in hop1:
-                    dst = parse_vertex(row[2])
-                    if not dst:
-                        continue
-                    try:
-                        dest.append(int(dst["id"]))
-                    except (TypeError, ValueError):
-                        continue
-                dest = [d for d in dest if d not in set(int_ids)]
-                if dest:
-                    hop2 = await self.store.expand_graph(dest[:32], limit=max(k * 2, 8))
-                    for row in hop2:
-                        triples.append(tuple(row) + (2,))
+        if hypotheses and hops > 0:
+            walk_rows = await self.store.expand_graph(
+                hypotheses,
+                q_vec=vec,
+                hops=hops,
+                k=k,
+            )
+            triples = [
+                WalkRow(
+                    tuple(row) + (int(row.audit["hop"]),),
+                    audit=dict(row.audit),
+                )
+                for row in walk_rows
+            ]
         t_graph = time.perf_counter()
-        packed = pack_search(q, k, hops, seeds, [str(v) for v in vids], triples)
+        seed_noun_ids = list(
+            dict.fromkeys(str(passport["noun_id"]) for passport in passports)
+        )
+        packed = pack_search(q, k, hops, seeds, seed_noun_ids, triples)
+        packed = attach_passport_anchors(packed, passports)
         packed["retrieval"]["embed_model"] = getattr(self.cfg, "embed_model", "nomic-embed-text")
         packed["retrieval"]["embed_dim"] = getattr(self.cfg, "embed_dim", 768)
         packed["retrieval"]["embed_ms"] = round((t_embed - t0) * 1000, 1)

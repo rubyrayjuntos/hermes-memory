@@ -93,3 +93,42 @@ def test_migrate_runner_no_inline_tampering():
     assert "hermes_test" in conftest
     if "autouse=True" in conftest:
         assert "hermes_test" in conftest
+
+
+@pytest.mark.asyncio
+async def test_v9_noun_passport_indexes(migrated_db, db_pool):
+    async with db_pool.acquire() as conn:
+        noun = await conn.fetchval("SELECT to_regclass('public.noun')")
+        edge = await conn.fetchval("SELECT to_regclass('public.semantic_edge')")
+        assert noun and edge
+        gen = await conn.fetchval(
+            """
+            SELECT count(*) FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            WHERE c.relname = 'semantic_edge' AND a.attgenerated = 's'
+            """
+        )
+        assert int(gen) == 0
+        idx = await conn.fetch(
+            """
+            SELECT indexdef FROM pg_indexes
+            WHERE tablename = 'memory_chunk_nodes'
+            """
+        )
+        defs = " ".join(r["indexdef"] for r in idx)
+        assert "noun_id IS NOT NULL" in defs
+        assert "noun_id IS NULL" in defs
+        nullable = await conn.fetchval(
+            """
+            SELECT is_nullable FROM information_schema.columns
+            WHERE table_name = 'memory_chunk_nodes' AND column_name = 'vertex_id'
+            """
+        )
+        assert nullable == "YES"
+        typ = await conn.fetchval(
+            """
+            SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'conversations' AND column_name = 'id'
+            """
+        )
+        assert typ == "bigint"

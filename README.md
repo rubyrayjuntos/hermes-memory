@@ -24,7 +24,7 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 | Unofficial `hybrid-age` **MemoryProvider** (one slot, additive) | Official Nous plugin or in-tree `hermes memory setup` pick |
 | Local Postgres + pgvector recall **and** Apache AGE walks | Hosted / multi-tenant memory service |
 | Prefetch injection you can inspect (optional Fountain pane) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
-| Turn extract → Concept + ABOUT; ingest for code | Automatic Obsidian vault recall |
+| Turn extract → ordered Nouns + `mentions`; ingest for code | Automatic Obsidian vault recall |
 | `hermes-memory-install` / `verify` / `upgrade` / `uninstall` | Coverage under `hermes backup` (export Postgres yourself) |
 | Loopback only (`127.0.0.1:5450` and `:7890`) | Drop-in for every gateway/wrapper without the CLI |
 
@@ -105,24 +105,22 @@ The memory core spans **three coordinated layers**:
 
 | Layer | What it holds | How it's built |
 |---|---|---|
-| **Conversations** | `conversations` table — one row per turn (user + assistant), contains `session_id`, `turn_id`, `content`, `created_at` ISO | `sync_turn` per-turn: embed Turn → extract 1-3 Concepts → MERGE Turn/Concept/ABOUT → bridge `memory_chunk_nodes` |
-| **Vector + Graph** | `memory_entries` (pgvector HNSW, 768-dim nomic-embed-text) + `AGE hermes_knowledge` graph (File/Module/Dependency/Standard/Concept/ Turn nodes + typed edges) | Ingest walks codebase → SHA-256 chunks → embed → File/Module/Dependency with `IMPORTS` edges (weight 1.0 internal / 0.80 external, cosine 0.80). AGE labels via `create_vlabel`/`create_elabel`. |
-| **Inspector** | Optional Fountain pane at `http://127.0.0.1:7890/api/librarian/pane` (`docs/graph/fountain.html`). Drag to orbit; progressive levels add ghost kNN and injection telemetry. Not required for recall. | `hermes-memory-api` (loopback-only). CORS reflects loopback/`null` origins only. |
+| **Conversations** | `conversations` table — one row per turn (user + assistant), with `session_id`, `turn_id`, `content`, and `created_at` | Per turn A–F: embed; insert conversation; MERGE the Session/Turn flower; extract Nouns; write passports; strengthen ordered `mentions` edges. |
+| **Vector + Graph** | `memory_entries` (pgvector HNSW, 768-dim nomic-embed-text), SQL `noun` / `semantic_edge`, and the AGE `hermes_knowledge` Session/Turn flower | Ingest walks codebase → SHA-256 chunks → embed → File/Module/Dependency with `IMPORTS` edges. Conversation recall walks SQL `mentions`; AGE preserves `NEXT` / `IN_SESSION`. |
+| **Inspector** | Optional Garden pane at `http://127.0.0.1:7890/api/librarian/pane` (`docs/graph/fountain.html`). Drag to orbit Session, Turn, and Noun nodes; threads show co-occurrence in mention order. Not required for recall. | `hermes-memory-api` (loopback-only). CORS reflects loopback/`null` origins only. |
 
-**Walk** (expand_graph): `0.5*cosine + 0.3*weight + 0.2*exp(-age/30)` where age from `r.created_at / m.created_at`, legacy fallback 0.5. Score-order `DESC`, gates `min_cosine=0.0`, `min_weight=0.0`. Radius gate `r.cosine >= $radius` with `ORDER BY (0.5*r.cosine + 0.3*COALESCE(r.weight,0.5) + 0.2*exp(-age/30.0)) DESC`.
+**Walk** (`expand_graph`): `composite = 0.4 * seed_similarity + 0.4 * (source_alignment * target_alignment) * provenance_boost + 0.2 * decay`; `score = composite * (magnitude / 8)`. The same bounded two-hop walker feeds prefetch and pane search.
 
-**Concept compaction** (cosine≥0.92): Union-Find `compaction_keepers` keeps min-id deterministic; `merge_concept_pair` rewires edges via `SET e += {weight, cosine}` bare numeric via `age_props`; `prune_orphan_concepts` deletes degree==0 + created_at>7d; bridge `UPDATE ... AND graph_name=$1` dedup.
-
-**Verify**: `hermes-memory-verify PASS 4/4 len 4022` (`db-connectivity`, `conversations 2`, `memory_entries mirror 1`, `prefetch len 4022`). `health healthy:true`; `isolated_files 36` expected drift until ABOUT bridges fill; `orphan_chunks 0`.
+**Verify**: `hermes-memory-verify` checks database connectivity, conversation writes, the memory mirror, and prefetch output. The API health surface reports bridge and integrity counts.
 
 ```text
-User message ─▶ sync_turn ──► embed Turn(768d) ──► extract Concepts (regex, stopwords, 45-char max, max 3) ──► cosine dot/√ ──► MERGE Turn {session_id, turn_id:int, content[:200] weight:1 created_at} + Concept {name weight:1 created_at} + ABOUT {weight:1, cosine:real} ──► bridge_turn conv_<id>/conversation ──► memory_chunk_nodes ──► graph growth (w×c inspector)
+User message ─▶ A embed ─▶ B insert conversation ─▶ C MERGE Session/Turn + NEXT/IN_SESSION ─▶ D extract ≤5 Nouns ─▶ E write passports ─▶ F strengthen ordered mentions
                                     │
                                     ▼
-                     AGE hermes_knowledge (File/Module/Dependency IMPORTS edges + Concept nodes + ABOUT edges from turns)
+                     SQL noun + semantic_edge manifold; AGE Session/Turn episodic flower
                                     │
                                     ▼
-                     expand_graph(seed, [], limit, min_weight, min_cosine, decay_half_life) → 0.5·cos+0.3·weight+0.2·exp(-age/half_life) DESC
+                     expand_graph(passport hypotheses, q_vec, hops≤2, k) → composite × magnitude / 8
 ```
 | Module | Path | Role |
 |--------|------|------|

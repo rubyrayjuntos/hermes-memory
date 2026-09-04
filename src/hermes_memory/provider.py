@@ -176,6 +176,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._unavailable_reason = ""
         self._concept_emb: Dict[str, list[float]] = {}
         self._concept_names: Optional[list[str]] = None
+        self._last_turn_id: Dict[str, int] = {}
 
     # -- identity -------------------------------------------------------------
 
@@ -306,6 +307,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "session_id": sid,
                 "role": role,
                 "content": content[:8000],
+                "previous_conversation_id": self._last_turn_id.get(sid),
             })
         self._track_turn(user_content, assistant_content)
 
@@ -399,24 +401,17 @@ class HybridAgeMemoryProvider(MemoryProvider):
         if store is None or embedder is None:
             return
 
+        if item["type"] == "turn":
+            try:
+                await self._awrite_turn(store, embedder, item)
+            except Exception:
+                logger.debug("turn write failed", exc_info=True)
+            return
+
         vec = await embedder.embed_text(item["content"])
         vec_literal = vec_to_literal(vec) if vec else None
 
-        if item["type"] == "turn":
-            conv_id = await store.insert_turn(
-                item["session_id"], self._agent_identity,
-                item["role"], item["content"], vec_literal,
-                metadata={"kind": classify_session_kind(item["session_id"])},
-            )
-            # Turn->ABOUT->Concept linker (real cosine, SAVEPOINT-guarded, never poison txn)
-            if conv_id is not None:
-                try:
-                    await self._link_turn_concepts(
-                        store, embedder, conv_id, item["session_id"], item["content"], vec
-                    )
-                except Exception:
-                    logger.debug("ABOUT linker failed", exc_info=True)
-        elif item["type"] == "memory":
+        if item["type"] == "memory":
             action = item["action"]
             target = item["target"]
             content = item["content"]
@@ -440,6 +435,168 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 await store.remove_memory_entries(
                     self._agent_identity, target, content,
                 )
+
+    async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
+        """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
+        from .extract_nouns import extract_nouns
+
+        session_id = item.get("session_id") or ""
+        content = item.get("content") or ""
+        # Drain overwrites enqueue hint so the second item in one sync_turn
+        # sees the first item's id. C reads only this field (no SQL lookup).
+        item["previous_conversation_id"] = self._last_turn_id.get(session_id)
+        try:
+            vec = await embedder.embed_text(content)
+        except Exception:
+            logger.debug("turn embed failed", exc_info=True)
+            vec = None
+        vec_literal = vec_to_literal(vec) if vec else None
+
+        try:
+            conv_id = await store.insert_turn(
+                session_id, self._agent_identity,
+                item.get("role") or "user", content, vec_literal,
+                metadata={"kind": classify_session_kind(session_id)},
+            )
+        except Exception:
+            logger.debug("insert_turn failed", exc_info=True)
+            return
+        if conv_id is None:
+            return
+        self._last_turn_id[session_id] = int(conv_id)
+
+        vertex_id = None
+        try:
+            vertex_id = await self._link_turn_flower(
+                store, int(conv_id), session_id, content,
+                item.get("previous_conversation_id"),
+            )
+        except Exception:
+            logger.debug("flower MERGE failed", exc_info=True)
+            vertex_id = None
+
+        try:
+            existing = []
+            try:
+                existing = await store.fetch_noun_labels()
+            except Exception:
+                logger.debug("fetch_noun_labels failed", exc_info=True)
+            mentions = extract_nouns(
+                content,
+                existing_labels=existing,
+                synthetic_session=str(session_id).startswith("verify-c5"),
+            )
+            noun_ids: list[int] = []
+            if mentions:
+                noun_ids = await store.write_noun_passports(
+                    mentions,
+                    chunk_id=f"conv_{int(conv_id)}",
+                    source="conversation",
+                    vertex_id=vertex_id,
+                    session_id=session_id,
+                    turn_id=int(conv_id),
+                    graph_name=store.graph_name,
+                )
+        except Exception:
+            logger.debug("noun/passport write failed", exc_info=True)
+            return
+
+        if vec is None or not mentions or len(noun_ids) < 2:
+            return
+        try:
+            pairs: list[tuple[int, int]] = []
+            src_vecs: dict[int, list[float]] = {}
+            confs: dict[tuple[int, int], float] = {}
+            for i in range(len(noun_ids) - 1):
+                src_id, tgt_id = noun_ids[i], noun_ids[i + 1]
+                pairs.append((src_id, tgt_id))
+                confs[(src_id, tgt_id)] = float(mentions[i].conf)
+                try:
+                    src_vec = await embedder.embed_text(mentions[i].label)
+                except Exception:
+                    src_vec = None
+                if src_vec:
+                    src_vecs[src_id] = src_vec
+            if pairs:
+                await store.upsert_mentions_chain(
+                    pairs,
+                    turn_id=int(conv_id),
+                    turn_vec=vec,
+                    src_vecs=src_vecs,
+                    confs=confs,
+                )
+        except Exception:
+            logger.debug("mentions chain failed", exc_info=True)
+
+    async def _link_turn_flower(
+        self,
+        store: Store,
+        conv_id: int,
+        session_id: str,
+        content: str,
+        previous_conversation_id: Any,
+    ) -> int | None:
+        try:
+            await store.ensure_flower_labels()
+        except Exception:
+            logger.debug("ensure_flower_labels failed", exc_info=True)
+        turn_content = (content or "")[:200]
+        turn_props = {
+            "name": f"turn_{conv_id}",
+            "session_id": session_id,
+            "turn_id": int(conv_id),
+            "content": turn_content,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        try:
+            vids_turn = await store.merge_vertices_batched([("Turn", turn_props)])
+            turn_vid_str = vids_turn[0] if vids_turn else None
+            if not turn_vid_str:
+                return None
+            turn_vid = int(turn_vid_str)
+        except Exception:
+            logger.debug("Turn vertex merge failed", exc_info=True)
+            return None
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        edges: list[tuple[str, int, int]] = []
+        edge_props: dict[tuple[str, int, int], dict] = {}
+        if session_id:
+            try:
+                sess_vids = await store.merge_vertices_batched(
+                    [("Session", {
+                        "name": session_id,
+                        "kind": classify_session_kind(session_id),
+                        "created_at": now_iso,
+                    })]
+                )
+                sess_vid = int(sess_vids[0]) if sess_vids and sess_vids[0] else None
+                if sess_vid:
+                    edges.append(("IN_SESSION", turn_vid, sess_vid))
+                    edge_props[("IN_SESSION", turn_vid, sess_vid)] = {
+                        "weight": 1.0, "cosine": 1.0, "created_at": now_iso,
+                    }
+            except Exception:
+                logger.debug("Session vertex merge failed", exc_info=True)
+            prev_id = previous_conversation_id
+            if prev_id:
+                try:
+                    prev_vids = await store.merge_vertices_batched(
+                        [("Turn", {"name": f"turn_{int(prev_id)}"})]
+                    )
+                    prev_vid = int(prev_vids[0]) if prev_vids and prev_vids[0] else None
+                    if prev_vid:
+                        edges.append(("NEXT", prev_vid, turn_vid))
+                        edge_props[("NEXT", prev_vid, turn_vid)] = {
+                            "weight": 1.0, "cosine": 1.0, "created_at": now_iso,
+                        }
+                except Exception:
+                    logger.debug("NEXT edge failed", exc_info=True)
+        if edges:
+            try:
+                await store.merge_edges_batched(edges, edge_props=edge_props)
+            except Exception:
+                logger.debug("turn flower edge merge failed", exc_info=True)
+        return turn_vid
 
     async def _about_existing_concepts(
         self,
@@ -632,7 +789,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     if SECRET_RE.search(s["content"] or ""):
                         continue
                     kept_seeds.append(s)
-                paths = await self._expand_paths(kept_seeds)
+                paths = await self._expand_paths(kept_seeds, q_vec=emb)
                 t_graph = time.perf_counter()
         except TimeoutError:
             logger.warning("prefetch timeout query=%r", query[:80])
@@ -642,8 +799,16 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         seed_payload = []
         for s in kept_seeds:
-            vids = {str(v) for v in (s.get("vertex_ids") or [])}
-            attached = [p for p in paths if str(p.get("from_vid")) in vids]
+            chunk_id = (
+                str(s.get("id") or "")
+                if str(s.get("id") or "").startswith("conv_")
+                else f"conv_{s.get('id')}"
+            )
+            attached = (
+                [p for p in paths if p.get("chunk_id") == chunk_id]
+                if s.get("src") == "conversation"
+                else []
+            )
             # best graph score for this seed (for decomposition)
             best_w = best_c = best_decay = best_score = None
             if attached:
@@ -670,45 +835,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
         ghost_line = None
         try:
             if self.store is not None and self.pool is not None:
-                graph = self.store.graph_name
                 async with asyncio.timeout(0.30):
                     async with self.pool.acquire() as conn:
-                        await self.store.load_age(conn)
-                        # live counts: vertices / edges / ABOUT (each SAVEPOINT-guarded, single txn)
-                        v = e = a = 0
-                        async with conn.transaction():
-                            sp_v = "sp_live_v"
-                            await conn.execute(f"SAVEPOINT {sp_v}")
+                        async def count(query: str) -> int:
                             try:
-                                rv = await conn.fetch(
-                                    f"SELECT * FROM cypher('{graph}', $$ MATCH (n) RETURN count(n) $$) AS (c agtype)"
-                                )
-                                v = int(str(rv[0]["c"]).strip('"')) if rv and rv[0]["c"] is not None else 0
-                                await conn.execute(f"RELEASE SAVEPOINT {sp_v}")
+                                return int(await conn.fetchval(query) or 0)
                             except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_v}")
-                            sp_e = "sp_live_e"
-                            await conn.execute(f"SAVEPOINT {sp_e}")
-                            try:
-                                re_ = await conn.fetch(
-                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r]->() RETURN count(r) $$) AS (c agtype)"
-                                )
-                                e = int(str(re_[0]["c"]).strip('"')) if re_ and re_[0]["c"] is not None else 0
-                                await conn.execute(f"RELEASE SAVEPOINT {sp_e}")
-                            except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_e}")
-                            sp_a = "sp_live_a"
-                            await conn.execute(f"SAVEPOINT {sp_a}")
-                            try:
-                                ra = await conn.fetch(
-                                    f"SELECT * FROM cypher('{graph}', $$ MATCH ()-[r:ABOUT]->() RETURN count(r) $$) AS (c agtype)"
-                                )
-                                a = int(str(ra[0]["c"]).strip('"')) if ra and ra[0]["c"] is not None else 0
-                                await conn.execute(f"RELEASE SAVEPOINT {sp_a}")
-                            except Exception:
-                                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_a}")
-                        if v or e:
-                            graph_line = f"persisted {v}v {e}e {a} ABOUT"
+                                return 0
+
+                        turns = await count("SELECT count(*) FROM conversations")
+                        nouns = await count("SELECT count(*) FROM noun")
+                        mentions = await count(
+                            "SELECT count(*) FROM semantic_edge WHERE verb_type = 'mentions'"
+                        )
+                        if turns or nouns or mentions:
+                            graph_line = (
+                                f"persisted {turns} turns · {nouns} nouns · "
+                                f"{mentions} mentions"
+                            )
                         # ghost is render-time only — never inject a snapshot count
         except Exception:
             pass
@@ -740,42 +884,64 @@ class HybridAgeMemoryProvider(MemoryProvider):
             parts.append("Recent: " + self._recent_turns[-1][:150])
         return " | ".join(parts)
 
-    async def _expand_paths(self, seeds: List[dict]) -> List[dict]:
+    async def _expand_paths(
+        self,
+        seeds: List[dict],
+        *,
+        q_vec: list[float],
+    ) -> List[dict]:
         from .provider_helpers import format_triple, parse_agtype_vertex
+        from .walk import WalkHypothesis, parse_embedding
 
-        if not seeds or self.store is None:
+        if not seeds or self.store is None or not q_vec:
             return []
-        from .store import bridge_keys_for_seed
 
-        chunk_ids: List[str] = []
-        for s in seeds:
-            chunk_ids.extend(bridge_keys_for_seed(s))
-        chunk_ids = list(dict.fromkeys(chunk_ids))
-        bmap = await self.store.bridge_map(chunk_ids)
-        for s in seeds:
-            vids: List[str] = []
-            for key in bridge_keys_for_seed(s):
-                vids += list(bmap.get(key) or [])
-            s["vertex_ids"] = list(dict.fromkeys(vids))
-        seed_ids: List[int] = []
-        for vids in (s.get("vertex_ids") or [] for s in seeds):
-            for vid in vids:
-                try:
-                    seed_ids.append(int(str(vid).strip('"')))
-                except (ValueError, TypeError):
-                    continue
-        seed_ids = list(dict.fromkeys(seed_ids))
-        if not seed_ids:
+        conversation_seeds = [s for s in seeds if s.get("src") == "conversation"]
+        conv_ids = [
+            int(str(s["id"]).removeprefix("conv_"))
+            for s in conversation_seeds
+            if str(s.get("id") or "").removeprefix("conv_").isdigit()
+        ]
+        passports = await self.store.passports_for_conversations(conv_ids)
+        seeds_by_chunk = {
+            (
+                str(s["id"])
+                if str(s["id"]).startswith("conv_")
+                else f"conv_{s['id']}"
+            ): s
+            for s in conversation_seeds
+        }
+
+        hypotheses: list[WalkHypothesis] = []
+        for passport in passports:
+            seed = seeds_by_chunk.get(str(passport.get("chunk_id") or ""))
+            if seed is None:
+                continue
+            chunk_vec = parse_embedding(seed.get("embedding"))
+            if not chunk_vec:
+                continue
+            hypotheses.append(
+                WalkHypothesis(
+                    noun_id=int(passport["noun_id"]),
+                    chunk_id=str(passport["chunk_id"]),
+                    session_id=str(passport.get("session_id") or ""),
+                    turn_id=int(passport["turn_id"]),
+                    sim=float(seed["similarity"]),
+                    chunk_vec=chunk_vec,
+                )
+            )
+        if not hypotheses:
             return []
         rows = await self.store.expand_graph(
-            seed_ids,
-            [],
-            limit=40,
-            decay_half_life_days=getattr(self.config, "decay_half_life_days", 30.0),
+            hypotheses,
+            q_vec=q_vec,
+            hops=2,
+            k=int(getattr(self.config, "vector_k", 8)),
         )
         paths: List[dict] = []
         seen: set[str] = set()
         for row in rows:
+            audit = getattr(row, "audit", {}) or {}
             n, rel, m = row[0], row[1], row[2]
             w = float(row[3]) if len(row) > 3 else 0.5
             c = float(row[4]) if len(row) > 4 else 0.5
@@ -785,9 +951,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
             if not triple or "->" not in triple:
                 continue
             triple = f"{triple} w={w:.2f} c={c:.2f}"
-            if triple in seen:
+            dedup_key = (
+                f"{audit.get('chunk_id')}:{audit.get('turn_id')}:"
+                f"{audit.get('hop')}:{triple}"
+            )
+            if dedup_key in seen:
                 continue
-            seen.add(triple)
+            seen.add(dedup_key)
             src = parse_agtype_vertex(n) or {}
             paths.append({
                 "from_vid": str(src.get("id") or ""),
@@ -797,6 +967,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "cosine": c,
                 "decay": decay,
                 "score": score,
+                "session_id": audit.get("session_id"),
+                "turn_id": audit.get("turn_id"),
+                "chunk_id": audit.get("chunk_id"),
+                "hop": audit.get("hop"),
             })
         return paths[:16]
 
