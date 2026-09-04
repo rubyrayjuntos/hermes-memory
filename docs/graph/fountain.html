@@ -671,7 +671,7 @@ function setMetrics(stats, extra) {
     ['VISIBLE', extra?.verts ?? raw.nodes.length, `${labels.Turn||0} Turn · ${labels.Session||0} Session · ${labels.Noun||0} Noun${benchFiltered}`],
     ['THREADS', extra?.edges ?? raw.links.length, `${elabs.NEXT||0} NEXT · ${elabs.IN_SESSION||0} IN_SESSION · ${elabs.mentions||0} mentions${ghostEnabled && ghostMeta ? ` · ${ghostMeta.edges} ghost` : ''}`],
     ['BRIDGE', b.rows ?? '—', `${b.vertices_bridged||0} verts bridged · graph ${v.total??'—'}v`],
-    ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'} · score 0.5c+0.3w+0.2decay`],
+    ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'} · score composite × (magnitude / 8)`],
   ];
   document.getElementById('metrics').innerHTML = cells.map(([k,val,sub]) =>
     `<div class="metric"><span class="k">${k}</span><span class="v">${val}</span><span class="s">${sub}</span></div>`).join('');
@@ -824,7 +824,7 @@ function applySearch(res) {
   highlighted = new Set();
   rebuildScene();
   document.getElementById('nodelist').innerHTML = seeds.slice(0, 80).map(seed =>
-    `<button type="button"><i class="gem" style="background:#d946a6"></i><span>${escapeHTML((seed.excerpt||seed.chunk_id||seed.id).slice(0,42))}</span><span class="mono" style="margin-left:auto;color:#7A92B1">${escapeHTML(seed.id)}</span></button>`
+    `<button type="button"><i class="gem" style="background:#d946a6"></i><span>${escapeHTML((seed.excerpt||seed.chunk_id).slice(0,42))}</span><span class="mono" style="margin-left:auto;color:#7A92B1">sim ${Number(seed.score).toFixed(2)} · ${escapeHTML(seed.chunk_id)}</span></button>`
   ).join('');
   reconstructInjection(res);
   renderTopo(res);

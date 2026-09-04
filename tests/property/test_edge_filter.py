@@ -31,6 +31,10 @@ def test_fountain_is_garden_only_ship_surface():
     assert "Concept" not in html
     assert "level: 1" in html
     assert "graph/3d?limit=80" in html
+    assert "composite × (magnitude / 8)" in html
+    assert "escapeHTML(seed.chunk_id)" in html
+    assert "Number(seed.score).toFixed(2)" in html
+    assert "escapeHTML(seed.id)" not in html
 
 
 def test_readme_advertises_garden_manifold_only():
