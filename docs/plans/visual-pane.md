@@ -1,5 +1,10 @@
 # Visual Interface Pane — Plan (post-#24)
 
+**Superseded as a release destination** by `RELEASE_CRITERIA.md` `OC-MVP-*` /
+`OC-PROD-*`. This file is historical swarm scratch. MVP pane work is **read-only
+view from source** (no CRUD, no Cypher writes, no re-embed trigger). The
+Command & Control Drawer below is `OC-PROD-2`, not an MVP backlog.
+
 **Status:** draft plan for board-driven swarm — trunk workflow (`wip/*` → PR → 3 checks → squash). `main` is post-#24 (`feat(infra): hardened compose`, see `git log` / PR #24 — no pinned SHA).
 
 ## Goal

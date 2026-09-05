@@ -189,6 +189,10 @@ def test_format_debug_injection_keeps_retriever_dsl():
     block = format_debug_injection([
         {
             "score": 0.64,
+            "best_score": 0.37,
+            "best_cosine": 0.72,
+            "best_weight": 1.0,
+            "best_decay": 0.4,
             "content": "Phase 2 install plan",
             "paths": [{"triple": "[Turn hello] -ABOUT-> [Concept Hermes Agent] w=0.91 c=0.88"}],
         },
@@ -199,6 +203,9 @@ def test_format_debug_injection_keeps_retriever_dsl():
         },
     ])
     assert "[SEED V1 64%] [Path: [Turn hello] -ABOUT-> [Concept Hermes Agent] w=0.91 c=0.88]" in block
+    assert "score=0.37" in block
+    assert "0.5*" not in block
+    assert "0.3*" not in block
     assert "[SEED V2 61%] [Path: none]" in block
     assert "Phase 2 install plan" in block
 

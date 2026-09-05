@@ -195,13 +195,14 @@ let seedIds = new Set();
 let highlighted = new Set();
 let selected = null;
 let lastStats = null;
+let lastHealth = null;
 let scene, camera, renderer, controls, graphGroup, clock;
 // ——— Progressive reveal state machine (single source of truth) ———
 const LEVEL_DEF = {
   1: { name:'Garden', hint:'Level 1 · Garden — pure spatial intuition · click a gem' },
   2: { name:'Horizon', hint:'Level 2 · Horizon — Ghost veil reveals hidden thematic shape' },
   3: { name:'Instrument', hint:'Level 3 · Instrument — sliders · DISSOLVE · w×c' },
-  4: { name:'Cockpit', hint:'Level 4 · Cockpit — full score=0.5c+0.3w+0.2decay audited cockpit' },
+  4: { name:'Cockpit', hint:'Level 4 · Cockpit — walker beam_score; missing score is unavailable' },
 };
 const PANEL_MIN = { metrics:1, injection:1, inspector:1 };
 let AppState = {
@@ -606,11 +607,13 @@ function initThree() {
   function showEdgeTip(l, ev) {
     const w = Number(l.weight ?? 0.5), c = Number(l.cosine ?? 0.5);
     const dec = l.decay != null ? Number(l.decay) : 0.5;
-    const sc = l.score != null ? Number(l.score) : (0.5*c + 0.3*w + 0.2*dec);
+    const scoreBit = (l.score != null && l.score !== '')
+      ? `score=${Number(l.score).toFixed(2)}`
+      : 'score=unavailable';
     const a = raw.nodes.find(n=>sid(n.id)===sid(l.source));
     const b = raw.nodes.find(n=>sid(n.id)===sid(l.target));
     let body = `<b>${escapeHTML(l.label||'REL')}</b> ${escapeHTML(a?nodeName(a):String(l.source))} → ${escapeHTML(b?nodeName(b):String(l.target))}`;
-    if (l.label === 'mentions') body += `<br>w=${w.toFixed(2)} · c=${c.toFixed(2)} · decay=${dec.toFixed(2)} · <b>score=${sc.toFixed(2)}</b><br><span style="opacity:.8">co-occurrence (mention order)</span>`;
+    if (l.label === 'mentions') body += `<br>w=${w.toFixed(2)} · c=${c.toFixed(2)} · decay=${dec.toFixed(2)} · <b>${scoreBit}</b><br><span style="opacity:.8">co-occurrence (mention order)</span>`;
     else if (l.label === 'GHOST_KNN') body += '<br><span style="opacity:.8">vector proximity (kNN) — not persisted</span>';
     else if (l.label === 'NEXT') body += '<br><span style="opacity:.8">sequential turn</span>';
     else if (l.label === 'IN_SESSION') body += '<br><span style="opacity:.8">session membership</span>';
@@ -725,6 +728,23 @@ function renderList() {
   });
 }
 
+function renderDeliveryStatus(health) {
+  // /api/health: LEDGER snapshot + drain_status + unpassported. Not ingest hash.
+  const ds = health.drain_status || {};
+  const ledG = health.graph_degraded;
+  const ledF = health.writes_failed;
+  const ledE = health.embed_null;
+  const dsG = ds.graph_degraded;
+  const unp = health.unpassported_count;
+  const txt = [
+    `ledger graph_degraded=${ledG ?? '—'} writes_failed=${ledF ?? '—'} embed_null=${ledE ?? '—'}`,
+    `drain_status graph_degraded=${dsG ?? '—'}`,
+    `unpassported=${unp ?? '—'}`,
+  ].join(' · ');
+  const warn = [ledG, ledF, ledE, dsG, unp].some(v => Number(v) > 0);
+  setStatus(warn ? 'warn' : true, `live · ${txt}`);
+}
+
 function setMetrics(stats, extra) {
   const v = stats?.vertices || {};
   const manifold = stats?.manifold || {};
@@ -745,7 +765,7 @@ function setMetrics(stats, extra) {
   ];
   document.getElementById('metrics').innerHTML = cells.map(([k,val,sub]) =>
     `<div class="metric"><span class="k">${k}</span><span class="v">${val}</span><span class="s">${sub}</span></div>`).join('');
-  if (i.healthy === false) setStatus('warn', `live · drifted ${i.drifted} · isolated ${i.isolated_files}`);
+  if (lastHealth) renderDeliveryStatus(lastHealth);
   const live = document.getElementById('live-persisted');
   if (live) {
     const pv = v.total ?? '—';
@@ -866,17 +886,21 @@ function applySearch(res) {
 }
 
 async function loadCatalog() {
-  const [g3d, stats] = await Promise.all([
+  const [g3d, stats, health] = await Promise.all([
     safeFetch(`${API}/api/librarian/graph/3d?fresh=1`),
-    safeFetch(`${API}/api/librarian/graph/stats?fresh=1`)
+    safeFetch(`${API}/api/librarian/graph/stats?fresh=1`),
+    safeFetch(`${API}/api/health`)
   ]);
   if (!g3d) return;
   applyCatalog(g3d);
+  if (health) lastHealth = health;
   if (stats) {
     lastStats = stats;
     const g = graphFromPayload(g3d);
     setMetrics(stats, { verts: g.nodes.length, edges: g.links.length, persistedEdges: stats.edges?.total });
-    setStatus(true, `manifold ${g.nodes.length}v / ${g.links.length} mentions`);
+    if (!health) setStatus(true, `manifold ${g.nodes.length}v / ${g.links.length} mentions`);
+  } else if (health) {
+    renderDeliveryStatus(health);
   }
   if (ghostEnabled) await refreshGhost();
   else updateGhostMeta();

@@ -366,6 +366,55 @@ def test_runtime_health_includes_ledger_keys():
     assert "last_failed_at" in payload
     assert "bind" in payload
     assert payload["dropped_writes"] == 0
+    assert "drain_status" not in payload
+    assert "unpassported_count" not in payload
+
+
+def test_runtime_health_includes_delivery_sql_facts():
+    import asyncio
+
+    from hermes_memory.graph_api import Runtime
+    from hermes_memory.write_outcome import LEDGER
+
+    class Loop:
+        def call(self, coro, timeout=30.0):
+            return asyncio.run(coro)
+
+    class Conn:
+        async def fetch(self, _sql):
+            return [
+                {"drain_status": "complete", "n": 4},
+                {"drain_status": "graph_degraded", "n": 2},
+                {"drain_status": None, "n": 1},
+            ]
+
+    class Acquire:
+        async def __aenter__(self):
+            return Conn()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Pool:
+        def acquire(self):
+            return Acquire()
+
+    class Store:
+        async def count_unpassported_turns(self):
+            return 7
+
+    LEDGER.reset()
+    runtime = Runtime.__new__(Runtime)
+    runtime.loop = Loop()
+    runtime.store = Store()
+    runtime.pool = Pool()
+    payload = runtime.health()
+    assert payload["unpassported_count"] == 7
+    assert payload["drain_status"]["complete"] == 4
+    assert payload["drain_status"]["graph_degraded"] == 2
+    assert payload["drain_status"]["unset"] == 1
+    assert payload["drain_status"]["embed_null"] == 0
+    assert payload["graph_degraded"] == 0
 
 
 def test_runtime_librarian_health_merges_ledger_counts():
@@ -462,7 +511,7 @@ def test_unpack_expand_row_legacy_6tuple_hop():
 
 def test_unpack_expand_row_7tuple_decay_is_not_hop():
     decay = 0.4
-    score = 0.5 * 0.72 + 0.3 * 1.0 + 0.2 * decay
+    score = 0.37
     n, rel, m, w, c, d, s, hop = unpack_expand_row(("n", "ABOUT", "m", 1.0, 0.72, decay, score))
     assert hop == 1
     assert d == decay
@@ -471,7 +520,7 @@ def test_unpack_expand_row_7tuple_decay_is_not_hop():
 
 def test_unpack_expand_row_8tuple_hop_after_score():
     decay = 0.4
-    score = 0.5 * 0.72 + 0.3 * 1.0 + 0.2 * decay
+    score = 0.37
     _, _, _, _, _, d, s, hop = unpack_expand_row(("n", "ABOUT", "m", 1.0, 0.72, decay, score, 2))
     assert hop == 2
     assert d == decay
@@ -482,7 +531,7 @@ def test_pack_search_7tuple_plus_hop_keeps_hop():
     n = {"id": "1", "name": "Postgres", "label": "Noun"}
     m = {"id": "2", "name": "AGE", "label": "Noun"}
     decay = 0.4
-    score = 0.5 * 0.72 + 0.3 * 1.0 + 0.2 * decay
+    score = 0.37
     out = pack_search(
         "tokyo",
         4,

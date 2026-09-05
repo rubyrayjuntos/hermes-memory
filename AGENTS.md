@@ -7,6 +7,7 @@ This file is auto-loaded by OpenCode for every agent and command in this repo. I
 **The Hermes Librarian — `hermes-memory`** — a Postgres + Apache AGE + pgvector hybrid memory provider for Hermes Agent (`hybrid-age` provider). It provides durable vector semantic recall and graph topology traversal with prompt-context injection, running on `apache/age:release_PG17_1.6.0` + pgvector at `127.0.0.1:5450` via Ollama `nomic-embed-text` (768-dim).
 
 Key files an agent should read for context:
+- `RELEASE_CRITERIA.md` — destination (Delivery vs Retrieval Quality, plus derived Observability & Control). Cite row IDs (`D-MVP-*`, `RQ-PROD-*`, `OC-MVP-*`). Do not treat `docs/plans/board.md` “v0.2 production-ready” as current. MVP is Delivery-trustworthy; live-shaped retrieval quality does not block MVP. Pane view must read source fields (`drain_status`, `LEDGER`, `beam_score`); pane control is Production.
 - `README.md` — Quick Start, architecture, provider config
 - `CONTRIBUTING.md` — contribution guidelines
 - `pyproject.toml` — dependencies, test config (`pytest`, `hypothesis`)

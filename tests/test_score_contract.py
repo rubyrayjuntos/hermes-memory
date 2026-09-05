@@ -138,3 +138,38 @@ def test_only_beam_score_may_define_a_three_term_weighted_sum() -> None:
             for hit in _numeric_weighted_sums(node):
                 offenders.append(f"{path.name}:{hit.lineno}")
     assert offenders == [], "extra weighted-sum score:\n" + "\n".join(offenders)
+
+
+def _legacy_mixer_label(text: str) -> bool:
+    """The retired 0.5/0.3/0.2 display string — not BinOp arithmetic."""
+    return "0.5*" in text and "0.3*" in text and "0.2*" in text
+
+
+def _joined_str_text(node: ast.JoinedStr) -> str:
+    parts: list[str] = []
+    for value in node.values:
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            parts.append(value.value)
+        else:
+            parts.append("*")
+    return "".join(parts)
+
+
+def test_legacy_mixer_string_is_not_a_label_either() -> None:
+    """AST BinOp missed format_debug_injection's f-string; scan JoinedStr too."""
+    offenders: list[str] = []
+    for path in _SRC.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+        class V(ast.NodeVisitor):
+            def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
+                if _legacy_mixer_label(_joined_str_text(node)):
+                    offenders.append(f"{path.name}:{node.lineno}")
+                self.generic_visit(node)
+
+            def visit_Constant(self, node: ast.Constant) -> None:
+                if isinstance(node.value, str) and _legacy_mixer_label(node.value):
+                    offenders.append(f"{path.name}:{node.lineno}")
+
+        V().visit(tree)
+    assert offenders == [], "legacy mixer label:\n" + "\n".join(offenders)

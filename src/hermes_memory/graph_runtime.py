@@ -142,7 +142,59 @@ class Runtime:
 
     def health(self) -> Dict[str, Any]:
         # LEDGER is process-local; snapshot ints reset when this process exits.
-        return {"ok": True, "bind": f"{DEFAULT_HOST}:{DEFAULT_PORT}", **LEDGER.snapshot()}
+        payload: Dict[str, Any] = {
+            "ok": True,
+            "bind": f"{DEFAULT_HOST}:{DEFAULT_PORT}",
+            **LEDGER.snapshot(),
+        }
+        store = getattr(self, "store", None)
+        loop = getattr(self, "loop", None)
+        if store is not None and loop is not None:
+            payload.update(loop.call(self._adelivery_health()))
+        return payload
+
+    async def _adelivery_health(self) -> Dict[str, Any]:
+        """Postgres delivery facts for the pane. Not ingest hash hygiene.
+
+        ``drain_status`` is this-drain C–F (V11). ``unpassported_count`` is the
+        V9 anti-join. LEDGER ints stay on ``health()`` via snapshot() — a
+        different fact. Do not fold these into Store.librarian_health().
+        """
+        assert self.store is not None
+        unpassported: int | None
+        try:
+            unpassported = await self.store.count_unpassported_turns()
+        except Exception:
+            logger.debug("unpassported count unavailable", exc_info=True)
+            unpassported = None
+        drain: Dict[str, int] | None = {
+            "complete": 0,
+            "embed_null": 0,
+            "graph_degraded": 0,
+            "unset": 0,
+        }
+        pool = getattr(self, "pool", None)
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT drain_status, count(*)::int AS n "
+                        "FROM conversations GROUP BY 1"
+                    )
+                for row in rows:
+                    status = row["drain_status"]
+                    n = int(row["n"] or 0)
+                    if status in drain:
+                        drain[status] = n
+                    elif status is None:
+                        drain["unset"] += n
+            except Exception:
+                logger.debug("drain_status counts unavailable", exc_info=True)
+                drain = None
+        return {
+            "drain_status": drain,
+            "unpassported_count": unpassported,
+        }
 
     def librarian_health(self) -> Dict[str, Any]:
         assert self.store is not None

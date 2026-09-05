@@ -141,6 +141,11 @@ Alpha (`0.1.0` in `pyproject.toml`). The tagged release is `v0.1.0` (2026-08-24)
 `main` is ahead of that tag (Fountain inspector, install CLI, CORS/ingest/secrets
 hardening). This is not a production multi-tenant service.
 
+**Where “done” is defined:** [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md) —
+Delivery vs Retrieval Quality, plus derived Observability & Control (pane
+view first; control is Production). The table below is an inventory of what
+exists on `main`, not a release gate.
+
 | Capability | On `main` |
 |------------|:---------:|
 | Docker compose stack (AGE PG17 1.6 + pgvector) | yes |

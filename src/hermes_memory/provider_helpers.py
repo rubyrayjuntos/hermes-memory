@@ -296,22 +296,12 @@ def format_debug_injection(seeds: list, max_paths: int = 3, meta: dict | None = 
             header = f"[SEED V{i} {pct}%] [Path: {route}]"
         else:
             header = f"[SEED V{i} {pct}%] [Path: none]"
-        bw = s.get("best_weight")
-        bc = s.get("best_cosine")
-        br = s.get("best_decay")
         bs = s.get("best_score")
         if bs is None and paths:
-            p0 = paths[0]
-            bw = bw if bw is not None else p0.get("weight")
-            bc = bc if bc is not None else p0.get("cosine")
-            br = br if br is not None else p0.get("decay")
-            bs = bs if bs is not None else p0.get("score")
-        if bs is not None and bc is not None and bw is not None and br is not None:
+            bs = paths[0].get("score")
+        if bs is not None:
             try:
-                header += (
-                    f" score={float(bs):.2f} "
-                    f"(0.5*{float(bc):.2f}+0.3*{float(bw):.2f}+0.2*{float(br):.2f})"
-                )
+                header += f" score={float(bs):.2f}"
             except Exception:
                 pass
         elif s.get("score") is not None:
