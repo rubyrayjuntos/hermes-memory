@@ -1,4 +1,5 @@
 {
+  "eval_kind": "synthetic",
   "description": "CI-gated ANN golden set: each case is a frozen (query vector → expected turn). Vectors are one-hot on `axis` so hermes_test HNSW can rank without Ollama. Not a live-production turn-id snapshot.",
   "cases": [
     {

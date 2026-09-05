@@ -30,6 +30,7 @@ import asyncpg
 
 from ..config import load_config
 from ..embed import Embedder, vec_to_literal
+from ..schema_guard import assert_live_shaped_eval_allowed, parse_eval_kind
 from ..store import Store, age_str
 from ..tokens import count_tokens
 
@@ -106,11 +107,18 @@ class RunMetrics:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
-def load_golden_set(path: str) -> List[GoldenPair]:
+def load_golden_set(
+    path: str,
+    *,
+    unpassported_count: int | None = None,
+) -> List[GoldenPair]:
     with open(path, "r", encoding="utf-8") as fh:
         raw = json.load(fh)
+    kind = parse_eval_kind(raw)
+    assert_live_shaped_eval_allowed(kind, unpassported_count=unpassported_count)
+    items = raw["cases"] if isinstance(raw, dict) and "cases" in raw else raw
     pairs = []
-    for item in raw:
+    for item in items:
         pairs.append(GoldenPair(id=item["id"], query=item["query"],
                                 expected_memory=item["expected_memory"]))
     return pairs

@@ -41,6 +41,12 @@ def test_github_cd_does_not_migrate_live() -> None:
     assert DEPLOY_TOPOLOGY["process_start_applies_migrations"] is True
     assert DEPLOY_TOPOLOGY["require_schema_head_is_backstop"] is True
     assert DEPLOY_TOPOLOGY["rolling_deploy"] is False
+    assert DEPLOY_TOPOLOGY["head_check"] == "expected_not_applied_only"
+    block = Path(
+        __import__("hermes_memory.schema_guard", fromlist=["schema_guard"]).__file__
+    ).read_text(encoding="utf-8")
+    topo = block[block.find("DEPLOY_TOPOLOGY"): block.find("LIVE_EVAL_POLICY")]
+    assert topo.index('"rolling_deploy"') < topo.index('"head_check"')
 
 
 def test_provider_applies_migrations_before_schema_head() -> None:
@@ -60,11 +66,47 @@ def test_live_eval_waits_for_v9_gap_backfill() -> None:
     """Do not lock a live-shaped golden set on the 257 unpassported turns."""
     assert LIVE_EVAL_POLICY["backfill_v9_gap_before_golden"] is True
     assert LIVE_EVAL_POLICY["exclude_unpassported_turns_until_backfill"] is True
+    assert LIVE_EVAL_POLICY["enforced"] is True
     golden = (
         Path(__file__).resolve().parents[1] / "tests" / "data" / "ann_golden_turn_ids.json"
     ).read_text(encoding="utf-8")
     assert "golden-ann-" in golden
-    assert "live" not in golden.lower() or "not a live-production" in golden.lower()
+    assert '"eval_kind": "synthetic"' in golden
+
+
+def test_live_shaped_golden_is_refused_until_backfill() -> None:
+    from hermes_memory.schema_guard import assert_live_shaped_eval_allowed
+
+    assert_live_shaped_eval_allowed("synthetic", unpassported_count=257)
+    assert_live_shaped_eval_allowed("live_shaped", unpassported_count=0)
+    try:
+        assert_live_shaped_eval_allowed("live_shaped", unpassported_count=257)
+    except RuntimeError as exc:
+        assert "backfill" in str(exc).lower()
+    else:
+        raise AssertionError("live_shaped eval must refuse while unpassported_count > 0")
+    try:
+        assert_live_shaped_eval_allowed("live_shaped", unpassported_count=None)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("unknown passport gap must fail closed")
+
+
+def test_bench_load_golden_set_refuses_live_shaped(tmp_path) -> None:
+    from hermes_memory.bench.cli import load_golden_set
+
+    path = tmp_path / "live.json"
+    path.write_text(
+        '{"eval_kind": "live_shaped", "cases": [{"id": "q", "query": "x", "expected_memory": "y"}]}',
+        encoding="utf-8",
+    )
+    try:
+        load_golden_set(str(path))
+    except RuntimeError as exc:
+        assert "backfill" in str(exc).lower()
+    else:
+        raise AssertionError("bench must not load a live_shaped set while the gap is unknown")
 
 
 def test_legacy_null_embed_policy_is_an_explicit_decision() -> None:

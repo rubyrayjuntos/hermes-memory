@@ -24,7 +24,7 @@ Key files an agent should read for context:
 - Every Cypher write wrapped in `SAVEPOINT` / `RELEASE` (AGE transaction poisoning)
 - Migrations under `sql/migrations/` must be idempotent (`IF NOT EXISTS`, advisory locks, `CREATE OR REPLACE`)
 - Compose init is first-boot only. GitHub CD does not migrate live (loopback Postgres). Provider `_ainit` and pane boot call `apply_pending_migrations` then `Store.require_schema_head()` (backstop). Topology is one provider plus an optional pane, not a rolling fleet.
-- Do not lock a live-shaped retrieval golden set until the V9-gap turns are C–F backfilled (`LIVE_EVAL_POLICY.backfill_v9_gap_before_golden`).
+- Do not lock a live-shaped retrieval golden set until the V9-gap turns are C–F backfilled. `assert_live_shaped_eval_allowed` refuses `eval_kind=live_shaped` while unpassported turns remain (or the count is unknown). `DEPLOY_TOPOLOGY.head_check` is `expected_not_applied_only` and sits next to `rolling_deploy`; flipping the latter requires changing the former.
 - Legacy NULL `embed_model`/`embed_dim` is an explicit policy (`trust_nomic_768`): unstamped rows stay in ANN and are treated as nomic-embed-text/768. Do not treat NULL as the live config default when adding a second model.
 - AGE property syntax is `{key: 'value'}` (no JSON quotes); pre-declare labels via `create_vlabel`/`create_elabel` on a separate autocommit connection
 - `memory_entries` dedup is on `(agent_identity, target, md5(content))` — not on raw content; update via `metadata->>'file_path'` + `UPDATE`

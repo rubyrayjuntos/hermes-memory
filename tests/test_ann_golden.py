@@ -12,7 +12,13 @@ GOLDEN_PATH = Path(__file__).parent / "data" / "ann_golden_turn_ids.json"
 
 
 def _load_cases() -> list[dict]:
+    from hermes_memory.schema_guard import assert_live_shaped_eval_allowed, parse_eval_kind
+
     payload = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
+    kind = parse_eval_kind(payload)
+    # live_shaped without a real passport count must fail closed (None).
+    count = 0 if kind != "live_shaped" else None
+    assert_live_shaped_eval_allowed(kind, unpassported_count=count)
     return list(payload["cases"])
 
 

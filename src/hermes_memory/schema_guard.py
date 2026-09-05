@@ -31,14 +31,20 @@ LEGACY_NULL_EMBED_POLICY = {
 
 # GitHub CD cannot reach the loopback volume. One Hermes provider process plus
 # an optional pane may boot together; migrate.py's advisory lock serializes
-# apply. This is not a rolling multi-instance fleet. Older code only checks
-# expected-not-applied, so a newer applied head does not fail an old process.
+# apply. This is not a rolling multi-instance fleet.
+#
+# head_check sits next to rolling_deploy on purpose: missing_versions only
+# reports expected-not-applied (forward gaps). Extra / unrecognized applied
+# versions do not fail. If rolling_deploy ever becomes True, this one-way
+# check is insufficient — old instances would boot against a newer head
+# without being asked whether they understand that schema.
 DEPLOY_TOPOLOGY = {
     "github_cd_migrates_live": False,
     "process_start_applies_migrations": True,
     "require_schema_head_is_backstop": True,
     "instances": "single_provider_plus_optional_pane",
     "rolling_deploy": False,
+    "head_check": "expected_not_applied_only",
 }
 
 # 257 live conversations have no mentions mesh from the V9 history lag.
@@ -48,6 +54,7 @@ DEPLOY_TOPOLOGY = {
 LIVE_EVAL_POLICY = {
     "backfill_v9_gap_before_golden": True,
     "exclude_unpassported_turns_until_backfill": True,
+    "enforced": True,
 }
 
 
@@ -71,8 +78,43 @@ def list_expected_versions(migrations_dir: Path | None = None) -> list[str]:
 
 
 def missing_versions(applied: Iterable[str], expected: Sequence[str]) -> list[str]:
+    """Forward gaps only: expected versions absent from history.
+
+    Does not flag extra applied versions this code does not know. That is
+    DEPLOY_TOPOLOGY["head_check"] == "expected_not_applied_only" and is
+    only safe while rolling_deploy is False.
+    """
     have = set(applied)
     return [v for v in expected if v not in have]
+
+
+def parse_eval_kind(payload: object) -> str:
+    """Return eval_kind from a golden-set file. Lists default to legacy_substring."""
+    if isinstance(payload, dict):
+        kind = str(payload.get("eval_kind") or "synthetic")
+        return kind
+    return "legacy_substring"
+
+
+def assert_live_shaped_eval_allowed(
+    eval_kind: str,
+    *,
+    unpassported_count: int | None,
+) -> None:
+    """Refuse live-shaped golden sets until the V9-gap C–F backfill is done.
+
+    ``unpassported_count is None`` (unknown) fails closed. Synthetic and
+    legacy_substring sets are not this gate.
+    """
+    if eval_kind != "live_shaped":
+        return
+    if not LIVE_EVAL_POLICY["backfill_v9_gap_before_golden"]:
+        return
+    if unpassported_count is None or int(unpassported_count) > 0:
+        raise RuntimeError(
+            "live-shaped golden set blocked until V9-gap C–F backfill "
+            f"(unpassported_count={unpassported_count})"
+        )
 
 
 def apply_pending_migrations(dsn: str) -> None:
