@@ -12,12 +12,24 @@ versioning follows [SemVer](https://semver.org/).
 - Fountain live inspector (`docs/graph/fountain.html`) via `hermes-memory-api` on `127.0.0.1:7890`.
 - First-time install CLI (`hermes-memory-install`) plus upgrade / migrate / uninstall / backfill.
 - Instrumented prefetch / injection cockpit and graph path expansion (#59).
+- Write-outcome ledger (`WriteOutcome` / `WriteLedger`): drain records enqueue, embed, SQL turn, flower, nouns, mentions, and memory SQL; counts `dropped_writes`, `writes_failed`, `embed_null`, `graph_degraded`. Counters are process-local (restart zeros them); `record()` redacts `detail`.
 
 ### Security
 - Viz API CORS scoped to loopback/`null`; bind remains `127.0.0.1` (#61).
 - Ingest transaction SAVEPOINT / batched MERGE hygiene (#62).
 - Secrets/config hygiene: password leak fix, atomic config, `sql/example` (#63).
 - Ghost kNN DoS caps and namespaced bridge keys (#60).
+
+### Changed
+- CI is pip-only (no Poetry). Lint job runs ruff + mypy on extracted modules.
+- Nightly job runs a real Ollama embed e2e (`hermes-memory-verify`), not a stub.
+- Integration CI runs `test_verify_pipeline` and `test_bridge_symmetry` against `HYBRID_AGE_DSN`.
+- P3/P4 property tests are live on `extract_nouns` (docs no longer claim they are skipped).
+- Legacy Title-Case cosine linker lives in `about_concepts.py`; conversation writes use mentions + flower.
+- Ingest boots like the provider: `apply_pending_migrations` then `Store.require_schema_head`.
+- Viz API split: `graph_runtime` / `graph_http` / `graph_server` entrypoints.
+- Librarian/pane health merges write-ledger counters into the Store health payload.
+- Rewrote ABOUT recency integration as mentions + magnitude ranking (`test_expand_graph_stronger_mentions_ranks_first`); mentions decay stays in `store_expand` / walk tests.
 
 ### Fixed
 - Prefetch fencing so Hermes sanitize keeps SEED/Path (#58).

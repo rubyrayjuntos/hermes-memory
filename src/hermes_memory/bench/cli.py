@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import re
-import statistics
 import sys
 import time
 from dataclasses import dataclass, field
@@ -31,7 +30,7 @@ import asyncpg
 from ..config import load_config
 from ..embed import Embedder, vec_to_literal
 from ..schema_guard import assert_live_shaped_eval_allowed, parse_eval_kind
-from ..store import Store, age_str
+from ..store import Store
 from ..tokens import count_tokens
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -215,7 +214,6 @@ def summarize(config_name: str, results: List[QueryResult]) -> RunMetrics:
         idx = min(len(lat) - 1, max(0, round(p / 100 * len(lat)) - 1))
         return lat[idx]
 
-    inj = [r for r in results if r.injection_hit]
     mrr_vals = [r.mrr for r in results if r.mrr is not None]
     rm = RunMetrics(config_name=config_name, n_queries=len(results))
     rm.retrieval_hit_rate = sum(1 for r in results if r.retrieval_hit) / n
@@ -333,7 +331,6 @@ class BenchHarness:
                 graph_items.append((text, graph_score))
 
         # --- composite scoring ---------------------------------------------
-        now = time.time()
         scored: Dict[str, Dict[str, Any]] = {}
         for s in seeds:
             sim = float(s.get("similarity") or 0.0)
@@ -607,8 +604,8 @@ async def cmd_throughput(args: argparse.Namespace) -> None:
             return write_lat[idx]
 
         print("\n## Throughput — 256-turn burst write path\n")
-        print(f"| Metric          | Value |")
-        print(f"|-----------------|-------|")
+        print("| Metric          | Value |")
+        print("|-----------------|-------|")
         print(f"| turns written   | {len(write_lat)} |")
         print(f"| wall seconds    | {wall:.2f} |")
         print(f"| turns/sec       | {len(write_lat)/wall:.1f} |")

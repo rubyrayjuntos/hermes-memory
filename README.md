@@ -148,8 +148,8 @@ hardening). This is not a production multi-tenant service.
 | `hermes-memory-install` + `hermes memory setup hybrid-age` | yes |
 | Doc/codebase ingest + verify CLIs | yes |
 | Fountain live inspector (loopback `:7890`) | yes |
-| Property tests P1–P8 (P3/P4 skipped) + CI | yes |
-| Turn + ingest extractors | in-process (`provider._extract_concepts`, `ingest.extract_dependencies`); `legacy/scripts/` is the old cron |
+| Property tests P1–P8 (P3/P4 live on `extract_nouns`) + CI | yes |
+| Turn + ingest extractors | live path: `extract_nouns` + Session/Turn flower; ingest `extract_dependencies`. Legacy Title-Case cosine linker is isolated in `about_concepts.py`. `legacy/scripts/` is the old cron. |
 
 ## Testing
 
@@ -167,7 +167,7 @@ What the property suite guards:
 |----|----------------|
 | P1 | Unescaped `'`/`\` surviving `age_str` (Cypher injection) |
 | P2 | Malformed MERGE props (None dropped, keys preserved once) |
-| P3/P4 | Extractor noise / concept self-replication *(v0.2 — skipped)* |
+| P3/P4 | Extractor noise / slug idempotence (`extract_nouns`, always run) |
 | P5 | Garbage module names from artifact paths (hex/uuid/digits/skip-dirs) |
 | P6 | Nondeterministic dependency-index output |
 | P7 | Silent file-hash state corruption (corrupt JSON → `{}`) |

@@ -1,6 +1,6 @@
 """Sample application entry point."""
-import os
 from utils.helpers import format_name
+
 
 def main():
     name = format_name("ada", "lovelace")

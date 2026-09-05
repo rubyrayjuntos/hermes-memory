@@ -38,8 +38,6 @@ def _make_provider(store) -> HybridAgeMemoryProvider:
     provider._agent_identity = "default"
     provider._session_id = "default"
     provider._last_turn_id = {}
-    provider._concept_emb = {}
-    provider._concept_names = None
     provider._write_queue = None
     provider._loop = None
     provider._primary_context = True

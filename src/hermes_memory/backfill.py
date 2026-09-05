@@ -1,4 +1,4 @@
-"""hermes-memory-backfill — graph unlinked conversations via the provider linker.
+"""hermes-memory-backfill — graph unlinked conversations via AboutConceptLinker.
 
 Skips C5 verify synthetics. Does not resurrect extractors.
 """
@@ -7,11 +7,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import sys
 from typing import Optional
 
+from .about_concepts import AboutConceptLinker
 from .graph_api import classify_session_kind, is_synthetic_session
 from .store import Store
+
+
+def _make_about_linker() -> AboutConceptLinker:
+    """Composition: backfill uses the linker without the live provider MRO."""
+    linker = AboutConceptLinker()
+    linker._concept_names = None
+    linker._concept_emb = {}
+    return linker
 
 
 async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
@@ -19,7 +27,7 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
 
     from .config import load_config
     from .embed import Embedder
-    from .provider import HybridAgeMemoryProvider, _is_noise, should_purge_concept
+    from .provider import _is_noise, should_purge_concept
 
     cfg = load_config()
     pw = os.environ.get("HERMES_PG_PASSWORD", "")
@@ -31,17 +39,15 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
     store = Store(pool, graph_name=cfg.graph)
     embedder = Embedder(cfg.embed_url, cfg.embed_model, cfg.embed_dim)
-    provider = HybridAgeMemoryProvider(config=cfg)
-    provider.store = store
-    provider.embedder = embedder
+    linker = _make_about_linker()
 
     pairs = await store.fetch_concept_id_names()
     dead = [vid for vid, name in pairs if should_purge_concept(name)]
     purged = await store.purge_concept_ids(dead)
     if purged:
         print(f"    purged {purged} junk Concept verts", flush=True)
-    provider._concept_names = None
-    provider._concept_emb = {}
+    linker._concept_names = None
+    linker._concept_emb = {}
 
     sql = """
         SELECT c.id, c.session_id, c.content, c.embedding::text AS embedding
@@ -91,7 +97,7 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
             except Exception:
                 vec = None
         try:
-            await provider._link_turn_concepts(
+            await linker._link_turn_concepts(
                 store, embedder, int(row["id"]), sid, content, vec,
             )
             linked += 1

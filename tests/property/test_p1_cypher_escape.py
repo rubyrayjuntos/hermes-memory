@@ -8,11 +8,8 @@ cypher_dollar_quote / cypher_call pick a non-colliding $cyN$ tag.
 """
 from __future__ import annotations
 
-
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-
 from strategies import adversarial_text  # noqa: E402
 
 from hermes_memory.store import (  # noqa: E402

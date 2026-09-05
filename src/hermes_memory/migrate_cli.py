@@ -11,13 +11,6 @@ HERMES_HOME = Path.home() / ".hermes"
 
 def _resolve_migration_sql(name: str) -> Path:
     """Resolve migration SQL via package resources with REPO_ROOT fallback."""
-    # Try installed package resources first (importlib.resources)
-    try:
-        from importlib.resources import files as _files  # py3.9+
-        pkg_file = _files("hermes_memory") / ".." / ".." / "sql" / "migrations" / name
-        # Fallback if files API doesn't resolve outside package — use REPO_ROOT
-    except Exception:
-        pass
     # Primary: REPO_ROOT / sql/migrations
     candidate = REPO_ROOT / "sql" / "migrations" / name
     if candidate.exists():
@@ -100,7 +93,6 @@ def main():
     # Fallback to package resource if outside repo checkout
     if not v_sql.exists():
         try:
-            import importlib.resources as pkg_resources
             # package holds sql as data? try relative to repo root discovery
             alt = Path(__file__).resolve().parents[2] / "sql" / "migrations" / "V7__canonical_md5_dedup.sql"
             if alt.exists():

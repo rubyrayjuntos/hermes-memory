@@ -4,8 +4,6 @@ from __future__ import annotations
 import re
 
 from hypothesis import given, settings
-
-
 from strategies import (  # noqa: E402
     dicts_with_unsafe_keys,
     property_maps,

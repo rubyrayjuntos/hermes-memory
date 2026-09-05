@@ -15,51 +15,55 @@ import datetime
 import json
 import logging
 import math
-import re
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
 
+from .age_cypher import (  # noqa: F401 — re-export public + test aliases
+    _SAFE_IDENT,
+    _check_label,
+    _pick_cypher_dollar_tag,
+    _pick_dollar_tag,
+    _savepoint_name,
+    age_props,
+    age_str,
+    check_label,
+    cypher_call,
+    cypher_dollar_quote,
+    savepoint_name,
+    validate_graph_name,
+)
 from .embed import vec_to_literal
 from .schema_guard import list_expected_versions, missing_versions
-from .walk import (
-    WalkHypothesis,
-    WalkRow,
-    beam_score,
-    clamp_cos,
-    consensus_decay,
-    provenance_boost,
-)
+from .store_concepts import StoreConceptsMixin
+from .store_expand import StoreExpandMixin
+from .store_merge import StoreMergeMixin
+from .store_vec import _cosine_similarity, _parse_pgvector  # noqa: F401
 
 try:
-    from psycopg.sql import Identifier, SQL
+    from psycopg.sql import SQL, Identifier
 except ImportError:
     Identifier = None  # type: ignore[assignment]
     SQL = None  # type: ignore[assignment]
 
 logger = logging.getLogger("hybrid_age.store")
 
-# ---------------------------------------------------------------------------
-# Cypher escaping helpers (property-test surface P1/P2)
-# ---------------------------------------------------------------------------
-
-def age_str(value: Any) -> str:
-    """Escape a Python value as a Cypher string literal.
-
-    Guarantees no unescaped ``'`` or ``\\`` survives from the input.
-    Non-string values are str()-ed first; None becomes 'null' (unquoted).
-    Also escapes ``$`` (``\\$``) so the value can never close a
-    dollar-quoted ``cypher('graph', $$ body $$)`` wrapper.
-    """
-    if value is None:
-        return "null"
-    s = str(value)
-    s = s.replace("\\", "\\\\")
-    s = s.replace("$", "\\$")
-    s = s.replace("'", "\\'")
-    # neutralize any other backslash-sensitive control chars
-    s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-    return f"'{s}'"
+# Re-export Cypher helpers so existing ``from hermes_memory.store import …``
+# call sites keep working. Definitions live in age_cypher.py.
+__all_cypher__ = (
+    "age_str",
+    "age_props",
+    "check_label",
+    "validate_graph_name",
+    "cypher_call",
+    "cypher_dollar_quote",
+    "savepoint_name",
+    "_SAFE_IDENT",
+    "_check_label",
+    "_savepoint_name",
+    "_pick_cypher_dollar_tag",
+    "_pick_dollar_tag",
+)
 
 
 def bridge_keys_for_seed(seed: Dict[str, Any]) -> List[str]:
@@ -94,110 +98,11 @@ def bridge_keys_for_seed(seed: Dict[str, Any]) -> List[str]:
     return keys
 
 
-def _pick_cypher_dollar_tag(body: str) -> str:
-    """Pick a ``$tag$`` that does not collide with ``body``.
-
-    - If ``$$`` is absent, ``$$`` is safe (only ``$$`` would close it).
-    - Otherwise scan ``$cy0$``, ``$cy1$``, ... for the first tag absent
-      from ``body``.  This covers both ``$$`` and any ``$tag$`` collision.
-    - Raise if no tag found (body adversarially contains all candidates).
-    """
-    if "$$" not in body:
-        return "$$"
-    for i in range(10000):
-        tag = f"$cy{i}$"
-        if tag not in body:
-            return tag
-    raise ValueError("cypher body contains too many colliding dollar-quote tags")
-
-
-def cypher_dollar_quote(body: str) -> str:
-    """Wrap ``body`` in a safe dollar-quote tag."""
-    tag = _pick_cypher_dollar_tag(body)
-    return f"{tag}{body}{tag}"
-
-
-def cypher_call(graph: str, body: str) -> str:
-    """Return ``cypher('graph', $tag$body$tag$)`` with safe quoting."""
-    validate_graph_name(graph)
-    return f"cypher('{graph}', {cypher_dollar_quote(body)})"
-
-
-# Backwards-compatible aliases
-_pick_dollar_tag = _pick_cypher_dollar_tag
-
-
-def age_props(properties: Dict[str, Any]) -> str:
-    """Render a dict as a Cypher property map.
-
-    - None values are dropped entirely.
-    - Keys must match the safe-identifier pattern (same as labels); invalid
-      keys are skipped with a warning rather than interpolated into Cypher.
-    - Numeric values (int/float) are emitted as bare literals so Cypher
-      numeric comparisons (coalesce(r.weight,0.5) >= $min) work; all other
-      values go through age_str (quoted).
-    - Keys are preserved exactly once, insertion order kept.
-    """
-    parts = []
-    for key, val in properties.items():
-        if val is None:
-            continue
-        if not _SAFE_IDENT.match(key or ""):
-            logger.warning("age_props: skipping invalid property key %r", key)
-            continue
-        if isinstance(val, bool):
-            parts.append(f"{key}: {str(val).lower()}")
-        elif isinstance(val, (int, float)):
-            parts.append(f"{key}: {val}")
-        else:
-            parts.append(f"{key}: {age_str(val)}")
-    return "{" + ", ".join(parts) + "}"
-
-
-_SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def check_label(label: str) -> str:
-    """Validate a Cypher label against the safe-identifier pattern.
-
-    Public API: raises ValueError on invalid labels. ``_check_label`` is kept
-    as a backwards-compatible alias.
-    """
-    if not _SAFE_IDENT.match(label or ""):
-        raise ValueError(f"invalid AGE label: {label!r}")
-    return label
-
-
-def validate_graph_name(graph: str) -> str:
-    """Validate a graph name for safe interpolation into cypher('...', $$...$$).
-
-    Public API. Raises ValueError on names outside [_SAFE_IDENT]. Called once
-    at Store construction; from then on the stored value is trusted.
-    """
-    if not _SAFE_IDENT.match(graph or ""):
-        raise ValueError(f"invalid AGE graph name: {graph!r}")
-    return graph
-
-
-_check_label = check_label  # backwards-compatible alias
-
-
 def _escape_like(text: str) -> str:
     r"""Escape LIKE wildcards (\ % _) for use with ESCAPE '\'."""
     return (
         text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     )
-
-
-def savepoint_name(prefix: str, idx: int) -> str:
-    """Build a SQL savepoint identifier (public API).
-
-    ``_savepoint_name`` is kept as a backwards-compatible alias.
-    """
-    return f"sp_{prefix}_{idx}"
-
-
-_savepoint_name = savepoint_name  # backwards-compatible alias
 
 
 def dedup_key(name: str, label: str) -> Tuple[str, str]:
@@ -209,21 +114,6 @@ def dedup_key(name: str, label: str) -> Tuple[str, str]:
     rather than a local copy.
     """
     return (name.strip().lower(), label)
-
-def _cosine_similarity(a, b):
-    """Pure-python cosine: dot/(||a||*||b||). None if invalid."""
-    if not a or not b or len(a) != len(b):
-        return None
-    try:
-        import math
-        dot = sum(x * y for x, y in zip(a, b))
-        na = math.sqrt(sum(x * x for x in a))
-        nb = math.sqrt(sum(y * y for y in b))
-        if na == 0 or nb == 0:
-            return None
-        return dot / (na * nb)
-    except Exception:
-        return None
 
 
 def compaction_keepers(pairs):
@@ -343,17 +233,6 @@ def recency_decay_for_edge(
     return 0.5
 
 
-def _parse_pgvector(raw: Any) -> list[float]:
-    if raw is None:
-        return []
-    if isinstance(raw, (list, tuple)):
-        return [float(x) for x in raw]
-    s = str(raw).strip()
-    if s.startswith("[") and s.endswith("]"):
-        s = s[1:-1]
-    return [float(x) for x in s.split(",") if x.strip()]
-
-
 def embedding_dim_of(vec_literal: Optional[str]) -> Optional[int]:
     """Count floats in a pgvector text literal. None if missing/unparseable."""
     if not vec_literal:
@@ -386,7 +265,7 @@ def hnsw_ef_search_sql(ef: int) -> str:
     return f"SET LOCAL hnsw.ef_search = {clamp_hnsw_ef_search(ef)}"
 
 
-class Store:
+class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
     """Async data access over the pgvector + AGE schema."""
 
     def __init__(
@@ -524,16 +403,16 @@ class Store:
                         except Exception as exc:
                             try:
                                 await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                            except Exception:
+                            except asyncpg.PostgresError:
                                 pass
                             try:
                                 await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                            except Exception:
+                            except asyncpg.PostgresError:
                                 pass
                             if "already exists" not in str(exc).lower():
-                                logger.debug("ensure label %s failed", label, exc_info=True)
+                                logger.warning("ensure label %s failed", label, exc_info=True)
             except Exception:
-                logger.debug("ensure_about_labels transaction error", exc_info=True)
+                logger.warning("ensure_about_labels transaction error", exc_info=True)
 
     async def bridge_turn(self, conv_id: int, vertex_id: int) -> None:
         """Bridge a conversation Turn vertex: conv_{id} -> Turn vertex."""
@@ -552,7 +431,7 @@ class Store:
                     self.graph_name,
                 )
             except Exception:
-                logger.debug("bridge_turn failed", exc_info=True)
+                logger.warning("bridge_turn failed", exc_info=True)
 
     async def previous_conversation_id(self, session_id: str, conv_id: int) -> Optional[int]:
         async with self.pool.acquire() as conn:
@@ -816,16 +695,16 @@ class Store:
                         except Exception as exc:
                             try:
                                 await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                            except Exception:
+                            except asyncpg.PostgresError:
                                 pass
                             try:
                                 await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                            except Exception:
+                            except asyncpg.PostgresError:
                                 pass
                             if "already exists" not in str(exc).lower():
-                                logger.debug("ensure flower label %s failed", label, exc_info=True)
+                                logger.warning("ensure flower label %s failed", label, exc_info=True)
             except Exception:
-                logger.debug("ensure_flower_labels transaction error", exc_info=True)
+                logger.warning("ensure_flower_labels transaction error", exc_info=True)
 
     async def purge_verify_turns(self) -> int:
         """DETACH DELETE Turn vertices whose session_id is a C5 verify synthetic.
@@ -1068,16 +947,19 @@ class Store:
         for cid in list(chunk_ids):
             cid = str(cid)
             if cid not in seen:
-                expanded.append(cid); seen.add(cid)
+                expanded.append(cid)
+                seen.add(cid)
             # canonical numeric -> legacy mem_ alias
             if cid.isdigit():
                 alias = f"mem_{cid}"
                 if alias not in seen:
-                    expanded.append(alias); seen.add(alias)
+                    expanded.append(alias)
+                    seen.add(alias)
             elif cid.startswith("mem_") and cid[4:].isdigit():
                 canon = cid[4:]
                 if canon not in seen:
-                    expanded.append(canon); seen.add(canon)
+                    expanded.append(canon)
+                    seen.add(canon)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -1104,15 +986,18 @@ class Store:
         for cid in list(chunk_ids):
             cid = str(cid)
             if cid not in seen:
-                expanded.append(cid); seen.add(cid)
+                expanded.append(cid)
+                seen.add(cid)
             if cid.isdigit():
                 alias = f"mem_{cid}"
                 if alias not in seen:
-                    expanded.append(alias); seen.add(alias)
+                    expanded.append(alias)
+                    seen.add(alias)
             elif cid.startswith("mem_") and cid[4:].isdigit():
                 canon = cid[4:]
                 if canon not in seen:
-                    expanded.append(canon); seen.add(canon)
+                    expanded.append(canon)
+                    seen.add(canon)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -1141,769 +1026,6 @@ class Store:
         for k in list(out.keys()):
             out[k] = list(dict.fromkeys(out[k]))
         return out
-
-    # -- Conversation manifold expansion -----------------------------------------
-
-    async def expand_graph(
-        self,
-        hypotheses: Sequence[WalkHypothesis],
-        *,
-        q_vec: list[float],
-        hops: int = 2,
-        k: int = 8,
-    ) -> List[Tuple[Any, Optional[str], Any, float, float, float, float]]:
-        """Walk outgoing ``mentions`` poles for at most two bounded hops.
-
-        Each returned value is a seven-slot tuple. ``WalkRow.audit`` carries
-        the parent passport's session, turn, chunk, and selected hop beside
-        those public slots.
-        """
-        if not hypotheses or not q_vec:
-            return []
-        active = list(hypotheses)
-        if not all(isinstance(h, WalkHypothesis) for h in active):
-            return []
-
-        def _unit(vec: Sequence[float]) -> list[float]:
-            norm = math.sqrt(sum(float(x) * float(x) for x in vec))
-            if norm == 0:
-                return []
-            return [float(x) / norm for x in vec]
-
-        q_unit = _unit(q_vec)
-        if not q_unit:
-            return []
-
-        selected_rows: list[WalkRow] = []
-        max_hops = max(0, min(int(hops), 2))
-        for hop in range(1, max_hops + 1):
-            if not active:
-                break
-            if hop == 2:
-                allowed_destinations: list[int] = []
-                for hypothesis in active:
-                    if hypothesis.noun_id not in allowed_destinations:
-                        allowed_destinations.append(hypothesis.noun_id)
-                    if len(allowed_destinations) == 32:
-                        break
-                allowed = set(allowed_destinations)
-                active = [h for h in active if h.noun_id in allowed]
-
-            source_ids = list(dict.fromkeys(h.noun_id for h in active))
-            async with self.pool.acquire() as conn:
-                edge_rows = await conn.fetch(
-                    """
-                    SELECT e.id, e.src_noun, e.tgt_noun, e.e_src_vec, e.e_tgt_vec,
-                           e.magnitude, e.provenance_turns, e.last_active_turn,
-                           src.label AS src_label, tgt.label AS tgt_label
-                      FROM semantic_edge e
-                      JOIN noun src ON src.id = e.src_noun
-                      JOIN noun tgt ON tgt.id = e.tgt_noun
-                     WHERE e.src_noun = ANY($1::int[])
-                       AND e.verb_type = 'mentions'
-                    """,
-                    source_ids,
-                )
-                destination_ids = list(
-                    dict.fromkeys(int(row["tgt_noun"]) for row in edge_rows)
-                )
-                incident_rows = (
-                    await conn.fetch(
-                        """
-                        SELECT id, src_noun, tgt_noun, e_tgt_vec, last_active_turn
-                          FROM semantic_edge
-                         WHERE verb_type = 'mentions'
-                           AND (
-                               src_noun = ANY($1::int[])
-                               OR tgt_noun = ANY($1::int[])
-                           )
-                        """,
-                        destination_ids,
-                    )
-                    if destination_ids
-                    else []
-                )
-
-            outgoing: dict[int, list[Any]] = {}
-            for edge in edge_rows:
-                outgoing.setdefault(int(edge["src_noun"]), []).append(edge)
-
-            candidates: list[tuple[float, WalkRow, WalkHypothesis]] = []
-            for hypothesis in active:
-                for edge in outgoing.get(hypothesis.noun_id, []):
-                    src_vec = _parse_pgvector(edge["e_src_vec"])
-                    tgt_vec = _parse_pgvector(edge["e_tgt_vec"])
-                    src_cos = _cosine_similarity(q_unit, src_vec)
-                    tgt_cos = _cosine_similarity(q_unit, tgt_vec)
-                    if src_cos is None or tgt_cos is None:
-                        continue
-                    src_align = clamp_cos(src_cos)
-                    tgt_align = clamp_cos(tgt_cos)
-
-                    incident_vectors: list[list[float]] = []
-                    target_id = int(edge["tgt_noun"])
-                    cutoff = int(hypothesis.turn_id) - 32
-                    for other in incident_rows:
-                        if int(other["id"]) == int(edge["id"]):
-                            continue
-                        if target_id not in (
-                            int(other["src_noun"]),
-                            int(other["tgt_noun"]),
-                        ):
-                            continue
-                        last_active = other["last_active_turn"]
-                        if last_active is None or int(last_active) < cutoff:
-                            continue
-                        unit = _unit(_parse_pgvector(other["e_tgt_vec"]))
-                        if unit:
-                            incident_vectors.append(unit)
-
-                    empty_incident = not incident_vectors
-                    local_dir = query_dir = 0.0
-                    if incident_vectors:
-                        consensus = _unit(
-                            [
-                                sum(vec[i] for vec in incident_vectors)
-                                / len(incident_vectors)
-                                for i in range(len(incident_vectors[0]))
-                            ]
-                        )
-                        local_dir = _cosine_similarity(tgt_vec, consensus) or 0.0
-                        query_dir = _cosine_similarity(tgt_vec, q_unit) or 0.0
-                    decay = consensus_decay(
-                        empty_incident=empty_incident,
-                        local_dir=local_dir,
-                        query_dir=query_dir,
-                        hop=hop,
-                    )
-                    c, _composite, score = beam_score(
-                        sim=hypothesis.sim,
-                        src_align=src_align,
-                        tgt_align=tgt_align,
-                        prov_boost=provenance_boost(
-                            hypothesis.turn_id,
-                            list(edge["provenance_turns"] or []),
-                        ),
-                        decay=decay,
-                        magnitude=float(edge["magnitude"]),
-                    )
-                    if score < 0.05:
-                        continue
-
-                    audit = {
-                        "session_id": hypothesis.session_id,
-                        "turn_id": hypothesis.turn_id,
-                        "chunk_id": hypothesis.chunk_id,
-                        "hop": hop,
-                        "provenance_turns": list(edge["provenance_turns"] or []),
-                    }
-                    row = WalkRow(
-                        (
-                            {
-                                "id": str(edge["src_noun"]),
-                                "name": str(edge["src_label"]),
-                                "label": "Noun",
-                            },
-                            "mentions",
-                            {
-                                "id": str(edge["tgt_noun"]),
-                                "name": str(edge["tgt_label"]),
-                                "label": "Noun",
-                            },
-                            float(edge["magnitude"]),
-                            c,
-                            decay,
-                            score,
-                        ),
-                        audit=audit,
-                    )
-                    child = WalkHypothesis(
-                        noun_id=int(edge["tgt_noun"]),
-                        chunk_id=hypothesis.chunk_id,
-                        session_id=hypothesis.session_id,
-                        turn_id=hypothesis.turn_id,
-                        sim=hypothesis.sim,
-                        chunk_vec=hypothesis.chunk_vec,
-                    )
-                    candidates.append((score, row, child))
-
-            candidates.sort(key=lambda item: item[0], reverse=True)
-            width = max(k * 4, 16) if hop == 1 else max(k * 2, 8)
-            chosen = candidates[:width]
-            selected_rows.extend(item[1] for item in chosen)
-            active = [item[2] for item in chosen]
-
-        return selected_rows
-
-    # -- Batched MERGE (>=50 statements per transaction) ------------------------
-
-    async def merge_vertices_batched(
-        self, items: Iterable[Tuple[str, Dict[str, Any]]], batch_size: int = 50
-    ) -> List[Optional[str]]:
-        """MERGE vertices on minimal unique key {name}; batch >=50 per txn.
-
-        Each statement is SAVEPOINT-guarded so one failure never poisons the
-        batch's transaction. Returns STRINGIFIED vertex ids (None on failure).
-        """
-        results: List[Optional[str]] = []
-        items = list(items)
-        graph = self.graph_name
-
-        for start in range(0, len(items), batch_size):
-            chunk_items = items[start : start + batch_size]
-            async with self.pool.acquire() as conn:
-                await self.load_age(conn)
-                try:
-                    async with conn.transaction():
-                        for idx, (label, props) in enumerate(chunk_items):
-                            sp = _savepoint_name("merge_v", idx)
-                            await conn.execute(f"SAVEPOINT {sp}")
-                            try:
-                                name = props.get("name") or props.get("path")
-                                if not name:
-                                    results.append(None)
-                                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                                    continue
-                                key_prop = "path" if "path" in props else "name"
-                                non_key = {k: v for k, v in props.items() if k != key_prop}
-                                # AGE 1.6 has no ON CREATE SET / ON MATCH SET;
-                                # MERGE on the minimal key, then SET only mutable
-                                # props. For Concept weight/created_at we use
-                                # ON-CREATE semantics (coalesce) so accumulated
-                                # weight and original created_at are not reset.
-                                if not non_key:
-                                    cypher = (
-                                        f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}}) RETURN id(v)"
-                                    )
-                                else:
-                                    set_parts = []
-                                    for k, v in non_key.items():
-                                        if k in ("weight", "created_at"):
-                                            # preserve existing value if present
-                                            if isinstance(v, bool):
-                                                lit = str(v).lower()
-                                            elif isinstance(v, (int, float)):
-                                                lit = str(v)
-                                            else:
-                                                lit = age_str(v)
-                                            set_parts.append(f"v.{k} = coalesce(v.{k}, {lit})")
-                                        else:
-                                            if isinstance(v, bool):
-                                                lit = str(v).lower()
-                                            elif isinstance(v, (int, float)):
-                                                lit = str(v)
-                                            else:
-                                                lit = age_str(v)
-                                            set_parts.append(f"v.{k} = {lit}")
-                                    set_clause = ", ".join(set_parts)
-                                    cypher = (
-                                        f"MERGE (v:{_check_label(label)} {{{key_prop}: {age_str(name)}}})\n"
-                                        f"SET {set_clause}\n"
-                                        f"RETURN id(v)"
-                                    )
-                                row = await conn.fetchrow(
-                                    f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)"
-                                )
-                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                                if row is not None:
-                                    raw = row["id"]
-                                    vid = str(raw).strip('"')
-                                    try:
-                                        results.append(str(int(vid)))  # stringify at boundary
-                                    except ValueError:
-                                        results.append(None)
-                                else:
-                                    results.append(None)
-                            except Exception:
-                                try:
-                                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                                except Exception:
-                                    pass
-                                try:
-                                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                                except Exception:
-                                    pass
-                                logger.debug("vertex MERGE failed %s", props, exc_info=True)
-                                results.append(None)
-                except Exception:
-                    logger.warning("batch txn failed wholesale", exc_info=True)
-                    # Pad only the remainder of THIS chunk (items before the txn's
-                    # first failure may already have appended results).
-                    expected = start + len(chunk_items)
-                    if len(results) < expected:
-                        results.extend([None] * (expected - len(results)))
-        return results
-
-    async def merge_edges_batched(
-        self, edges: Iterable[Tuple[str, int, int]], batch_size: int = 50,
-        edge_props: Optional[Dict[Tuple[str,int,int], Dict[str, Any]]] = None,
-    ) -> int:
-        """MERGE edges on (start, end, label); SAVEPOINT-guarded, batched.
-
-        edge_props optional map (label,src,dst) -> {weight, cosine, ...}
-        merged via SET e += props (AGE 1.6 MERGE then SET).
-        """
-        done = 0
-        edges = list(edges)
-        graph = self.graph_name
-        for start in range(0, len(edges), batch_size):
-            chunk_edges = edges[start : start + batch_size]
-            async with self.pool.acquire() as conn:
-                await self.load_age(conn)
-                try:
-                    async with conn.transaction():
-                        for idx, (label, src, dst) in enumerate(chunk_edges):
-                            sp = _savepoint_name("merge_e", idx)
-                            await conn.execute(f"SAVEPOINT {sp}")
-                            try:
-                                props = (edge_props or {}).get((label, src, dst), {})
-                                props_str = f" SET e += {age_props(props)}" if props else ""
-                                cypher = (
-                                    f"MATCH (a), (b) WHERE id(a) = {int(src)} AND id(b) = {int(dst)} "
-                                    f"MERGE (a)-[e:{_check_label(label)}]->(b){props_str} RETURN id(e)"
-                                )
-                                row = await conn.fetchrow(
-                                    f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)"
-                                )
-                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                                if row is not None:
-                                    done += 1
-                            except Exception:
-                                try:
-                                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                                except Exception:
-                                    pass
-                                try:
-                                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                                except Exception:
-                                    pass
-                                logger.debug("edge MERGE failed", exc_info=True)
-                except Exception:
-                    logger.warning("edge batch txn failed", exc_info=True)
-        return done
-
-
-    # -- Concept compaction helpers (issue #37) ---------------------------------
-
-    async def fetch_concepts(self):
-        """Fetch all Concept vertices: id, name, weight, created_at, degree.
-
-        Returns list of dicts {id:int, name:str, weight:int, created_at:str|None, degree:int}.
-        SAVEPOINT-guarded; Concept vlabel ensured via ensure_about_labels.
-        """
-        await self.ensure_about_labels()
-        graph = self.graph_name
-        _cy_body = "MATCH (c:Concept) OPTIONAL MATCH (c)-[r]-() WITH c, count(r) AS degree RETURN id(c), c.name, c.weight, c.created_at, degree "
-        cypher = f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (id agtype, name agtype, weight agtype, created_at agtype, degree agtype)"
-        async with self.pool.acquire() as conn:
-            await self.load_age(conn)
-            sp = savepoint_name("fetch_concepts", 0)
-            rows = []
-            try:
-                async with conn.transaction():
-                    await conn.execute(f"SAVEPOINT {sp}")
-                    try:
-                        rows = await conn.fetch(cypher)
-                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                    except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                        logger.debug("fetch_concepts failed", exc_info=True)
-                        return []
-            except Exception:
-                logger.debug("fetch_concepts txn failed", exc_info=True)
-                return []
-        out = []
-        for r in rows:
-            try:
-                raw_id = r["id"]
-                vid = int(str(raw_id).strip('"'))
-                raw_name = r["name"]
-                name = str(raw_name).strip('"') if raw_name is not None else ""
-                if name == "null":
-                    name = ""
-                raw_w = r["weight"]
-                weight = 1
-                if raw_w is not None:
-                    s = str(raw_w).strip('"')
-                    if s != "null" and s != "":
-                        try:
-                            weight = int(float(s))
-                        except Exception:
-                            weight = 1
-                raw_ca = r["created_at"]
-                ca = None
-                if raw_ca is not None:
-                    s = str(raw_ca).strip('"')
-                    if s != "null" and s != "":
-                        ca = s
-                raw_deg = r["degree"]
-                degree = 0
-                if raw_deg is not None:
-                    try:
-                        degree = int(str(raw_deg).strip('"'))
-                    except Exception:
-                        degree = 0
-                out.append({"id": vid, "name": name, "weight": weight, "created_at": ca, "degree": degree})
-            except Exception:
-                continue
-        return out
-
-    async def fetch_concept_names(self) -> list[str]:
-        """Names only — no degree walk. Used as ABOUT hub candidates."""
-        graph = self.graph_name
-        _cy_body = "MATCH (c:Concept) RETURN c.name "
-        cypher = f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (name agtype)"
-        async with self.pool.acquire() as conn:
-            await self.load_age(conn)
-            sp = savepoint_name("fetch_cnames", 0)
-            try:
-                async with conn.transaction():
-                    await conn.execute(f"SAVEPOINT {sp}")
-                    try:
-                        rows = await conn.fetch(cypher)
-                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                    except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                        return []
-            except Exception:
-                return []
-        names: list[str] = []
-        for r in rows:
-            raw = r["name"]
-            name = str(raw).strip('"') if raw is not None else ""
-            if name and name != "null":
-                names.append(name)
-        return names
-
-    async def fetch_concept_id_names(self) -> list[tuple[int, str]]:
-        """id + name for Concept verts. No degree walk."""
-        graph = self.graph_name
-        _cy_body = "MATCH (c:Concept) RETURN id(c), c.name "
-        cypher = f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (id agtype, name agtype)"
-        async with self.pool.acquire() as conn:
-            await self.load_age(conn)
-            sp = savepoint_name("fetch_cids", 0)
-            try:
-                async with conn.transaction():
-                    await conn.execute(f"SAVEPOINT {sp}")
-                    try:
-                        rows = await conn.fetch(cypher)
-                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                    except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                        return []
-            except Exception:
-                return []
-        out: list[tuple[int, str]] = []
-        for r in rows:
-            try:
-                vid = int(str(r["id"]).strip('"'))
-            except Exception:
-                continue
-            raw = r["name"]
-            name = str(raw).strip('"') if raw is not None else ""
-            if name == "null":
-                name = ""
-            out.append((vid, name))
-        return out
-
-    async def purge_concept_ids(self, vids: Sequence[int]) -> int:
-        """DETACH DELETE Concept vertices by AGE id. SAVEPOINT per delete."""
-        if not vids:
-            return 0
-        graph = self.graph_name
-        deleted = 0
-        async with self.pool.acquire() as conn:
-            await self.load_age(conn)
-            try:
-                async with conn.transaction():
-                    for i, vid in enumerate(vids):
-                        sp = savepoint_name("purge_c", i)
-                        await conn.execute(f"SAVEPOINT {sp}")
-                        try:
-                            _cy_body = f"MATCH (c:Concept) WHERE id(c) = {int(vid)} DETACH DELETE c RETURN 1 "
-                            await conn.execute(
-                                f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (ok agtype)"
-                            )
-                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                            deleted += 1
-                        except Exception:
-                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-            except Exception:
-                logger.debug("purge_concept_ids txn failed", exc_info=True)
-        return deleted
-
-    async def find_orphan_concept_ids(self, days: int = 7):
-        """Prune candidates: Concept degree==0 and older than days (created_at).
-
-        If created_at missing, node is not considered orphan (conservative).
-        """
-        import datetime
-        concepts = await self.fetch_concepts()
-        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
-        orphans = []
-        for c in concepts:
-            if c.get("degree", 0) != 0:
-                continue
-            ca = c.get("created_at")
-            if not ca:
-                continue
-            try:
-                iso = ca.replace("Z", "+00:00") if isinstance(ca, str) else ca
-                dt = datetime.datetime.fromisoformat(iso)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=datetime.timezone.utc)
-                if dt < cutoff:
-                    orphans.append(int(c["id"]))
-            except Exception:
-                continue
-        return orphans
-
-    async def merge_concept_pair(self, keeper_id: int, loser_id: int):
-        """SAVEPOINT-guarded merge of a near-duplicate Concept pair.
-
-        - Ensures Concept vlabel exists (no ad-hoc labels).
-        - Rewires all incident edges from loser -> keeper (MERGE + SET props).
-        - Updates keeper weight as sum (numeric bare literal via age_props).
-        - Moves bridge rows vertex_id loser->keeper.
-        - DETACH DELETE loser.
-        Returns True on success.
-        """
-        if int(keeper_id) == int(loser_id):
-            return False
-        await self.ensure_about_labels()
-        graph = self.graph_name
-        keeper_id = int(keeper_id)
-        loser_id = int(loser_id)
-        async with self.pool.acquire() as conn:
-            await self.load_age(conn)
-            try:
-                async with conn.transaction():
-                    await conn.execute("SELECT pg_advisory_xact_lock($1)", loser_id)
-                    sp_fetch = savepoint_name("merge_fetch", 0)
-                    await conn.execute(f"SAVEPOINT {sp_fetch}")
-                    try:
-                        edge_rows = await conn.fetch(
-                            f"SELECT * FROM {cypher_call(graph, f'MATCH (loser:Concept) WHERE id(loser) = {loser_id} MATCH (loser)-[r]->(m) RETURN type(r), id(m), r.weight, r.cosine ')} AS (t agtype, mid agtype, w agtype, c agtype)"
-                        )
-                        in_rows = await conn.fetch(
-                            f"SELECT * FROM {cypher_call(graph, f'MATCH (loser:Concept) WHERE id(loser) = {loser_id} MATCH (n)-[r]->(loser) RETURN type(r), id(n), r.weight, r.cosine ')} AS (t agtype, nid agtype, w agtype, c agtype)"
-                        )
-                        wrow = await conn.fetchrow(
-                            f"SELECT * FROM {cypher_call(graph, f'MATCH (k:Concept) WHERE id(k) = {keeper_id} RETURN k.weight ')} AS (w agtype)"
-                        )
-                        lrow = await conn.fetchrow(
-                            f"SELECT * FROM {cypher_call(graph, f'MATCH (l:Concept) WHERE id(l) = {loser_id} RETURN l.weight ')} AS (w agtype)"
-                        )
-                        await conn.execute(f"RELEASE SAVEPOINT {sp_fetch}")
-                    except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_fetch}")
-                        logger.debug("merge_concept_pair fetch failed", exc_info=True)
-                        return False
-
-                    def _parse_weight(raw):
-                        if raw is None or str(raw).strip('"') == "null":
-                            return 1
-                        try:
-                            s = str(raw).strip('"')
-                            return int(float(s)) if s else 1
-                        except Exception:
-                            return 1
-
-                    keeper_w = _parse_weight(wrow["w"] if wrow else None)
-                    loser_w = _parse_weight(lrow["w"] if lrow else None)
-                    new_weight = int(keeper_w + loser_w)
-
-                    for idx, er in enumerate(edge_rows):
-                        sp = savepoint_name("merge_out", idx)
-                        await conn.execute(f"SAVEPOINT {sp}")
-                        try:
-                            label = str(er["t"]).strip('"')
-                            check_label(label)
-                            mid = int(str(er["mid"]).strip('"'))
-                            props = {}
-                            rw = er["w"]
-                            rc = er["c"]
-                            if rw is not None and str(rw).strip('"') != "null":
-                                try:
-                                    props["weight"] = float(str(rw).strip('"'))
-                                except Exception:
-                                    pass
-                            if rc is not None and str(rc).strip('"') != "null":
-                                try:
-                                    props["cosine"] = float(str(rc).strip('"'))
-                                except Exception:
-                                    pass
-                            set_parts = []
-                            if "weight" in props:
-                                set_parts.append(f"e.weight = CASE WHEN e.weight IS NULL OR e.weight < {float(props['weight'])} THEN {float(props['weight'])} ELSE e.weight END")
-                            if "cosine" in props:
-                                set_parts.append(f"e.cosine = CASE WHEN e.cosine IS NULL OR e.cosine < {float(props['cosine'])} THEN {float(props['cosine'])} ELSE e.cosine END")
-                            props_str = (" SET " + ", ".join(set_parts)) if set_parts else ""
-                            cypher = (
-                                f"MATCH (a), (b) WHERE id(a) = {keeper_id} AND id(b) = {mid} "
-                                f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
-                            )
-                            await conn.fetchrow(f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)")
-                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                        except Exception:
-                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                            logger.debug("merge outgoing edge failed", exc_info=True)
-                            raise
-                    for idx, er in enumerate(in_rows):
-                        sp = savepoint_name("merge_in", idx)
-                        await conn.execute(f"SAVEPOINT {sp}")
-                        try:
-                            label = str(er["t"]).strip('"')
-                            check_label(label)
-                            nid = int(str(er["nid"]).strip('"'))
-                            props = {}
-                            rw = er["w"]
-                            rc = er["c"]
-                            if rw is not None and str(rw).strip('"') != "null":
-                                try:
-                                    props["weight"] = float(str(rw).strip('"'))
-                                except Exception:
-                                    pass
-                            if rc is not None and str(rc).strip('"') != "null":
-                                try:
-                                    props["cosine"] = float(str(rc).strip('"'))
-                                except Exception:
-                                    pass
-                            set_parts = []
-                            if "weight" in props:
-                                set_parts.append(f"e.weight = CASE WHEN e.weight IS NULL OR e.weight < {float(props['weight'])} THEN {float(props['weight'])} ELSE e.weight END")
-                            if "cosine" in props:
-                                set_parts.append(f"e.cosine = CASE WHEN e.cosine IS NULL OR e.cosine < {float(props['cosine'])} THEN {float(props['cosine'])} ELSE e.cosine END")
-                            props_str = (" SET " + ", ".join(set_parts)) if set_parts else ""
-                            cypher = (
-                                f"MATCH (a), (b) WHERE id(a) = {nid} AND id(b) = {keeper_id} "
-                                f"MERGE (a)-[e:{label}]->(b){props_str} RETURN id(e)"
-                            )
-                            await conn.fetchrow(f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)")
-                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                        except Exception:
-                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                            logger.debug("merge incoming edge failed", exc_info=True)
-                            raise
-
-                    sp_w = savepoint_name("merge_weight", 0)
-                    await conn.execute(f"SAVEPOINT {sp_w}")
-                    try:
-                        cypher = f"MATCH (k:Concept) WHERE id(k) = {keeper_id} SET k += {age_props({'weight': new_weight})} RETURN id(k)"
-                        await conn.fetchrow(f"SELECT * FROM {cypher_call(graph, cypher)} AS (id agtype)")
-                        await conn.execute(f"RELEASE SAVEPOINT {sp_w}")
-                    except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_w}")
-                        logger.debug("merge weight update failed", exc_info=True)
-                        raise
-
-                    sp_bridge = savepoint_name("merge_bridge", 0)
-                    await conn.execute(f"SAVEPOINT {sp_bridge}")
-                    try:
-                        await conn.execute(
-                            "DELETE FROM memory_chunk_nodes WHERE graph_name = $1 AND vertex_id = $2 "
-                            "AND (chunk_id, source) IN (SELECT chunk_id, source FROM memory_chunk_nodes WHERE vertex_id = $3 AND graph_name = $1)",
-                            self.graph_name, keeper_id, loser_id,
-                        )
-                        await conn.execute(
-                            "UPDATE memory_chunk_nodes SET vertex_id = $1 WHERE vertex_id = $2 AND graph_name = $3",
-                            keeper_id, loser_id, self.graph_name,
-                        )
-                        await conn.execute(
-                            "DELETE FROM memory_chunk_nodes a USING memory_chunk_nodes b "
-                            "WHERE a.ctid < b.ctid AND a.chunk_id=b.chunk_id AND a.source=b.source AND a.vertex_id=b.vertex_id AND a.graph_name=b.graph_name"
-                        )
-                        await conn.execute(f"RELEASE SAVEPOINT {sp_bridge}")
-                    except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_bridge}")
-                        logger.debug("bridge merge failed", exc_info=True)
-                        raise
-
-                    sp_del = savepoint_name("merge_delete", 0)
-                    await conn.execute(f"SAVEPOINT {sp_del}")
-                    try:
-                        await conn.fetch(
-                            f"SELECT * FROM {cypher_call(graph, f'MATCH (c:Concept) WHERE id(c) = {loser_id} DETACH DELETE c ')} AS (a agtype)"
-                        )
-                        await conn.execute(f"RELEASE SAVEPOINT {sp_del}")
-                    except Exception:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_del}")
-                        logger.debug("loser DETACH DELETE failed", exc_info=True)
-                        return False
-            except Exception:
-                logger.debug("merge_concept_pair transaction failed", exc_info=True)
-                return False
-        return True
-
-    async def prune_orphan_concepts(self, orphan_ids):
-        """SAVEPOINT-guarded DETACH DELETE for orphan Concept vertices + bridge cleanup.
-
-        Revalidates degree==0 and age cutoff inside the same transaction (no new edges).
-        Bridge cleanup is graph_name-scoped. Each delete in its own SAVEPOINT.
-        Returns count of pruned vertices.
-        """
-        if not orphan_ids:
-            return 0
-        await self.ensure_about_labels()
-        graph = self.graph_name
-        import datetime as _dt
-        cutoff_iso = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).isoformat()
-        pruned = 0
-        async with self.pool.acquire() as conn:
-            await self.load_age(conn)
-            try:
-                async with conn.transaction():
-                    for idx, oid in enumerate(orphan_ids):
-                        oid = int(oid)
-                        await conn.execute("SELECT pg_advisory_xact_lock($1)", oid)
-                        sp = savepoint_name("prune_orphan", idx)
-                        await conn.execute(f"SAVEPOINT {sp}")
-                        try:
-                            # Revalidate: degree==0 and created_at older than cutoff, locked
-                            _cy_body = f"MATCH (c:Concept) WHERE id(c) = {oid} OPTIONAL MATCH (c)-[r]-() WITH c, count(r) AS degree WHERE degree = 0 AND c.created_at IS NOT NULL AND c.created_at < {age_str(cutoff_iso)} RETURN id(c) "
-                            rows = await conn.fetch(
-                                f"SELECT * FROM {cypher_call(graph, _cy_body)} AS (id agtype)"
-                            )
-                            if not rows:
-                                await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                                continue
-                            await conn.fetch(
-                                f"SELECT * FROM {cypher_call(graph, f'MATCH (c:Concept) WHERE id(c) = {oid} DETACH DELETE c ')} AS (a agtype)"
-                            )
-                            await conn.execute("DELETE FROM memory_chunk_nodes WHERE vertex_id = $1 AND graph_name = $2", oid, self.graph_name)
-                            await conn.execute(f"RELEASE SAVEPOINT {sp}")
-                            pruned += 1
-                        except Exception:
-                            await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
-                            logger.debug("prune orphan %s failed", oid, exc_info=True)
-            except Exception:
-                logger.debug("prune_orphan_concepts txn failed", exc_info=True)
-        return pruned
-
-    async def preview_concept_compaction(self, pairs, orphan_ids):
-        """Dry-run preview: pairs, orphans, bridge rows affected (no writes)."""
-        bridge_affected = 0
-        if pairs or orphan_ids:
-            all_loser_ids = [int(l) for _, l, _ in pairs] + [int(o) for o in orphan_ids]
-            if all_loser_ids:
-                async with self.pool.acquire() as conn:
-                    try:
-                        bridge_affected = await conn.fetchval(
-                            "SELECT count(*) FROM memory_chunk_nodes WHERE vertex_id = ANY($1::bigint[]) AND graph_name = $2",
-                            all_loser_ids, self.graph_name,
-                        )
-                        bridge_affected = int(bridge_affected or 0)
-                    except Exception:
-                        bridge_affected = 0
-        return {
-            "pairs": [{"keeper": int(k), "loser": int(l), "cosine": float(c)} for k, l, c in pairs],
-            "orphans": [int(o) for o in orphan_ids],
-            "bridge_rows_affected": int(bridge_affected),
-        }
-
-    # -- Graph admin — injection-safe via identifier quoting ------------------
-    # -- Graph admin — injection-safe via identifier quoting ------------------
 
     async def drop_graph(self, graph_name: str | None = None) -> None:
         """Drop an AGE graph safely (identifier-quoted, no f-string injection).

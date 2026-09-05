@@ -1,7 +1,7 @@
-"""Integration smoke test — full verify pipeline against a live compose stack.
+"""Integration smoke — verify CLI + bridge symmetry against a live Postgres.
 
-Runs only under the ``integration`` marker; skips when Docker is unavailable
-or the stack can't be brought up. Uses the C2 compose project (port 5450).
+Prefers ``HYBRID_AGE_DSN`` (CI uses hermes_test on 5432). Locally, if that
+env is unset, brings up docker compose on 5450 when Docker is available.
 """
 from __future__ import annotations
 
@@ -15,30 +15,30 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        shutil.which("docker") is None, reason="docker not available"
-    ),
-]
+pytestmark = pytest.mark.integration
+
+_DEFAULT_COMPOSE_DSN = (
+    f"postgres://hermes:{os.environ.get('HERMES_PG_PASSWORD', 'ci-local-password')}"
+    "@localhost:5450/hermes_memory"
+)
 
 
 def _compose(*args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    if "HERMES_PG_PASSWORD" not in env:
-        env["HERMES_PG_PASSWORD"] = "ci-local-password"
+    env.setdefault("HERMES_PG_PASSWORD", "ci-local-password")
     return subprocess.run(
         ["docker", "compose", "-f", str(REPO_ROOT / "docker-compose.yml"), *args],
-        capture_output=True, text=True, timeout=600, env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
         cwd=str(REPO_ROOT),
     )
 
 
 def _stack_up() -> bool:
-    """Bring the compose stack up healthy; True on success."""
     if _compose("up", "-d", "--wait", "--wait-timeout", "120").returncode != 0:
         return False
-    # port probe
     try:
         with socket.create_connection(("127.0.0.1", 5450), timeout=5):
             return True
@@ -46,23 +46,43 @@ def _stack_up() -> bool:
         return False
 
 
+def _can_connect(dsn: str) -> bool:
+    try:
+        import asyncio
+
+        import asyncpg
+
+        async def _probe() -> None:
+            conn = await asyncpg.connect(dsn, timeout=5)
+            await conn.close()
+
+        asyncio.run(_probe())
+        return True
+    except Exception:
+        return False
+
+
 @pytest.fixture(scope="module")
-def live_stack():
+def live_dsn() -> str:
+    env_dsn = os.environ.get("HYBRID_AGE_DSN")
+    if env_dsn and _can_connect(env_dsn):
+        return env_dsn
+    if shutil.which("docker") is None:
+        pytest.skip("HYBRID_AGE_DSN unreachable and docker not available")
     if not _stack_up():
         pytest.skip("compose stack unavailable")
-    yield
-    # leave the stack running between module tests; teardown handled by -v down
+    return _DEFAULT_COMPOSE_DSN
 
 
-def test_verify_pipeline(live_stack):
-    """The verify CLI passes end-to-end against the live stack."""
+def test_verify_pipeline(live_dsn: str) -> None:
+    """The verify CLI passes end-to-end against the reachable DSN."""
     from hermes_memory.verify import main as verify_main
 
-    rc = verify_main([])
-    assert rc == 0, "verify.py failed against live compose stack"
+    rc = verify_main(["--dsn", live_dsn])
+    assert rc == 0, "verify.py failed against the live database"
 
 
-def test_bridge_symmetry(live_stack):
+def test_bridge_symmetry(live_dsn: str) -> None:
     """P8 integration twin: bridge insert/delete is symmetric."""
     import asyncio
 
@@ -70,21 +90,28 @@ def test_bridge_symmetry(live_stack):
 
     from hermes_memory.store import Store
 
-    dsn = os.environ.get("HYBRID_AGE_DSN",
-                         f"postgres://hermes:{os.environ.get('HERMES_PG_PASSWORD', 'ci-local-password')}@localhost:5450/hermes_memory")
-
-    async def run():
-        conn = await asyncpg.connect(dsn)
+    async def run() -> None:
+        conn = await asyncpg.connect(live_dsn)
         try:
+
             class _PoolShim:
                 """Minimal pool stand-in: acquire() returns an async CM."""
-                def __init__(self, c): self._c = c
+
+                def __init__(self, c):
+                    self._c = c
+
                 def acquire(self):
                     c = self._c
+
                     class _A:
-                        async def __aenter__(self): return c
-                        async def __aexit__(self, *a): return False
+                        async def __aenter__(self):
+                            return c
+
+                        async def __aexit__(self, *a):
+                            return False
+
                     return _A()
+
             store = Store(_PoolShim(conn), graph_name="hermes_knowledge")
             await conn.execute(
                 """

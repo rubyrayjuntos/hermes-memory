@@ -13,7 +13,6 @@ from hermes_memory.provider import (
 from hermes_memory.store import Store, clamp_hnsw_ef_search, embedding_dim_of, hnsw_ef_search_sql
 from hermes_memory.tokens import count_tokens, injection_token_cap
 
-
 GOSP_DENSE = (
     "MENTIONS EMA e_tgt_vec passport provenance_turns chunk_id conv_41 noun_id "
     "MERGE SET LOCAL hnsw.ef_search beam_score src_align tgt_align "

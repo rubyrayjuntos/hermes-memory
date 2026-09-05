@@ -58,8 +58,9 @@ Schema changes follow [plan §3.3](docs/plans/v0.1.md):
   the SET map.
 - Batch MERGEs (≥50/txn).
 - Vertex IDs crossing into JS/UI must be stringified (bigint precision).
-- New DDL goes in `sql/init/` or a migration script under `sql/`; build HNSW
-  indexes after bulk load, not before.
+- New DDL is `sql/migrations/V*.sql` (idempotent: `IF NOT EXISTS`, advisory
+  locks, `CREATE OR REPLACE`). `sql/init/` is first-boot compose only — do not
+  put live schema there. Build HNSW indexes after bulk load, not before.
 
 ## Project Structure
 
@@ -73,7 +74,8 @@ Schema changes follow [plan §3.3](docs/plans/v0.1.md):
 | `src/hermes_memory/ingest.py` | Doc/codebase indexing CLI |
 | `src/hermes_memory/verify.py` | Pipeline smoke-check CLI |
 | `docker/Dockerfile`, `docker-compose.yml` | AGE PG17 1.6 + pgvector stack on 127.0.0.1:5450 |
-| `sql/init/*.sql` | Extensions, schema, indexes (first-boot init) |
+| `sql/migrations/V*.sql` | Live schema (idempotent); provider/ingest/pane apply then `require_schema_head` |
+| `sql/init/*.sql` | First-boot compose only (extensions, base schema, indexes) |
 | `legacy/scripts/graph_*.py` | v0.2-scope extraction prototypes — not shipped |
 | `docs/` | Architecture deep dive, AGE quirks, plans |
 

@@ -10,8 +10,11 @@ Tested against Hermes Agent v0.20.x.
 | Config | `config.py` | Resolution order: config.yaml `hybrid_age:` block > env vars > defaults |
 | Setup schema | `config_schema.py` | Drives `hermes memory setup hybrid-age` |
 | Embeddings | `embed.py` | OpenAI-compatible client (Ollama `nomic-embed-text`, 768-dim invariant; returns None on failure, never a wrong-dim vector) |
-| Store | `store.py` | SQL/Cypher data access — every Cypher statement inside a SAVEPOINT |
-| Ingest | `ingest.py` | Codebase indexing: hash → chunk → embed → pgvector + AGE graph + bridge rows |
+| Store | `store.py` (+ mixins) | SQL/Cypher data access — every Cypher statement inside a SAVEPOINT |
+| Nouns | `extract_nouns.py` | Live conversation mention extractor (P3/P4) |
+| ABOUT (legacy) | `about_concepts.py` | Title-Case cosine linker — backfill / tests only |
+| Ingest | `ingest.py` | Codebase indexing after migrate + `Store.require_schema_head` |
+| Viz API | `graph_runtime.py` + `graph_http.py` + `graph_server.py` | Live inspector on `:7890` |
 | Verify | `verify.py` | End-to-end pipeline smoke-check CLI |
 
 Postgres objects (created by `sql/init/*.sql` on first compose boot):
@@ -19,7 +22,8 @@ Postgres objects (created by `sql/init/*.sql` on first compose boot):
 `memory_chunk_nodes`, `librarian_runs(+events)`, `schema_migrations`, plus the
 AGE graph `hermes_knowledge` with extractor-ready labels. Extractor columns
 (`processed_at`, `relations_processed_at`, `processing_attempts`, `last_error`)
-exist now so v0.2 extraction lands schema-free.
+exist now so later extractors can land schema-free. Live conversation writes
+use `extract_nouns` + flower/mentions, not the legacy ABOUT cosine path.
 
 ## Write Path
 
@@ -38,15 +42,32 @@ Background drain task on a dedicated asyncio loop thread
     │   768-dim vector → pgvector literal
     │
     └─► INSERT INTO conversations / memory_entries
+            │
+            ├─► Session/Turn flower MERGE
+            ├─► extract_nouns + noun passports
+            └─► SQL mentions chain (GRAPH_DEGRADED if AGE/manifold fail)
 ```
 
 Key points:
 - Non-blocking: writes go to an `asyncio.Queue(maxsize=256)`; drops are counted,
-  never block the agent loop.
+  never block the agent loop. Drain records `WriteOutcome` on a process-local
+  ledger (in-process counters, not Postgres — a restart zeros them).
 - Methods accept `**kwargs` (Hermes adds kwargs regularly); writes only when
   `agent_context == "primary"`.
 - Secrets filtered via regex before embedding/write.
 - `shutdown()` drains the queue ≤5s and closes the pool.
+
+Write-outcome layers (L0–L6):
+
+| Layer | Functions | Swallow? | Outcome |
+|-------|-----------|----------|---------|
+| L0 | Hermes `prefetch`, `sync_turn`, `on_memory_write` | Yes — never raise | prefetch `""` + `logger.exception`; writes enqueue or `DROPPED` |
+| L1 | Durable SQL `insert_turn`, memory upsert/replace/remove | Catch once in drain | `Kind.FAILED`, `logger.error` |
+| L2 | Embed (`embed_text`, turn embed) | Yes — NULL vector is first-class | `Kind.EMBED_NULL`, `logger.warning`, still insert SQL |
+| L3 | Graph flower / nouns / mentions | Yes after SQL turn (B) | `Kind.GRAPH_DEGRADED`, `logger.warning` |
+| L4 | SAVEPOINT MERGE helpers | Yes, savepoint only | `logger.warning` (not debug) with label/edge class |
+| L5 | Teardown: shutdown, pane embedder, ghost, taxonomy backfill | Yes | debug or warning; do **not** increment write `FAILED` |
+| L6 | `require_schema_head`, bind host | No | raise |
 
 ## Recall Path
 
@@ -71,7 +92,8 @@ Read from pre-warmed cache (queue_prefetch fills it off-thread)
 Key points:
 - Target <2s warm; Hermes hard-kills prefetch at 8s. On any failure prefetch
   returns `""` — it never raises.
-- Graph edges weighted by repetition frequency.
+- Graph expansion scores SQL `mentions` via `beam_score × magnitude`
+  (`store_expand` / `walk`), not AGE ABOUT `created_at`.
 
 ## Ingest Path
 

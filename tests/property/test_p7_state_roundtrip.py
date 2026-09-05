@@ -4,13 +4,10 @@ Also covers chunk_text losslessness (the P-surface C4 flagged).
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-
 from strategies import any_text  # noqa: E402
 
 from hermes_memory.ingest import (  # noqa: E402
@@ -25,7 +22,7 @@ from hermes_memory.ingest import (  # noqa: E402
 @settings(max_examples=100)
 @given(st.data(), any_text)
 def test_p7_file_hash_stable(data, content):
-    tmp = data.draw(st.just(None))
+    data.draw(st.just(None))
     import tempfile
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:

@@ -18,7 +18,7 @@ environment variables named by ``dsn_env`` / ``embed_url_env``.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 DEFAULT_DSN_ENV = "HYBRID_AGE_DSN"

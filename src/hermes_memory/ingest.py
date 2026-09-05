@@ -32,7 +32,8 @@ import asyncpg
 
 from .config import HybridAgeConfig, load_config
 from .embed import Embedder, vec_to_literal
-from .store import validate_graph_name
+from .schema_guard import apply_pending_migrations
+from .store import Store, validate_graph_name
 
 logger = logging.getLogger("hybrid_age.ingest")
 
@@ -327,52 +328,61 @@ class Ingestor:
         if '{pg_password}' in dsn or '***' in dsn:
             dsn = dsn.replace('{pg_password}', os.environ.get('HERMES_PG_PASSWORD', ''))
             dsn = dsn.replace('***', os.environ.get('HERMES_PG_PASSWORD', ''))
-        conn = await asyncpg.connect(dsn)
+        await asyncio.to_thread(apply_pending_migrations, dsn)
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
         try:
-            await conn.execute("LOAD 'age';")
-            await conn.execute("SET search_path = ag_catalog, public;")
-            # Backfill taxonomy for existing installs where ingest state caused
-            # files with null doc_type/hash/indexed_at to be skipped forever
-            # (Codex P1: reindex unchanged files when enriching metadata).
-            # This repairs rows in-place so healthy:false heals on next run
-            # without requiring file changes or state deletion.
-            try:
-                await conn.execute("""
-                    UPDATE memory_entries
-                       SET metadata = metadata
-                         || jsonb_build_object('doc_type',
-                              CASE
-                                WHEN metadata->>'language' = 'Documentation' THEN 'architecture_decision'
-                                WHEN metadata->>'language' IN ('SQL','Config') THEN 'standard_operating_procedure'
-                                ELSE 'api_reference'
-                              END)
-                         || jsonb_build_object('hash', COALESCE(metadata->>'hash', md5(content)))
-                         || jsonb_build_object('indexed_at', COALESCE(metadata->>'indexed_at', now()::text))
-                         || jsonb_build_object('language', COALESCE(metadata->>'language','Text'))
-                     WHERE metadata->>'file_path' IS NOT NULL
-                       AND (metadata->>'doc_type' IS NULL OR metadata->>'hash' IS NULL OR metadata->>'indexed_at' IS NULL)
-                """)
-            except Exception:
-                logger.debug("taxonomy backfill skipped", exc_info=True)
-            if diff.deleted:
-                await self._prune_deleted(conn, str(codebase), diff.deleted)
-            # State must contain only successfully-indexed files so that a
-            # failed file is retried on the next run: start from the skipped
-            # (unchanged) files and add each file only after it indexes clean.
-            current: Dict[str, str] = {rel: diff.current[rel]
-                                       for rel in diff.skipped}
-            for path, rel, lang, digest in diff.changed:
+            store = Store(
+                pool,
+                graph_name=self.config.graph,
+                embed_model=self.config.embed_model,
+                embed_dim=self.config.embed_dim,
+                hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
+            )
+            await store.require_schema_head()
+            async with pool.acquire() as conn:
+                await store.load_age(conn)
+                # Backfill taxonomy for existing installs where ingest state caused
+                # files with null doc_type/hash/indexed_at to be skipped forever
+                # (Codex P1: reindex unchanged files when enriching metadata).
+                # This repairs rows in-place so healthy:false heals on next run
+                # without requiring file changes or state deletion.
                 try:
-                    await self._index_file(conn, codebase, path, rel,
-                                           lang, digest)
-                    current[rel] = digest
+                    await conn.execute("""
+                        UPDATE memory_entries
+                           SET metadata = metadata
+                             || jsonb_build_object('doc_type',
+                                  CASE
+                                    WHEN metadata->>'language' = 'Documentation' THEN 'architecture_decision'
+                                    WHEN metadata->>'language' IN ('SQL','Config') THEN 'standard_operating_procedure'
+                                    ELSE 'api_reference'
+                                  END)
+                             || jsonb_build_object('hash', COALESCE(metadata->>'hash', md5(content)))
+                             || jsonb_build_object('indexed_at', COALESCE(metadata->>'indexed_at', now()::text))
+                             || jsonb_build_object('language', COALESCE(metadata->>'language','Text'))
+                         WHERE metadata->>'file_path' IS NOT NULL
+                           AND (metadata->>'doc_type' IS NULL OR metadata->>'hash' IS NULL OR metadata->>'indexed_at' IS NULL)
+                    """)
                 except Exception:
-                    # Failed files stay out of saved state so the next run
-                    # retries them; other files are still indexed & saved.
-                    logger.warning("indexing failed for %s", rel, exc_info=True)
-            save_state(self.state_file, current)
+                    logger.debug("taxonomy backfill skipped", exc_info=True)
+                if diff.deleted:
+                    await self._prune_deleted(conn, str(codebase), diff.deleted)
+                # State must contain only successfully-indexed files so that a
+                # failed file is retried on the next run: start from the skipped
+                # (unchanged) files and add each file only after it indexes clean.
+                current: Dict[str, str] = {rel: diff.current[rel]
+                                           for rel in diff.skipped}
+                for path, rel, lang, digest in diff.changed:
+                    try:
+                        await self._index_file(conn, codebase, path, rel,
+                                               lang, digest)
+                        current[rel] = digest
+                    except Exception:
+                        # Failed files stay out of saved state so the next run
+                        # retries them; other files are still indexed & saved.
+                        logger.warning("indexing failed for %s", rel, exc_info=True)
+                save_state(self.state_file, current)
         finally:
-            await conn.close()
+            await pool.close()
         return self.stats
 
     # -- deletion -----------------------------------------------------------
@@ -563,7 +573,6 @@ class Ingestor:
             logger.warning("memory_entries write failed for %s", rel, exc_info=True)
 
         # -- L3 graph: File / Module / Dependency + IMPORTS ---------------------
-        from .store import age_str  # local import avoids cycle noise
 
         merge_items: List[Tuple[str, Dict[str, Any]]] = [("File", {"path": rel})]
         mod_name = module_for(rel)
@@ -638,7 +647,7 @@ class Ingestor:
                                 f"MERGE (v:{check_label(label)} "
                                 f"{{{key_prop}: {age_str(props[key_prop])}}})\n"
                                 + (f"SET v += {sets}\n" if sets != "{}" else "")
-                                + f"RETURN id(v)"
+                                + "RETURN id(v)"
                             )
                             row = await conn.fetchrow(
                                 f"SELECT * FROM {cypher_call(graph, cy)} AS (id agtype)")
@@ -656,7 +665,7 @@ class Ingestor:
                                 pass
                             results.append(None)
                             self.stats.errors += 1
-                            logger.debug("vertex MERGE failed %s", props, exc_info=True)
+                            logger.warning("vertex MERGE failed %s", props, exc_info=True)
             except Exception:
                 expected = start + len(batch)
                 while len(results) < expected:

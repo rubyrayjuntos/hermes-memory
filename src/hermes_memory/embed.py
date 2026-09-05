@@ -33,7 +33,7 @@ class Embedder:
             resp = await self.client.embeddings.create(model=self.model, input=text)
             vec = resp.data[0].embedding
         except Exception:
-            logger.debug("embed failed", exc_info=True)
+            logger.warning("embed failed", exc_info=True)
             return None
         if not vec or len(vec) != self.dim:
             logger.warning(

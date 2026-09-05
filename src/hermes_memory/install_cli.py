@@ -3,11 +3,11 @@
 
 import argparse
 import os
-import time
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

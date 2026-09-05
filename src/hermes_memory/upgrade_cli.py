@@ -2,7 +2,6 @@
 """hermes-memory-upgrade — Upgrade CLI for Hermes Librarian."""
 
 import argparse
-import re
 import shutil
 import subprocess
 import sys

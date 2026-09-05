@@ -207,3 +207,29 @@ async def test_prefetch_injects_provenance_turn_body_not_cypher() -> None:
     assert "w=5.80" not in block
     assert "[SEED V" not in block
 
+
+def test_initialize_failed_ainit_leaves_uninitialized() -> None:
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    provider = HybridAgeMemoryProvider(
+        config=HybridAgeConfig(dsn="postgres://hermes@localhost/none"),
+    )
+
+    def boom(coro, timeout=3.0):
+        del timeout
+        coro.close()
+        raise TimeoutError("db unreachable")
+
+    provider._run = boom  # type: ignore[method-assign]
+    provider.initialize("sess-1")
+
+    assert provider._initialized is False
+    assert provider.store is None
+    assert provider.pool is None
+    assert provider._loop is None
+    assert provider.embedder is None
+
+    provider.initialize("sess-2")
+    assert provider._initialized is False
+

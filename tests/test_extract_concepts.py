@@ -1,5 +1,12 @@
 """Concept identity: no single-word hubs, slug snap."""
-from hermes_memory.provider import SNAP_COSINE, _extract_concepts, _slug, is_one_word_concept
+from hermes_memory.about_concepts import AboutConceptLinker
+from hermes_memory.provider import (
+    SNAP_COSINE,
+    HybridAgeMemoryProvider,
+    _extract_concepts,
+    _slug,
+    is_one_word_concept,
+)
 
 
 def test_extract_drops_single_word_fallback():
@@ -24,3 +31,7 @@ def test_is_one_word_concept():
     assert is_one_word_concept("Zephyr") is False
     assert is_one_word_concept("Atlas") is False
     assert is_one_word_concept("") is False
+
+
+def test_provider_mro_excludes_about_concept_linker():
+    assert AboutConceptLinker not in HybridAgeMemoryProvider.__mro__

@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Sequence
 
-from .provider import _is_noise
+from .turn_filter import _is_noise
 
 # Copied from legacy/scripts/graph_taxonomy.py — do not import legacy/.
 CANONICAL_NAMES: dict[str, str] = {

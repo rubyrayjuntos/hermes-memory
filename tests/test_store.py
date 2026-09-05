@@ -110,6 +110,7 @@ async def test_expand_graph_savepoint_empty(db_pool, store, clean_hermes_test_db
 @pytest.mark.asyncio
 async def test_safe_label_and_drop_guard(store):
     import pytest as _pytest
+
     from hermes_memory.store import check_label
 
     with _pytest.raises(ValueError):

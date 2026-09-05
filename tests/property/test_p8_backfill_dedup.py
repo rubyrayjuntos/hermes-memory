@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
 from strategies import real_module_names  # noqa: F401  (suite convention)
 
 from hermes_memory.store import dedup_key  # noqa: E402

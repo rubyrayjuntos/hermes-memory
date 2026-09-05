@@ -12,7 +12,7 @@ import math
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hermes_memory.store import _cosine_similarity, compaction_keepers, age_props
+from hermes_memory.store import _cosine_similarity, age_props, compaction_keepers
 
 
 @given(

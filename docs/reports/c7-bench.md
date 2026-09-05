@@ -48,4 +48,5 @@ Injection-hit stays flat at 0.90 even at a 500-token budget; average injected to
 
 ## Property suite
 
-18 passed, 1 skipped (`tests/property`).
+At C7: 18 passed, 1 skipped (`tests/property`). P3/P4 later run live against
+`extract_nouns` (see current `tests/property/test_p3_p4_phrase_extraction.py`).

@@ -62,8 +62,6 @@ def _make_provider(store, embedder) -> HybridAgeMemoryProvider:
     p._agent_identity = "default"
     p._session_id = "default"
     p._last_turn_id = {}
-    p._concept_emb = {}
-    p._concept_names = None
     p._write_queue = None
     p._loop = None
     p._primary_context = True

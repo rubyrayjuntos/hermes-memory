@@ -12,7 +12,6 @@ Validates:
 """
 from __future__ import annotations
 
-import json
 import math
 import os
 import sys
@@ -28,7 +27,6 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import architect  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Kill switch

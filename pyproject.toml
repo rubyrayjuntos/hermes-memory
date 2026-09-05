@@ -36,6 +36,8 @@ dev = [
     "pytest-asyncio>=0.23",
     "hypothesis>=6.100",
     "testcontainers[postgres]>=4.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
 ]
 
 [project.scripts]
@@ -62,4 +64,35 @@ addopts = "-m 'not integration'"
 markers = [
     "property: pure-function Hypothesis property tests (P1-P8)",
     "integration: DB-backed tests requiring docker / a live compose stack",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+"scripts/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "skip"
+pretty = true
+files = [
+    "src/hermes_memory/age_cypher.py",
+    "src/hermes_memory/turn_filter.py",
+    "src/hermes_memory/session_kind.py",
+    "src/hermes_memory/store_vec.py",
+    "src/hermes_memory/extract_nouns.py",
+    "src/hermes_memory/write_outcome.py",
+    "src/hermes_memory/schema_guard.py",
+    "src/hermes_memory/walk.py",
+    "src/hermes_memory/tokens.py",
+    "src/hermes_memory/config.py",
 ]

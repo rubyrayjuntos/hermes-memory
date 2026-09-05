@@ -29,7 +29,7 @@ import random
 import sys
 import time
 import uuid
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional
 
 import asyncpg
 
@@ -374,8 +374,8 @@ async def cmd(args: argparse.Namespace) -> int:
         else:
             out = await gen.generate(args.size, args.seed)
             print("\n## Load generation complete\n")
-            print(f"| Metric                  | Value |")
-            print(f"|-------------------------|-------|")
+            print("| Metric                  | Value |")
+            print("|-------------------------|-------|")
             for k, v in out.items():
                 print(f"| {k:<23} | {v:>5} |")
     finally:

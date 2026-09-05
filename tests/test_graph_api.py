@@ -10,8 +10,8 @@ from hermes_memory.graph_api import (
     GHOST_MAX_K,
     GHOST_MAX_LIMIT,
     catalog_where_clause,
-    classify_session_kind,
     clamp_limit,
+    classify_session_kind,
     conversation_first_budget,
     human_turn_title,
     is_synthetic_session,
@@ -349,6 +349,52 @@ async def test_stats_reports_sql_turns_nouns_and_mentions():
     out = await runtime._astats()
 
     assert out.get("manifold") == {"turns": 7, "nouns": 5, "mentions": 3}
+
+
+def test_runtime_health_includes_ledger_keys():
+    from hermes_memory.graph_api import Runtime
+    from hermes_memory.write_outcome import LEDGER
+
+    LEDGER.reset()
+    runtime = Runtime.__new__(Runtime)
+    payload = runtime.health()
+    assert "dropped_writes" in payload
+    assert "writes_failed" in payload
+    assert "embed_null" in payload
+    assert "graph_degraded" in payload
+    assert "last_failed_stage" in payload
+    assert "last_failed_at" in payload
+    assert "bind" in payload
+    assert payload["dropped_writes"] == 0
+
+
+def test_runtime_librarian_health_merges_ledger_counts():
+    from hermes_memory.graph_api import Runtime
+    from hermes_memory.write_outcome import LEDGER
+
+    class Loop:
+        def call(self, coro, timeout=30.0):
+            try:
+                coro.send(None)
+            except StopIteration as exc:
+                return exc.value
+            raise AssertionError("store.librarian_health did not complete")
+
+    class Store:
+        async def librarian_health(self):
+            return {"missing_hash": 0, "missing_doc_type": 0, "rows": 3}
+
+    LEDGER.reset()
+    runtime = Runtime.__new__(Runtime)
+    runtime.loop = Loop()
+    runtime.store = Store()
+    payload = runtime.librarian_health()
+    assert payload["ok"] is True
+    assert payload["dropped_writes"] == 0
+    assert payload["writes_failed"] == 0
+    assert payload["embed_null"] == 0
+    assert payload["graph_degraded"] == 0
+    assert payload["rows"] == 3
 
 
 def test_validate_bind_host_loopback_only():

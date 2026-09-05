@@ -11,7 +11,7 @@ rows land in every layer within one drain cycle:
 Exit codes: 0 = PASS, 1 = FAIL (with a per-layer summary).
 
 Usage:
-    python -m hermes_memory.verify [--dsn DSN] [--skip-embed]
+    python -m hermes_memory.verify [--dsn DSN] [--require-embed]
 """
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ import re
 import sys
 import time
 from typing import List, Optional, Tuple
+
+from .write_outcome import LEDGER
 
 DEFAULT_DSN = (
     f"postgres://hermes:{os.environ.get('HERMES_PG_PASSWORD', 'ci-local-password')}"
@@ -67,7 +69,8 @@ class VerifyResult:
 
 async def run_verify(dsn: Optional[str] = None,
                      skip_embed: bool = False,
-                     drain_wait_s: Optional[float] = None) -> VerifyResult:
+                     drain_wait_s: Optional[float] = None,
+                     require_embed: bool = False) -> VerifyResult:
     """Execute the layered pipeline check. Never raises for expected failures."""
     global DRAIN_WAIT_S
     if drain_wait_s is not None:
@@ -89,6 +92,20 @@ async def run_verify(dsn: Optional[str] = None,
     )
     result = VerifyResult()
     marker = f"c5-verify-{int(time.time())}"
+    must_embed = require_embed and not skip_embed
+
+    if must_embed:
+        vec = await Embedder(cfg.embed_url, cfg.embed_model, cfg.embed_dim).embed_text(
+            "nomic embed ping"
+        )
+        ok = vec is not None and len(vec) == cfg.embed_dim
+        result.add(
+            "ollama embed 768-d",
+            ok,
+            f"url={cfg.embed_url} model={cfg.embed_model} dim={len(vec) if vec else 0}",
+        )
+        if not ok:
+            return result
 
     # ---- Layer 0: raw connectivity -----------------------------------------
     conn = None
@@ -127,6 +144,19 @@ async def run_verify(dsn: Optional[str] = None,
                 (n_conversations or 0) >= 2,
                 f"count={n_conversations}",
             )
+            if must_embed:
+                n_emb = await conn.fetchval(
+                    """
+                    SELECT count(*) FROM conversations
+                     WHERE session_id = $1 AND embedding IS NOT NULL
+                    """,
+                    f"verify-{marker}",
+                )
+                result.add(
+                    "conversation embeddings persisted",
+                    (n_emb or 0) >= 1,
+                    f"embedded={n_emb}",
+                )
 
             # ---- Layer 2: on_memory_write mirror → memory_entries ----------
             provider.on_memory_write(
@@ -223,13 +253,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--drain-wait", type=float, default=None,
                     help="Seconds to wait for the background drain "
                          "(default: DRAIN_WAIT_S, 20s)")
+    ap.add_argument(
+        "--require-embed",
+        action="store_true",
+        help="Fail if Ollama cannot return a 768-d vector and persist it "
+             "(nightly e2e; leave off for PR CI without Ollama)",
+    )
     args = ap.parse_args(argv)
 
     drain_wait = args.drain_wait if args.drain_wait is not None else DRAIN_WAIT_S
 
     print("hermes-memory verify — starting pipeline check…")
-    result = asyncio.run(run_verify(dsn=args.dsn, drain_wait_s=drain_wait))
+    result = asyncio.run(
+        run_verify(
+            dsn=args.dsn,
+            drain_wait_s=drain_wait,
+            require_embed=args.require_embed,
+        )
+    )
     print(result.summary())
+    # Process-local counters (zeros after restart; never includes detail).
+    print(LEDGER.snapshot())
     return 0 if result.ok else 1
 
 

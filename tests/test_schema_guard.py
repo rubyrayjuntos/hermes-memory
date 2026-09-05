@@ -50,10 +50,11 @@ def test_github_cd_does_not_migrate_live() -> None:
 
 
 def test_provider_applies_migrations_before_schema_head() -> None:
-    from hermes_memory import graph_api as graph_mod
+    from hermes_memory import graph_runtime as graph_mod
+    from hermes_memory import ingest as ingest_mod
     from hermes_memory import provider as provider_mod
 
-    for mod in (provider_mod, graph_mod):
+    for mod in (provider_mod, graph_mod, ingest_mod):
         src = Path(mod.__file__).read_text(encoding="utf-8")
         apply_at = src.find("apply_pending_migrations")
         head_at = src.find("require_schema_head")
