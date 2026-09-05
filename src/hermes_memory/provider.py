@@ -35,7 +35,7 @@ except ImportError:  # running outside the Hermes runtime (tests, CI)
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config
 from .embed import Embedder, vec_to_literal
 from .graph_api import classify_session_kind
-from .store import Store
+from .store import Store, clamp_hnsw_ef_search
 
 logger = logging.getLogger("hybrid_age")
 
@@ -141,6 +141,14 @@ _NOISE_RE = re.compile(
 )
 
 SHUTDOWN_DRAIN_S = 5.0
+
+
+def _is_missing_embed_version_schema(exc: BaseException) -> bool:
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if "undefinedcolumn" in name:
+        return True
+    return "embed_model" in msg or "embed_dim" in msg
 
 
 def _is_noise(content: str, *, min_chars: int = TURN_MIN_CHARS) -> bool:
@@ -250,10 +258,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 self._run(self._ainit(), timeout=8.0)
                 # Warm up embeddings so the first prefetch is fast.
                 self._run(self.embedder.embed_text("warmup"), timeout=4.0)
-            except Exception:
-                logger.warning(
-                    "hybrid-age init incomplete (DB or embedder unreachable)", exc_info=True
-                )
+            except Exception as exc:
+                logger.warning("hybrid-age init incomplete: %s", exc, exc_info=True)
 
             logger.info(
                 "hybrid-age initialized session=%s identity=%s primary=%s",
@@ -282,7 +288,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
             dsn = dsn.replace('***', os.environ.get('HERMES_PG_PASSWORD', ''))
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
         self.pool = pool  # assign before await points so failure paths can close it
-        self.store = Store(pool, graph_name=self.config.graph)
+        self.store = Store(
+            pool,
+            graph_name=self.config.graph,
+            embed_model=self.config.embed_model,
+            embed_dim=self.config.embed_dim,
+            hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
+        )
+        await self.store.require_embed_version_columns()
         async with pool.acquire() as conn:
             await self.store.load_age(conn)
         # Strong reference so the drain loop is never garbage-collected mid-flight.
@@ -458,8 +471,15 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 item.get("role") or "user", content, vec_literal,
                 metadata={"kind": classify_session_kind(session_id)},
             )
-        except Exception:
-            logger.debug("insert_turn failed", exc_info=True)
+        except Exception as exc:
+            if _is_missing_embed_version_schema(exc):
+                logger.error(
+                    "insert_turn failed: schema missing embed_model/embed_dim "
+                    "(apply V10 before the next live insert)",
+                    exc_info=True,
+                )
+            else:
+                logger.debug("insert_turn failed", exc_info=True)
             return
         if conv_id is None:
             return
@@ -782,6 +802,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 seeds = await self.store.vector_search(vec_to_literal(emb), self.config.vector_k) \
                     if (emb and self.store) else []
                 t_vec = time.perf_counter()
+                logger.info(
+                    "prefetch k=%s hnsw.ef_search=%s seeds=%s",
+                    self.config.vector_k,
+                    clamp_hnsw_ef_search(getattr(self.store, "hnsw_ef_search", 100)),
+                    len(seeds),
+                )
                 kept_seeds = []
                 for s in seeds:
                     if s["similarity"] < self.config.min_similarity:
@@ -797,6 +823,50 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         from .provider_helpers import format_injection
 
+        seed_turn_ids: set[int] = set()
+        for s in kept_seeds:
+            if s.get("src") != "conversation":
+                continue
+            raw = str(s.get("id") or "").removeprefix("conv_")
+            if raw.isdigit():
+                seed_turn_ids.add(int(raw))
+
+        extra_ids: list[int] = []
+        extra_seen: set[int] = set()
+        for p in paths:
+            for tid in p.get("provenance_turns") or []:
+                try:
+                    n = int(tid)
+                except (TypeError, ValueError):
+                    continue
+                if n in seed_turn_ids or n in extra_seen:
+                    continue
+                extra_seen.add(n)
+                extra_ids.append(n)
+        bodies: dict[int, dict] = {}
+        fetcher = getattr(self.store, "conversations_by_ids", None)
+        if extra_ids and callable(fetcher):
+            for row in await fetcher(extra_ids):
+                try:
+                    bodies[int(row["id"])] = row
+                except (TypeError, ValueError, KeyError):
+                    continue
+        for p in paths:
+            if p.get("content"):
+                continue
+            for tid in p.get("provenance_turns") or []:
+                try:
+                    row = bodies.get(int(tid))
+                except (TypeError, ValueError):
+                    continue
+                if not row or not (row.get("content") or "").strip():
+                    continue
+                p["content"] = str(row.get("content") or "").strip()
+                p["turn_id"] = int(tid)
+                p["session_id"] = row.get("session_id")
+                p["created_at"] = row.get("ts")
+                break
+
         seed_payload = []
         for s in kept_seeds:
             chunk_id = (
@@ -809,19 +879,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 if s.get("src") == "conversation"
                 else []
             )
-            # best graph score for this seed (for decomposition)
             best_w = best_c = best_decay = best_score = None
             if attached:
-                # paths already score-ordered DESC by store.expand_graph
                 p0 = attached[0]
                 best_w = p0.get("weight")
                 best_c = p0.get("cosine")
                 best_decay = p0.get("decay")
                 best_score = p0.get("score")
+            turn_id = None
+            raw_id = str(s.get("id") or "").removeprefix("conv_")
+            if s.get("src") == "conversation" and raw_id.isdigit():
+                turn_id = int(raw_id)
             seed_payload.append({
                 "score": s["similarity"],
                 "content": (s.get("content") or "").strip(),
                 "paths": attached[:3],
+                "session_id": s.get("session_id"),
+                "created_at": s.get("ts") or s.get("created_at"),
+                "turn_id": turn_id,
                 "best_weight": best_w,
                 "best_cosine": best_c,
                 "best_decay": best_decay,
@@ -830,42 +905,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         seed_payload.sort(key=lambda x: x["score"], reverse=True)
         selected = self._budget_seeds(seed_payload)
         self._last_recall_count = len(selected)
-        # macro graph state — live, bounded 0.30s; omit rather than invent counts
-        graph_line = None
-        ghost_line = None
-        try:
-            if self.store is not None and self.pool is not None:
-                async with asyncio.timeout(0.30):
-                    async with self.pool.acquire() as conn:
-                        async def count(query: str) -> int:
-                            try:
-                                return int(await conn.fetchval(query) or 0)
-                            except Exception:
-                                return 0
-
-                        turns = await count("SELECT count(*) FROM conversations")
-                        nouns = await count("SELECT count(*) FROM noun")
-                        mentions = await count(
-                            "SELECT count(*) FROM semantic_edge WHERE verb_type = 'mentions'"
-                        )
-                        if turns or nouns or mentions:
-                            graph_line = (
-                                f"persisted {turns} turns · {nouns} nouns · "
-                                f"{mentions} mentions"
-                            )
-                        # ghost is render-time only — never inject a snapshot count
-        except Exception:
-            pass
-        meta = {
-            "seeds": len(selected),
-            "hops": 2,
-            "budget": getattr(self.config, "max_tokens", 1200),
-            "model": f"{getattr(self.config, 'embed_model', 'nomic-embed-text')}:{getattr(self.config, 'embed_dim', 768)}",
-            "threshold": getattr(self.config, "min_similarity", 0.72),
-            "graph_line": graph_line,
-            "ghost_line": ghost_line,
-        }
-        block = format_injection(selected, meta=meta)
+        block = format_injection(selected)
         graph_n = sum(len(s.get("paths") or []) for s in selected)
         logger.info(
             "prefetch seeds=%d graph=%d kept=%d chars=%d "
@@ -946,7 +986,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
             w = float(row[3]) if len(row) > 3 else 0.5
             c = float(row[4]) if len(row) > 4 else 0.5
             decay = float(row[5]) if len(row) > 5 else 0.5
-            score = float(row[6]) if len(row) > 6 else (0.5 * c + 0.3 * w + 0.2 * decay)
+            if len(row) <= 6:
+                continue
+            score = float(row[6])
             triple = format_triple(n, rel, m)
             if not triple or "->" not in triple:
                 continue
@@ -959,8 +1001,11 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 continue
             seen.add(dedup_key)
             src = parse_agtype_vertex(n) or {}
+            dst = parse_agtype_vertex(m) or {}
             paths.append({
                 "from_vid": str(src.get("id") or ""),
+                "from_name": str(src.get("name") or ""),
+                "to_name": str(dst.get("name") or ""),
                 "triple": triple,
                 "rel": "" if rel is None else str(rel).strip('"'),
                 "weight": w,
@@ -971,17 +1016,19 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "turn_id": audit.get("turn_id"),
                 "chunk_id": audit.get("chunk_id"),
                 "hop": audit.get("hop"),
+                "provenance_turns": list(audit.get("provenance_turns") or []),
             })
         return paths[:16]
 
     def _budget_seeds(self, seeds: List[dict]) -> List[dict]:
+        from .tokens import count_tokens, injection_token_cap
+
         out: List[dict] = []
         used = 40
-        cap = min(self.config.max_tokens, 1200)
+        cap = injection_token_cap(self.config.max_tokens)
         for s in seeds:
-            excerpt = (s.get("content") or "")[:220]
-            paths = s.get("paths") or []
-            est = (len(excerpt) + sum(len(p.get("triple") or "") for p in paths)) // 4 + 8
+            excerpt = (s.get("content") or "")[:400]
+            est = count_tokens(excerpt) + 8
             if used + est > cap:
                 continue
             out.append(s)

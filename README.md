@@ -23,7 +23,7 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 |--------|----------------|
 | Unofficial `hybrid-age` **MemoryProvider** (one slot, additive) | Official Nous plugin or in-tree `hermes memory setup` pick |
 | Local Postgres + pgvector recall **and** Apache AGE walks | Hosted / multi-tenant memory service |
-| Prefetch injection you can inspect (optional Fountain pane) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
+| Prefetch injects dated `<PAST_CONTEXT>` notes (Fountain pane is retriever debug, not the prompt) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
 | Turn extract → ordered Nouns + `mentions`; ingest for code | Automatic Obsidian vault recall |
 | `hermes-memory-install` / `verify` / `upgrade` / `uninstall` | Coverage under `hermes backup` (export Postgres yourself) |
 | Loopback only (`127.0.0.1:5450` and `:7890`) | Drop-in for every gateway/wrapper without the CLI |
@@ -107,7 +107,7 @@ The memory core spans **three coordinated layers**:
 |---|---|---|
 | **Conversations** | `conversations` table — one row per turn (user + assistant), with `session_id`, `turn_id`, `content`, and `created_at` | Per turn A–F: embed; insert conversation; MERGE the Session/Turn flower; extract Nouns; write passports; strengthen ordered `mentions` edges. |
 | **Vector + Graph** | `memory_entries` (pgvector HNSW, 768-dim nomic-embed-text), SQL `noun` / `semantic_edge`, and the AGE `hermes_knowledge` Session/Turn flower | Ingest walks codebase → SHA-256 chunks → embed → File/Module/Dependency with `IMPORTS` edges. Conversation recall walks SQL `mentions`; AGE preserves `NEXT` / `IN_SESSION`. |
-| **Inspector** | Optional Garden pane at `http://127.0.0.1:7890/api/librarian/pane` (`docs/graph/fountain.html`). Drag to orbit Session, Turn, and Noun nodes; threads show co-occurrence in mention order. Not required for recall. | `hermes-memory-api` (loopback-only). CORS reflects loopback/`null` origins only. |
+| **Inspector** | Optional Garden pane at `http://127.0.0.1:7890/api/librarian/pane` (`docs/graph/fountain.html`). Drag to orbit Noun nodes; threads are `mentions` (co-occurrence in mention order). Session and turn are properties. Not required for recall. | `hermes-memory-api` (loopback-only). CORS reflects loopback/`null` origins only. |
 
 **Walk** (`expand_graph`): `composite = 0.4 * seed_similarity + 0.4 * (source_alignment * target_alignment) * provenance_boost + 0.2 * decay`; `score = composite * (magnitude / 8)`. The same bounded two-hop walker feeds prefetch and pane search.
 

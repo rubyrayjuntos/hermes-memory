@@ -341,38 +341,6 @@ def recency_decay_for_edge(
         return recency_decay(fallback, half_life_days, now)
     return 0.5
 
-def recency_score(
-    weight: float,
-    cosine: float,
-    created_at: Optional[str] = None,
-    half_life_days: float = 30.0,
-    now: Optional[datetime.datetime] = None,
-    *,
-    edge_created_at: Optional[str] = None,
-    vertex_created_at: Optional[str] = None,
-) -> float:
-    """Composite score: 0.5*cosine + 0.3*weight + 0.2*exp(-age/half_life).
-
-    created_at is shorthand for edge_created_at when vertex not needed.
-    Weight and cosine fallback to 0.5 if None/nan.
-    """
-    try:
-        w = float(weight) if weight is not None else 0.5
-    except Exception:
-        w = 0.5
-    try:
-        c = float(cosine) if cosine is not None else 0.5
-    except Exception:
-        c = 0.5
-    # sanitize 0-1 range? keep as given but clamp nan
-    if w != w:  # nan
-        w = 0.5
-    if c != c:
-        c = 0.5
-    ea = edge_created_at if edge_created_at is not None else created_at
-    va = vertex_created_at
-    decay = recency_decay_for_edge(ea, va, half_life_days, now)
-    return 0.5 * c + 0.3 * w + 0.2 * decay
 
 def _parse_pgvector(raw: Any) -> list[float]:
     if raw is None:
@@ -385,14 +353,79 @@ def _parse_pgvector(raw: Any) -> list[float]:
     return [float(x) for x in s.split(",") if x.strip()]
 
 
+def embedding_dim_of(vec_literal: Optional[str]) -> Optional[int]:
+    """Count floats in a pgvector text literal. None if missing/unparseable."""
+    if not vec_literal:
+        return None
+    text = str(vec_literal).strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    if not text:
+        return 0
+    parts = [p for p in text.split(",") if p.strip()]
+    try:
+        [float(p) for p in parts]
+    except ValueError:
+        return None
+    return len(parts)
+
+
+def assert_embedding_compatible(vec_literal: Optional[str], embed_dim: int) -> None:
+    dim = embedding_dim_of(vec_literal)
+    if dim is not None and dim != int(embed_dim):
+        raise ValueError(f"embedding dim {dim} != {embed_dim}")
+
+
+def clamp_hnsw_ef_search(ef: int) -> int:
+    """HNSW `ef_search` is silent when too low; keep it in a logged, bounded range."""
+    return max(10, min(int(ef), 400))
+
+
+def hnsw_ef_search_sql(ef: int) -> str:
+    return f"SET LOCAL hnsw.ef_search = {clamp_hnsw_ef_search(ef)}"
+
+
 class Store:
     """Async data access over the pgvector + AGE schema."""
 
-    def __init__(self, pool: asyncpg.Pool, graph_name: str = "hermes_knowledge"):
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        graph_name: str = "hermes_knowledge",
+        *,
+        embed_model: str = "nomic-embed-text",
+        embed_dim: int = 768,
+        hnsw_ef_search: int = 100,
+    ):
         # Validated once here; the f-string cypher wrappers in this module
         # interpolate ONLY this vetted value (issue #10).
         self.graph_name = validate_graph_name(graph_name)
         self.pool = pool
+        self.embed_model = embed_model
+        self.embed_dim = int(embed_dim)
+        self.hnsw_ef_search = clamp_hnsw_ef_search(hnsw_ef_search)
+
+    async def require_embed_version_columns(self) -> None:
+        """Fail loudly if V10 `embed_model`/`embed_dim` columns are missing.
+
+        INSERT lists those columns; a pre-V10 schema would otherwise raise
+        UndefinedColumn inside the drain, which used to be logged at debug
+        and look like a successful write.
+        """
+        async with self.pool.acquire() as conn:
+            n = await conn.fetchval(
+                """
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'public'
+                   AND table_name = 'conversations'
+                   AND column_name IN ('embed_model', 'embed_dim')
+                """
+            )
+        if int(n or 0) != 2:
+            raise RuntimeError(
+                "conversations is missing embed_model/embed_dim; "
+                "apply sql/migrations/V10__embed_model_version.sql before writing"
+            )
 
     async def load_age(self, conn) -> None:
         await conn.execute("LOAD 'age';")
@@ -410,12 +443,14 @@ class Store:
         metadata: Dict[str, Any] | None = None,
     ) -> Optional[int]:
         """Insert a turn and return its id (RETURNING id) for graph linkage."""
+        assert_embedding_compatible(vec_literal, self.embed_dim)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO conversations
-                    (session_id, agent_identity, role, content, embedding, metadata)
-                VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb)
+                    (session_id, agent_identity, role, content, embedding, metadata,
+                     embed_model, embed_dim)
+                VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, $7, $8)
                 RETURNING id
                 """,
                 session_id,
@@ -424,6 +459,8 @@ class Store:
                 content,
                 vec_literal,
                 json.dumps(metadata or {}),
+                self.embed_model,
+                self.embed_dim,
             )
             return int(row["id"]) if row and row["id"] is not None else None
 
@@ -692,6 +729,34 @@ class Store:
             )
         return [dict(r) for r in rows]
 
+    async def conversations_by_ids(self, ids: Sequence[int]) -> list[dict]:
+        """Turn bodies for injection extras. Empty input → no round trip."""
+        if not ids:
+            return []
+        wanted = []
+        seen: set[int] = set()
+        for raw in ids:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n in seen:
+                continue
+            seen.add(n)
+            wanted.append(n)
+        if not wanted:
+            return []
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text AS id, session_id, content, ts, role
+                  FROM conversations
+                 WHERE id = ANY($1::bigint[])
+                """,
+                wanted,
+            )
+        return [dict(r) for r in rows]
+
     async def fetch_noun_labels(self) -> list[str]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT label FROM noun")
@@ -789,12 +854,14 @@ class Store:
         vec_literal: Optional[str],
         metadata: Dict[str, Any] | None = None,
     ) -> None:
+        assert_embedding_compatible(vec_literal, self.embed_dim)
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO memory_entries
-                    (agent_identity, target, content, embedding, metadata)
-                VALUES ($1, $2, $3, $4::vector, $5::jsonb)
+                    (agent_identity, target, content, embedding, metadata,
+                     embed_model, embed_dim)
+                VALUES ($1, $2, $3, $4::vector, $5::jsonb, $6, $7)
                 ON CONFLICT (agent_identity, target, md5(content)) DO NOTHING
                 """,
                 agent_identity,
@@ -802,6 +869,8 @@ class Store:
                 content,
                 vec_literal,
                 json.dumps(metadata or {}),
+                self.embed_model,
+                self.embed_dim,
             )
 
     async def replace_memory_entries(
@@ -831,14 +900,17 @@ class Store:
                 await conn.execute(
                     """
                     INSERT INTO memory_entries
-                        (agent_identity, target, content, embedding, metadata)
-                    VALUES ($1, $2, $3, $4::vector, $5::jsonb)
+                        (agent_identity, target, content, embedding, metadata,
+                         embed_model, embed_dim)
+                    VALUES ($1, $2, $3, $4::vector, $5::jsonb, $6, $7)
                     """,
                     agent_identity,
                     target,
                     content,
                     vec_literal,
                     json.dumps(metadata or {}),
+                    self.embed_model,
+                    self.embed_dim,
                 )
                 return 1
             return int(n.split()[1])
@@ -900,11 +972,13 @@ class Store:
         union then reranks the bounded candidate set.
         """
         sql = """
-            SELECT id, content, embedding, similarity, src FROM (
+            SELECT id, content, embedding, similarity, src, session_id, ts FROM (
               (
                 SELECT id::text AS id, content, embedding::text AS embedding,
                        1 - (embedding <=> $1::vector) AS similarity,
-                       'memory_entry'::text AS src
+                       'memory_entry'::text AS src,
+                       NULL::text AS session_id,
+                       created_at AS ts
                   FROM memory_entries
                  WHERE embedding IS NOT NULL
                    AND metadata->>'file_path' IS NULL
@@ -915,7 +989,9 @@ class Store:
               (
                 SELECT id AS id, content, embedding::text AS embedding,
                        1 - (embedding <=> $1::vector) AS similarity,
-                       'doc_chunk'::text AS src
+                       'doc_chunk'::text AS src,
+                       NULL::text AS session_id,
+                       created_at AS ts
                   FROM doc_chunks
                  WHERE embedding IS NOT NULL
                  ORDER BY embedding <=> $1::vector
@@ -925,7 +1001,9 @@ class Store:
               (
                 SELECT id::text AS id, content, embedding::text AS embedding,
                        1 - (embedding <=> $1::vector) AS similarity,
-                       'conversation'::text AS src
+                       'conversation'::text AS src,
+                       session_id,
+                       ts
                   FROM conversations
                  WHERE embedding IS NOT NULL
                    AND coalesce(metadata->>'kind', 'interactive') = 'interactive'
@@ -938,9 +1016,14 @@ class Store:
             ORDER BY similarity DESC
             LIMIT $2
         """
+        ef = clamp_hnsw_ef_search(self.hnsw_ef_search)
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql, vec_literal, k)
-        return [dict(r) for r in rows]
+            async with conn.transaction():
+                await conn.execute(hnsw_ef_search_sql(ef))
+                rows = await conn.fetch(sql, vec_literal, k)
+        out = [dict(r) for r in rows]
+        logger.info("vector_search k=%s hnsw.ef_search=%s hits=%s", k, ef, len(out))
+        return out
 
     async def bridge_vertex_ids(self, chunk_ids: Sequence[str]) -> List[str]:
         """Bridge-table lookup. Returns vertex ids STRINGIFIED (bigint precision).
@@ -1182,6 +1265,7 @@ class Store:
                         "turn_id": hypothesis.turn_id,
                         "chunk_id": hypothesis.chunk_id,
                         "hop": hop,
+                        "provenance_turns": list(edge["provenance_turns"] or []),
                     }
                     row = WalkRow(
                         (

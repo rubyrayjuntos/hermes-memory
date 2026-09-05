@@ -115,11 +115,9 @@
   <header>
     <div>
       <h1>THE HERMES LIBRARIAN</h1>
-      <p>Garden live — Session, Turn, and Noun · co-occurrence (mention order)</p>
+      <p>Garden live — the mention manifold · DISSOLVE focuses the same graph</p>
     </div>
     <div class="legend">
-      <span><i class="gem" style="background:#C9943F"></i> SESSION</span>
-      <span><i class="gem" style="background:#EAE3D6;border:1px solid #fff"></i> TURN</span>
       <span><i class="gem" style="background:#234A8A"></i> NOUN</span>
       <span title="co-occurrence in mention order"><i class="thread"></i> MENTIONS</span>
     </div>
@@ -130,7 +128,7 @@
     <div class="status"><span class="dot" id="dot"></span><span id="api-status">connecting</span></div>
     <div class="hud-toggles" style="display:flex;gap:6px;align-items:center">
       <button class="ghost hud-toggle on" data-panel="metrics" type="button" title="Toggle Manifold Metrics (M)">METRICS</button>
-      <button class="ghost hud-toggle on" data-panel="injection" type="button" title="Toggle Prompt Injection (I)">INJECT</button>
+      <button class="ghost hud-toggle on" data-panel="injection" type="button" title="Toggle Prompt Debug (I)">DEBUG</button>
       <button class="ghost hud-toggle on" data-panel="inspector" type="button" title="Toggle Graph Inspector (G)">GRAPH</button>
     </div>
   </header>
@@ -145,10 +143,10 @@
       <div class="mono" id="edge-tip" style="display:none;position:fixed;z-index:40;background:#0F2340;color:#8ED8E8;padding:8px 10px;border-radius:10px;max-width:380px;pointer-events:none;font-size:11px;line-height:1.45;box-shadow:0 8px 24px rgba(0,0,0,.28)"></div>
     </div>
     <div class="panel" id="panel-injection">
-      <h2>ACTIVE PROMPT INJECTION</h2>
+      <h2>PROMPT DEBUG</h2>
       <textarea id="q">hybrid age memory</textarea>
       <div class="row">
-        <span class="mono" style="color:#7A92B1">what the model sees this Turn</span>
+        <span class="mono" style="color:#7A92B1">retriever state — not sent to the model</span>
         <div>
           <button class="ghost" id="btn-catalog" type="button">CATALOG</button>
           <button id="btn-dissolve" type="button">DISSOLVE →</button>
@@ -161,12 +159,12 @@
       <div class="list" id="topo-list"></div>
     </div>
     <div class="panel" id="panel-hook">
-      <div class="row"><h2>LIVE AGE HOOK</h2><span class="mono" id="sel-meta">click a gem</span></div>
+      <div class="row"><h2>SELECTED NOUN</h2><span class="mono" id="sel-meta">click a gem</span></div>
       <div class="term" id="hook"></div>
       <div class="list" id="nodelist"></div>
     </div>
   </aside>
-  <div class="hint" id="hint">Nouns sit on their turn · teal threads are mention order · DISSOLVE walks that mesh</div>
+  <div class="hint" id="hint">Nouns are the graph · teal threads are mention order · session and turn are properties</div>
   <div id="coach"><span id="coach-msg"></span><button id="coach-cta" type="button"></button><button id="coach-dismiss" type="button">later</button></div>
 
 <script type="module">
@@ -304,7 +302,6 @@ function hash01(s) {
 }
 
 function massOf(n) {
-  if (n.label === 'Session') return 14;
   if (n.label === 'Noun') return 8 + Math.min(10, Number(n.val || 1) * 0.45);
   if (n._searchSeed) return 5;
   return 3.2;
@@ -339,8 +336,8 @@ function forceLayout(nodes, links, steps) {
   nodes.forEach((node, i) => {
     const t = (i / n) * Math.PI * 2 + hash01(node.id);
     const kind = node.label || node.group;
-    const base = kind === 'Session' ? 11 : 15;
-    const yStrata = kind === 'Session' ? 6.0 : (hash01(node.id + 'y') - 0.52) * 6;
+    const base = kind === 'Noun' ? 14 : 15;
+    const yStrata = (hash01(node.id + 'y') - 0.52) * 6;
     node.pos = [
       Math.cos(t) * base,
       yStrata + (hash01(node.id + 'yy') - 0.5) * 1.2,
@@ -376,9 +373,7 @@ function forceLayout(nodes, links, steps) {
         const isNoun = a.label === 'Noun' || b.label === 'Noun';
         rest = isNoun ? (3.0 + (1 - c) * 4.0) : (3.8 + (1 - c) * 4.5);
         k = isNoun ? (0.075 + c * 0.055) : (0.065 + c * 0.040);
-      } else if (l.label === 'NEXT') { rest = 2.3; k = 0.22; }
-      else if (l.label === 'IN_SESSION') { rest = 4.0; k = 0.14; }
-      else if (l.label === 'mentions') { rest = 5.2; k = 0.08 + force * 0.06; }
+      }       else if (l.label === 'mentions') { rest = 4.2; k = 0.12 + force * 0.10; }
       const dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
       const dist = Math.hypot(dx, dy, dz) || 0.01;
       const s = ((dist - rest) * k) / dist;
@@ -412,8 +407,45 @@ function layout(nodes, links, seedSet, mode) {
   const hmap = seedSet.size ? bfsHops(nodes, links, seedSet) : new Map();
   hops = hmap;
   nodes.forEach(n => { n._hop = hmap.has(n.id) ? hmap.get(n.id) : null; });
-  forceLayout(nodes, links, mode === 'search' ? 140 : 180);
+  const n = nodes.length;
+  const steps = n > 800 ? 45 : n > 400 ? 80 : (mode === 'search' ? 140 : 160);
+  forceLayout(nodes, links, steps);
   return nodes;
+}
+
+function graphFromPayload(payload) {
+  const g = payload.graph || payload;
+  return {
+    nodes: g.nodes || payload.nodes || [],
+    links: g.edges || g.links || payload.links || [],
+  };
+}
+
+function applyManifold(payload, { seeds = [], mode = 'catalog' } = {}) {
+  if (mode === 'catalog') catalogPayload = payload;
+  const g = graphFromPayload(payload);
+  seedIds = new Set(seeds.flatMap(s => (s.vertex_ids || []).map(sid)));
+  raw.nodes = (g.nodes || []).map(n => {
+    const id = sid(n.id);
+    const isSeed = seedIds.has(id) || n.seed === true;
+    const m = seeds.find(s => (s.vertex_ids || []).some(v => sid(v) === id));
+    return {
+      ...n, id,
+      name: n.name || n.title || n.label,
+      label: n.group || n.label,
+      _searchSeed: isSeed,
+      _searchExpanded: mode === 'search' && !isSeed,
+      _seed_score: m ? m.score : n.seed_score,
+    };
+  });
+  const baseLinks = (g.links || []).map(l => ({
+    ...l, source: sid(l.source || l.from), target: sid(l.target || l.to), label: l.label
+  }));
+  const allLinks = ghostEnabled && ghostEdges.length ? [...baseLinks, ...ghostEdges] : baseLinks;
+  raw.links = allLinks;
+  layout(raw.nodes, raw.links, seedIds, mode);
+  highlighted = new Set();
+  rebuildScene();
 }
 
 function materialFor(kind, highlight) {
@@ -516,11 +548,10 @@ function rebuildScene() {
     const kind = gemKind(n);
     const deg = Number(n.val || 1);
     const isSeed = !!n._searchSeed;
-    const radius = n.label === 'Session' ? 1.15
-      : n.label === 'Noun' ? 0.78 + Math.min(0.30, deg * 0.06)
+    const radius = n.label === 'Noun' ? 0.78 + Math.min(0.30, deg * 0.06)
       : isSeed ? 0.72
       : 0.52 + Math.min(0.10, deg * 0.012);
-    const detail = (n.label === 'Session' || n.label === 'Noun') ? 1 : 0;
+    const detail = n.label === 'Noun' ? 1 : 0;
     const geo = new THREE.IcosahedronGeometry(radius, detail);
     const mesh = new THREE.Mesh(geo, materialFor(kind, n._searchSeed));
     mesh.position.set(...n.pos);
@@ -528,9 +559,9 @@ function rebuildScene() {
     mesh.castShadow = true;
     const glow = new THREE.Mesh(
       new THREE.IcosahedronGeometry(radius, detail),
-      new THREE.MeshBasicMaterial({ color: MAT[kind].color, transparent: true, opacity: isSeed ? 0.26 : (n.label === 'Session' ? 0.13 : n.label === 'Noun' ? 0.11 : 0.09), depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: MAT[kind].color, transparent: true, opacity: isSeed ? 0.26 : (n.label === 'Noun' ? 0.11 : 0.09), depthWrite: false })
     );
-    glow.scale.setScalar(isSeed ? 1.68 : n.label === 'Session' ? 1.62 : n.label === 'Noun' ? 1.58 : 1.50);
+    glow.scale.setScalar(isSeed ? 1.68 : n.label === 'Noun' ? 1.58 : 1.50);
     mesh.add(glow);
     graphGroup.add(mesh);
   });
@@ -542,7 +573,7 @@ function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff);
   camera = new THREE.PerspectiveCamera(42, el.clientWidth / el.clientHeight, 0.1, 200);
-  camera.position.set(24, 36, 42);
+  camera.position.set(22, 16, 28);
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(el.clientWidth, el.clientHeight);
@@ -560,14 +591,13 @@ function initThree() {
   scene.add(new THREE.PointLight(0xCDE8FF, 0.6, 40)).position.set(0, 10, 0);
 
   // no opaque ground — removed 120×120 Plane + rings at y≈0 that cut the manifold.
-  // parchment background (scene.background #E9E3D4) is the ground. Manifold yStrata
-  // Session 6.0 / Noun 1.6 / Turn ±3 is fully visible from any orbit angle.
+  // parchment background (scene.background) is the ground. Noun mesh sits around y≈0.
   renderer.shadowMap.enabled = false;
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.dampingFactor = 0.07;
   controls.minPolarAngle = Math.PI * 0.08; controls.maxPolarAngle = Math.PI * 0.62;
-  controls.minDistance = 10; controls.maxDistance = 110; controls.target.set(0, 8, 0);
+  controls.minDistance = 10; controls.maxDistance = 110; controls.target.set(0, 0, 0);
 
   const ray = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
@@ -658,12 +688,13 @@ function selectNode(n) {
   AppState._coachClicks = (AppState._coachClicks||0)+1; maybeCoach();
   const props = n.props || n.properties || {};
   const snippet = n.snippet || props.content || '';
-  document.getElementById('sel-meta').textContent = (n.label || 'Turn') + (props.session_id ? ' · ' + props.session_id : '');
+  document.getElementById('sel-meta').textContent = (n.label || 'Noun') + (props.session_id ? ' · ' + props.session_id : '');
   const nbr = raw.links.filter(l => sid(l.source) === n.id || sid(l.target) === n.id);
   const lines = [];
   lines.push(nodeName(n));
   if (snippet) lines.push('', snippet);
   if (props.session_id) lines.push('', 'session ' + props.session_id);
+  if (props.turn_id != null) lines.push('turn ' + props.turn_id);
   nbr.slice(0, 8).forEach(l => {
     const other = sid(l.source) === n.id ? sid(l.target) : sid(l.source);
     const on = raw.nodes.find(x => x.id === other);
@@ -707,8 +738,8 @@ function setMetrics(stats, extra) {
   const benchFiltered = hideBench ? ' · bench hidden' : '';
   const cells = [
     ['MANIFOLD', manifold.turns ?? 0, `${manifold.turns||0} turns · ${manifold.nouns||0} nouns · ${manifold.mentions||0} mentions`],
-    ['VISIBLE', extra?.verts ?? raw.nodes.length, `${labels.Turn||0} Turn · ${labels.Session||0} Session · ${labels.Noun||0} Noun${benchFiltered}`],
-    ['THREADS', extra?.edges ?? raw.links.length, `${elabs.NEXT||0} NEXT · ${elabs.IN_SESSION||0} IN_SESSION · ${elabs.mentions||0} mentions${ghostEnabled && ghostMeta ? ` · ${ghostMeta.edges} ghost` : ''}`],
+    ['VISIBLE', extra?.verts ?? raw.nodes.length, `${labels.Noun||0} Noun${benchFiltered}`],
+    ['THREADS', extra?.edges ?? raw.links.length, `${elabs.mentions||0} mentions${ghostEnabled && ghostMeta ? ` · ${ghostMeta.edges} ghost` : ''}`],
     ['BRIDGE', b.rows ?? '—', `${b.vertices_bridged||0} verts bridged · graph ${v.total??'—'}v`],
     ['VECTOR', vec.chunks ?? '—', `${vec.dim||768}-d ${vec.model||'nomic'} · score composite × (magnitude / 8)`],
   ];
@@ -724,10 +755,13 @@ function setMetrics(stats, extra) {
 }
 
 function reconstructInjection(res) {
+  // prompt.debug — scores, hops, Cypher. Production format_injection never
+  // sends this block to the model.
   const seeds = res.seeds || [];
   const paths = res.paths || [];
   const ret = res.retrieval || {};
-  let out = '';
+  const ef = ret.hnsw_ef_search != null ? ret.hnsw_ef_search : '—';
+  let out = `[ANN] hnsw.ef_search=${ef} k=${ret.k ?? '—'}\n`;
   seeds.forEach((s, i) => {
     const sc = s.score != null ? (s.score*100|0)+'%' : '—';
     const w = s.best_weight ?? paths.find(p=>p.from && (s.vertex_ids||[]).includes(String(p.from)))?.weight;
@@ -750,8 +784,8 @@ function reconstructInjection(res) {
   const el = document.getElementById('contrib');
   el.className = 'banner ' + (contrib ? 'good' : 'weak');
   el.textContent = contrib
-    ? `graph CONTRIBUTED · seeds ${seedC} → ${reached} verts / ${ret.edges_traversed} edges · hops=${ret.hops}`
-    : `graph ADDED LITTLE · seeds ${seedC} expanded ${ret.edges_traversed||0} edges`;
+    ? `graph CONTRIBUTED · seeds ${seedC} → ${reached} verts / ${ret.edges_traversed} edges · hops=${ret.hops} · ef_search=${ef}`
+    : `graph ADDED LITTLE · seeds ${seedC} expanded ${ret.edges_traversed||0} edges · ef_search=${ef}`;
 }
 
 function renderTopo(res) {
@@ -792,31 +826,16 @@ function focusPath(p) {
 }
 
 function applyCatalog(payload) {
-  catalogPayload = payload;
-  seedIds = new Set();
   const filt = filteredCatalog(payload);
-  raw.nodes = (filt.nodes || []).map(n => ({
-    ...n, id: sid(n.id),
-    name: n.name || n.title || n.label,
-    label: n.label || n.group,
-    _searchSeed: false, _searchExpanded: false
-  }));
-  const baseLinks = (filt.links || filt.edges || []).map(l => ({
-    ...l, source: sid(l.source || l.from), target: sid(l.target || l.to), label: l.label
-  }));
-  const allLinks = ghostEnabled && ghostEdges.length ? [...baseLinks, ...ghostEdges] : baseLinks;
-  raw.links = allLinks;
-  layout(raw.nodes, raw.links, seedIds, 'catalog');
+  applyManifold(filt, { seeds: [], mode: 'catalog' });
   document.getElementById('mode-tag').textContent = ghostEnabled ? 'CATALOG+GHOST' : 'CATALOG';
-  highlighted = new Set();
-  rebuildScene();
   renderList();
   document.getElementById('contrib').className = 'banner weak';
-  document.getElementById('contrib').textContent = `catalog · ${raw.nodes.length} gems · nouns sit on their turns · teal = mention order${hideBench ? ' · bench hidden' : ''}`;
+  document.getElementById('contrib').textContent = `manifold · ${raw.nodes.length} nouns · same graph as search, full scope${hideBench ? ' · bench hidden' : ''}`;
   const topo = document.getElementById('topo-list');
   if (topo) {
     document.getElementById('topo-meta').textContent = 'catalog';
-    topo.innerHTML = '<div class="mono" style="padding:8px;color:#7A92B1">Run DISSOLVE to list seed → relation → dest paths.</div>';
+    topo.innerHTML = '<div class="mono" style="padding:8px;color:#7A92B1">Run DISSOLVE to focus the walk on a query.</div>';
   }
 }
 
@@ -837,31 +856,8 @@ function applySearch(res) {
     renderTopo(res);
     return;
   }
-  seedIds = new Set(seeds.flatMap(s => (s.vertex_ids || []).map(sid)));
-  const g = res.graph || { nodes: [], edges: [] };
-  raw.nodes = (g.nodes || []).map(n => {
-    const id = sid(n.id);
-    const isSeed = seedIds.has(id) || n.seed === true;
-    const m = seeds.find(s => (s.vertex_ids || []).some(v => sid(v) === id));
-    return {
-      ...n, id,
-      name: n.name || n.title || n.label,
-      label: n.group || n.label,
-      _searchSeed: isSeed,
-      _searchExpanded: !isSeed,
-      _seed_score: m ? m.score : n.seed_score
-    };
-  });
-  raw.links = (g.edges || g.links || []).map(l => ({
-    ...l,
-    source: sid(l.source || l.from),
-    target: sid(l.target || l.to),
-    _isExpansion: true
-  }));
-  layout(raw.nodes, raw.links, seedIds, 'search');
-  document.getElementById('mode-tag').textContent = 'INJECTION';
-  highlighted = new Set();
-  rebuildScene();
+  applyManifold(res, { seeds, mode: 'search' });
+  document.getElementById('mode-tag').textContent = 'SEARCH';
   document.getElementById('nodelist').innerHTML = seeds.slice(0, 80).map(seed =>
     `<button type="button"><i class="gem" style="background:#d946a6"></i><span>${escapeHTML((seed.excerpt||seed.chunk_id).slice(0,42))}</span><span class="mono" style="margin-left:auto;color:#7A92B1">sim ${Number(seed.score).toFixed(2)} · ${escapeHTML(seed.chunk_id)}</span></button>`
   ).join('');
@@ -871,15 +867,16 @@ function applySearch(res) {
 
 async function loadCatalog() {
   const [g3d, stats] = await Promise.all([
-    safeFetch(`${API}/api/librarian/graph/3d?limit=80&fresh=1`),
+    safeFetch(`${API}/api/librarian/graph/3d?fresh=1`),
     safeFetch(`${API}/api/librarian/graph/stats?fresh=1`)
   ]);
   if (!g3d) return;
   applyCatalog(g3d);
   if (stats) {
     lastStats = stats;
-    setMetrics(stats, { verts: g3d.nodes.length, edges: (g3d.links||[]).length, persistedEdges: stats.edges?.total });
-    setStatus(true, `catalog ${g3d.nodes.length}v / graph ${stats.vertices?.total||'?'}v`);
+    const g = graphFromPayload(g3d);
+    setMetrics(stats, { verts: g.nodes.length, edges: g.links.length, persistedEdges: stats.edges?.total });
+    setStatus(true, `manifold ${g.nodes.length}v / ${g.links.length} mentions`);
   }
   if (ghostEnabled) await refreshGhost();
   else updateGhostMeta();

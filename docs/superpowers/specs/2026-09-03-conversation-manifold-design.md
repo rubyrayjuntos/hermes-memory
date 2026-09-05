@@ -352,10 +352,10 @@ Default is **one view** (today’s Garden, always on). No L2–L4 as the ship de
 
 | Mode | Trigger | Nodes | Edges |
 |---|---|---|---|
-| Catalog | pane load / reload | Session, Turn, Noun | `NEXT`, `IN_SESSION`, `mentions` among **visible** nouns |
-| Search | `GET /api/librarian/search?q=&k=8&hops=2` | same kinds; seeds marked | walker 7-tuples as `mentions` hops 1–2; flower `NEXT` only as **audit** on the selected path |
+| Catalog | pane load / reload | Noun | every `mentions` edge (`pack_search`, no query) |
+| Search | `GET /api/librarian/search?q=&k=8&hops=2` | Noun; seeds marked | the same `pack_search` graph, walker-scoped to the query |
 
-Catalog: latest **N = 80** Turns from AGE, their Sessions, `NEXT` / `IN_SESSION`; nouns from passports for those `turn_id`s; `mentions` among those nouns. `IMPORTS` off by default.
+Catalog is the unscoped manifold. Search is the same view, focused by ANN → passports → 1–2 hop beam. Session and turn stay on noun `props`. `IMPORTS` off by default. AGE `Session` / `Turn` / `IN_SESSION` / `NEXT` are not catalog gems.
 
 ### 8.2 `/search` wiring
 
@@ -365,11 +365,20 @@ Same engine as prefetch:
 2. ANN (conversation arm for the beam)
 3. Fan-out passports → hypotheses
 4. Beam hops 1–2
-5. `pack_search`: `seeds`, `graph.nodes`, `graph.edges`, `paths[]` with `weight` / `cosine` / `decay` / `score` / `hop` plus `session_id` / `turn_id` for `[Path: …]`
+5. `pack_search`: `seeds`, `graph.nodes`, `graph.edges`, `paths[]` with `weight` / `cosine` / `decay` / `score` / `hop` plus `session_id` / `turn_id`. That JSON is **prompt.debug** (Fountain `reconstructInjection`). It is not the prefetch string.
 
 Seed conversations are list rows (excerpt, `sim`, `chunk_id = conv_{id}`), not AGE vertices. Highlight uses seed **noun** ids from passports.
 
-If pane search and the model disagree on paths, that is a bug.
+If pane search and prefetch selected **different turns**, that is a bug. The pane dump **must** keep scores and Cypher; prefetch **must not**.
+
+### 8.2.1 Injection surfaces
+
+| Artifact | Function | Contents |
+|---|---|---|
+| `prompt.rendered` | `format_injection` | `<PAST_CONTEXT>` dated turn bodies. Qualitative `high relevance` / `related` only. |
+| `prompt.debug` | Fountain `reconstructInjection` / `format_debug_injection` | `[SEED Vn]`, `[Path: A -REL-> B]`, `w` / `c` / `decay` / `score`, persisted counts |
+
+Ranking is ``beam_score`` only (hop keep/drop and injection ``best_score``). ANN ``1 - (embedding <=> q)`` is candidate generation, not a second weighted sum. Filter: top N, dedupe `turn_id`, max 2 per session. Hops resolve extra **turn bodies** via `provenance_turns`; inject that text. Verbalize `You previously linked X to Y` only when a hop has no turn text. Never inject `w=`, `c=`, `decay=`, `%`, the formula, noun-id chains, or `persisted N turns`.
 
 ### 8.3 ID prefixes (canvas)
 

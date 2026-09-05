@@ -156,7 +156,7 @@ def test_conversation_first_budget():
     assert convo + other == 250
 
 
-def test_catalog_assembler_namespaces_flower_and_visible_nouns():
+def test_catalog_assembler_emits_nouns_not_flower():
     assemble_catalog = getattr(graph_api, "assemble_catalog", lambda *_args, **_kwargs: {})
     out = assemble_catalog(
         age_nodes=[
@@ -169,32 +169,36 @@ def test_catalog_assembler_namespaces_flower_and_visible_nouns():
             {"source": "2", "target": "3", "label": "ABOUT", "weight": 1.0, "cosine": 0.8},
         ],
         passports=[
-            {"noun_id": 1, "label": "Postgres", "type": "technology", "vertex_id": 2, "turn_id": 41},
+            {
+                "noun_id": 1, "label": "Postgres", "type": "technology",
+                "vertex_id": 2, "turn_id": 41, "session_id": "session-a",
+            },
             {"noun_id": 2, "label": "AGE", "type": "technology", "vertex_id": 2, "turn_id": 41},
         ],
         mentions=[
-            {"src_noun": 1, "tgt_noun": 2, "magnitude": 3.0, "decay": 0.9, "score": 0.34},
+            {
+                "src_noun": 1, "tgt_noun": 2, "src_label": "Postgres", "tgt_label": "AGE",
+                "magnitude": 3.0, "cosine": 0.82, "decay": 0.9, "score": 0.34,
+            },
             {"src_noun": 2, "tgt_noun": 99, "magnitude": 2.0, "decay": 0.8, "score": 0.2},
         ],
         limit=80,
     )
 
-    assert {node["id"] for node in out.get("nodes", [])} == {
-        "age:1",
-        "age:2",
-        "noun:1",
-        "noun:2",
-    }
-    assert {link["label"] for link in out.get("links", [])} == {
-        "IN_SESSION",
-        "mentions",
-    }
+    assert {node["id"] for node in out.get("nodes", [])} == {"noun:1", "noun:2", "noun:99"}
+    assert {link["label"] for link in out.get("links", [])} == {"mentions"}
+    mention = next(link for link in out["links"] if link["source"] == "noun:1")
+    assert mention["cosine"] == 0.82
+    assert mention["weight"] == 3.0
     noun = next(node for node in out["nodes"] if node["id"] == "noun:1")
+    assert noun["props"]["turn_id"] == 41
+    assert noun["props"]["session_id"] == "session-a"
     assert noun["props"]["turn_vertex_id"] == "age:2"
-    assert out["meta"]["limit"] == 80
+    assert out["graph"]["nodes"] == out["nodes"]
+    assert out["meta"]["scope"] == "manifold"
 
 
-def test_attach_passport_anchors_docks_nouns_and_injects_turns():
+def test_attach_passport_anchors_stamps_provenance_without_flower_gems():
     packed = pack_search(
         "postgres",
         4,
@@ -223,6 +227,7 @@ def test_attach_passport_anchors_docks_nouns_and_injects_turns():
                 "type": "technology",
                 "vertex_id": 99,
                 "turn_id": 41,
+                "session_id": "session-a",
             },
             {
                 "noun_id": 2,
@@ -234,17 +239,16 @@ def test_attach_passport_anchors_docks_nouns_and_injects_turns():
     )
 
     ids = {node["id"] for node in out["graph"]["nodes"]}
-    assert "age:99" in ids
+    assert "age:99" not in ids
     postgres = next(node for node in out["graph"]["nodes"] if node["id"] == "noun:1")
     assert postgres["name"] == "Postgres"
     assert postgres["props"]["turn_vertex_id"] == "age:99"
     assert postgres["props"]["turn_id"] == 41
-    turn = next(node for node in out["graph"]["nodes"] if node["id"] == "age:99")
-    assert turn["label"] == "Turn"
+    assert postgres["props"]["session_id"] == "session-a"
 
 
 @pytest.mark.asyncio
-async def test_default_graph_catalog_uses_latest_80_turn_garden_data():
+async def test_default_graph_catalog_uses_pack_search_manifold():
     from hermes_memory.graph_api import Runtime
 
     class Acquire:
@@ -291,9 +295,10 @@ async def test_default_graph_catalog_uses_latest_80_turn_garden_data():
 
     out = await runtime._agraph_3d(None, 250)
 
-    assert catalog_limits == [80]
+    assert catalog_limits == [250]
     assert legacy_calls == []
-    assert {node["id"] for node in out["nodes"]} == {"age:1", "age:2", "noun:1"}
+    assert {node["id"] for node in out["nodes"]} == {"noun:1"}
+    assert out["graph"]["nodes"] == out["nodes"]
 
 
 @pytest.mark.asyncio
@@ -477,8 +482,8 @@ def test_pack_search_accepts_noun_dicts_and_audit_ids():
     )
 
     assert out["graph"]["nodes"] == [
-        {"id": "noun:11", "label": "Noun", "name": "SourceNoun", "props": {}},
-        {"id": "noun:12", "label": "Noun", "name": "TargetNoun", "props": {}},
+        {"id": "noun:11", "label": "Noun", "name": "SourceNoun", "props": {}, "val": 2},
+        {"id": "noun:12", "label": "Noun", "name": "TargetNoun", "props": {}, "val": 2},
     ]
     assert out["paths"][0]["session_id"] == "session-a"
     assert out["paths"][0]["turn_id"] == 41

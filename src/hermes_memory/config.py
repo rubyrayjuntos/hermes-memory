@@ -45,6 +45,7 @@ class HybridAgeConfig:
     dsn_env: str = DEFAULT_DSN_ENV
     embed_url_env: str = DEFAULT_EMBED_URL_ENV
     decay_half_life_days: float = 30.0
+    hnsw_ef_search: int = 100
     _raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -102,7 +103,8 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
         cfg.graph = os.environ["HYBRID_AGE_GRAPH"]
 
     for key in ("vector_k", "min_similarity", "max_tokens", "embed_dim",
-                "queue_maxsize", "prefetch_timeout_s", "decay_half_life_days"):
+                "queue_maxsize", "prefetch_timeout_s", "decay_half_life_days",
+                "hnsw_ef_search"):
         if raw.get(key) is not None:
             try:
                 setattr(cfg, key, type(getattr(cfg, key))(raw[key]))

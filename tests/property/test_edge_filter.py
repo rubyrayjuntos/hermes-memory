@@ -6,10 +6,10 @@ from hypothesis import strategies as st
 
 
 def edge_visible(label: str, allow_imports: bool = False) -> bool:
-    """Garden shows the flower and noun manifold; code imports are opt-in."""
+    """Garden catalog is the noun mention graph; code imports are opt-in."""
     if label == "IMPORTS":
         return bool(allow_imports)
-    return label in {"NEXT", "IN_SESSION", "mentions"}
+    return label == "mentions"
 
 
 def filter_edges(labels: list[str], allow_imports: bool = False) -> list[str]:
@@ -26,15 +26,16 @@ def test_fountain_is_garden_only_ship_surface():
     html = Path("docs/graph/fountain.html").read_text()
 
     assert "co-occurrence (mention order)" in html
-    assert "Session" in html and "Turn" in html and "Noun" in html
-    assert "dockNounsToTurns" in html
-    assert "turn_vertex_id" in html
+    assert "Garden live — the mention manifold" in html
+    assert "Session, Turn, and Noun" not in html
+    assert "turn_id" in html
+    assert "session_id" in html
     assert "#level-ctl, #ghost-row, #ghost-ctl, #coach { display: none !important; }" in html
     assert "ph.textContent = LEVEL_DEF" not in html
     assert "ABOUT" not in html
     assert "Concept" not in html
     assert "level: 1" in html
-    assert "graph/3d?limit=80" in html
+    assert "graph/3d?fresh=1" in html
     assert "composite × (magnitude / 8)" in html
     assert "escapeHTML(seed.chunk_id)" in html
     assert "Number(seed.score).toFixed(2)" in html
@@ -64,7 +65,7 @@ def test_property_edge_filter_respects_imports_default(labels, allow_imports):
     filtered = filter_edges(labels, allow_imports)
     if not allow_imports:
         assert "IMPORTS" not in filtered
-    assert all(label in {"IMPORTS", "NEXT", "IN_SESSION", "mentions"} for label in filtered)
+    assert all(label in {"IMPORTS", "mentions"} for label in filtered)
     assert set(filtered).issubset(set(labels))
     expected_len = sum(1 for lbl in labels if edge_visible(lbl, allow_imports))
     assert len(filtered) == expected_len

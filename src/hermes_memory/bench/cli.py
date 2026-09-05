@@ -28,19 +28,10 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import asyncpg
 
-try:
-    import tiktoken
-    _ENC = tiktoken.get_encoding("cl100k_base")
-
-    def count_tokens(text: str) -> int:
-        return len(_ENC.encode(text or ""))
-except ImportError:  # graceful fallback if tiktoken missing
-    def count_tokens(text: str) -> int:
-        return max(1, len(text or "") // 4)
-
 from ..config import load_config
 from ..embed import Embedder, vec_to_literal
 from ..store import Store, age_str
+from ..tokens import count_tokens
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("hybrid_age.bench")
@@ -257,6 +248,8 @@ class BenchHarness:
                  graph_name: str = "hermes_knowledge"):
         self.dsn = dsn
         self.embedder = Embedder(embed_url, embed_model, dim)
+        self.embed_model = embed_model
+        self.embed_dim = dim
         self.graph_name = graph_name
         self.pool: Optional[asyncpg.Pool] = None
         self.store: Optional[Store] = None
@@ -264,7 +257,12 @@ class BenchHarness:
 
     async def connect(self) -> None:
         self.pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=4)
-        self.store = Store(self.pool, self.graph_name)
+        self.store = Store(
+            self.pool,
+            self.graph_name,
+            embed_model=self.embed_model,
+            embed_dim=self.embed_dim,
+        )
 
     async def close(self) -> None:
         if self.pool:
@@ -278,10 +276,8 @@ class BenchHarness:
     async def recall(self, query: str, cfg: BenchConfig) -> tuple[str, List[str]]:
         """Run the full recall pipeline; returns (injected block, raw pool texts).
 
-        Ranking: composite w_sim*sim + w_recency*recency + w_graph*graph with
-        REAL exponential time decay recency exp(-age_hours/24) (amendment 4),
-        computed from updated_at age of each row. Graph expansion follows the
-        bridge table (chunk_id -> vertex_id -> Cypher hop -> reverse lookup).
+        Seeds rank by ANN similarity. Graph hops, when present, rank by
+        ``beam_score`` (slot 6). No parallel w_sim/w_recency/w_graph mixer.
         """
         emb = await self._embed(query)
         if not emb or self.store is None:
@@ -348,9 +344,10 @@ class BenchHarness:
 
         ranked = []
         for text, comp in scored.items():
-            score = (cfg.w_sim * comp["sim"]
-                     + cfg.w_recency * comp["recency"]
-                     + cfg.w_graph * comp["graph"])
+            if comp["kind"] == "graph":
+                score = float(comp["graph"])
+            else:
+                score = float(comp["sim"])
             ranked.append({"text": text, "score": score, **comp})
         ranked.sort(key=lambda x: x["score"], reverse=True)
         ranked = [r for r in ranked if r["sim"] >= cfg.min_sim or r["kind"] == "graph"]
@@ -552,10 +549,11 @@ async def cmd_ablation(args: argparse.Namespace) -> None:
 
 
 async def cmd_optimize_weights(args: argparse.Namespace) -> None:
-    profiles = [BenchConfig(name=p.name, w_sim=p.w_sim, w_recency=p.w_recency,
-                            w_graph=p.w_graph) for p in WEIGHT_PROFILES]
-    await cmd_run(args, profiles,
-                  "Ranking Weight Optimization (budget locked at 1200)")
+    await cmd_run(
+        args,
+        [BenchConfig(name="beam_score (locked)")],
+        "Walker weights are locked to beam_score; no parallel mixer",
+    )
 
 
 async def cmd_optimize_budget(args: argparse.Namespace) -> None:

@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     processed_at TIMESTAMPTZ,
     relations_processed_at TIMESTAMPTZ,
     processing_attempts INT NOT NULL DEFAULT 0,
-    last_error TEXT
+    last_error TEXT,
+    embed_model TEXT,
+    embed_dim INT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -42,7 +44,9 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     embedding vector(768),
     metadata JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    embed_model TEXT,
+    embed_dim INT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS memory_entries_unique_hash
@@ -93,6 +97,8 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
     embedding vector(768),
     metadata JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    embed_model TEXT,
+    embed_dim INT,
     UNIQUE (source, file_path, doc_hash, ordinal)
 );
 

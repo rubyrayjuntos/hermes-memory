@@ -1,0 +1,29 @@
+{
+  "description": "CI-gated ANN golden set: each case is a frozen (query vector → expected turn). Vectors are one-hot on `axis` so hermes_test HNSW can rank without Ollama. Not a live-production turn-id snapshot.",
+  "cases": [
+    {
+      "id": "ratelimiter_axis0",
+      "session_id": "golden-ann-ratelimiter",
+      "content": "RateLimiter talks to nomic-embed-text after we continue working on the drain path.",
+      "axis": 0
+    },
+    {
+      "id": "gosp_axis1",
+      "session_id": "golden-ann-gosp",
+      "content": "GOSP passport mentions EMA e_tgt_vec provenance_turns noun MERGE beam_score.",
+      "axis": 1
+    },
+    {
+      "id": "cookie_axis2",
+      "session_id": "golden-ann-cookie",
+      "content": "chocolate chip cookie recipe flour sugar butter oven three hundred seventy five.",
+      "axis": 2
+    },
+    {
+      "id": "hnsw_axis3",
+      "session_id": "golden-ann-hnsw",
+      "content": "hnsw.ef_search SET LOCAL clamp ten to four hundred per query so recall does not silently collapse.",
+      "axis": 3
+    }
+  ]
+}

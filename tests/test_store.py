@@ -25,6 +25,19 @@ async def test_insert_turn_and_vector_search(db_pool, store, clean_hermes_test_d
     assert len(rows) >= 1
     assert any(r["content"] == "hello store" for r in rows)
     assert all(r["embedding"] for r in rows)
+    async with db_pool.acquire() as conn:
+        stamped = await conn.fetchrow(
+            "SELECT embed_model, embed_dim FROM conversations WHERE content = $1",
+            "hello store",
+        )
+    assert stamped["embed_model"] == "nomic-embed-text"
+    assert int(stamped["embed_dim"]) == 768
+
+
+@pytest.mark.asyncio
+async def test_require_embed_version_columns_passes_after_v10(store, hermes_test_dsn):
+    _assert_hermes_test_dsn(hermes_test_dsn)
+    await store.require_embed_version_columns()
 
 
 @pytest.mark.asyncio

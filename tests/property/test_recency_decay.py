@@ -12,7 +12,7 @@ import math
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hermes_memory.store import recency_decay, recency_decay_for_edge, recency_score
+from hermes_memory.store import recency_decay, recency_decay_for_edge
 
 
 def test_recency_decay_fallback_none():
@@ -55,50 +55,22 @@ def test_recency_decay_future_clamps():
     assert abs(recency_decay(future, now=now) - 1.0) < 1e-9
 
 
-def test_recency_score_formula():
-    now = datetime.datetime(2026, 6, 1, tzinfo=datetime.timezone.utc)
-    recent = now.isoformat()
-    w, c = 0.8, 0.9
-    decay = recency_decay(recent, now=now)  # ~1.0
-    expected = 0.5 * c + 0.3 * w + 0.2 * decay
-    assert abs(recency_score(w, c, created_at=recent, now=now) - expected) < 1e-9
-
-
-def test_recency_score_fallback_decay():
-    now = datetime.datetime(2026, 6, 1, tzinfo=datetime.timezone.utc)
-    # legacy None -> decay 0.5
-    assert abs(recency_score(0.8, 0.9, created_at=None, now=now) - (0.5 * 0.9 + 0.3 * 0.8 + 0.2 * 0.5)) < 1e-9
-
-
 @settings(max_examples=200)
 @given(
-    w=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
-    c=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
     age_old=st.integers(min_value=30, max_value=365),
     age_new=st.integers(min_value=0, max_value=10),
 )
-def test_property_recency_new_wins_same_wc(w, c, age_old, age_new):
-    """Property: same weight×cosine, newer edge must rank higher."""
+def test_property_recency_decay_newer_is_larger(age_old, age_new):
     now = datetime.datetime(2026, 6, 1, tzinfo=datetime.timezone.utc)
     old_iso = (now - datetime.timedelta(days=age_old)).isoformat()
     new_iso = (now - datetime.timedelta(days=age_new)).isoformat()
-    s_old = recency_score(w, c, created_at=old_iso, now=now)
-    s_new = recency_score(w, c, created_at=new_iso, now=now)
-    # newer should strictly win (exp is strictly decreasing); allow tiny epsilon for age_new==age_old boundary but our ranges ensure old>new
-    assert s_new > s_old, f"new {new_iso} score {s_new} should beat old {old_iso} score {s_old} (w={w},c={c})"
+    assert recency_decay(new_iso, now=now) > recency_decay(old_iso, now=now)
+
 
 @settings(max_examples=150)
-@given(
-    w=st.floats(min_value=0.1, max_value=1.0, allow_nan=False, allow_infinity=False),
-    c=st.floats(min_value=0.1, max_value=1.0, allow_nan=False, allow_infinity=False),
-)
-def test_property_decay_contributes(w, c):
-    """Composite must equal weighted sum; decay term bounded [0.5 floor only when missing, but real decay in (0,1])."""
+@given(age_days=st.integers(min_value=0, max_value=365))
+def test_property_recency_decay_bounded(age_days):
     now = datetime.datetime(2026, 6, 1, tzinfo=datetime.timezone.utc)
-    recent = now.isoformat()
-    old = (now - datetime.timedelta(days=60)).isoformat()
-    s_recent = recency_score(w, c, created_at=recent, now=now)
-    s_old = recency_score(w, c, created_at=old, now=now)
-    s_legacy = recency_score(w, c, created_at=None, now=now)
-    # recent > legacy > old for sufficiently old? legacy decay 0.5, old exp(-60/30)=0.135 <0.5, so legacy > old
-    assert s_recent > s_legacy > s_old
+    iso = (now - datetime.timedelta(days=age_days)).isoformat()
+    d = recency_decay(iso, now=now)
+    assert 0.0 <= d <= 1.0

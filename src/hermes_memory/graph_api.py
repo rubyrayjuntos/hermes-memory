@@ -2,8 +2,8 @@
 
 Read-only surface the in-repo panes already call. Mutations return 501.
 Vertex IDs are decimal strings at the JSON boundary (AGE bigint).
-No extractors: graph comes from provider writes (Session/Turn/NEXT plus
-Postgres noun passports and mentions) plus whatever ingest already MERGEd.
+No extractors: the inspectable graph is Postgres `noun` + `semantic_edge`
+(`mentions`). AGE Session/Turn/NEXT is episodic order, not the catalog canvas.
 """
 from __future__ import annotations
 
@@ -23,7 +23,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from .store import Store, bridge_keys_for_seed, check_label, cypher_call, savepoint_name, validate_graph_name
+from .store import (
+    Store,
+    bridge_keys_for_seed,
+    check_label,
+    clamp_hnsw_ef_search,
+    cypher_call,
+    savepoint_name,
+    validate_graph_name,
+)
+from .walk import beam_score
 
 logger = logging.getLogger("hermes_memory.graph_api")
 
@@ -200,11 +209,11 @@ def unpack_expand_row(
     nfields = len(row)
     if nfields >= 8:
         decay = float(row[5]) if row[5] is not None else 0.5
-        score = float(row[6]) if row[6] is not None else (0.5 * c + 0.3 * w + 0.2 * decay)
+        score = float(row[6]) if row[6] is not None else None
         hop = int(row[7]) if row[7] is not None else 1
     elif nfields == 7:
         decay = float(row[5]) if row[5] is not None else 0.5
-        score = float(row[6]) if row[6] is not None else (0.5 * c + 0.3 * w + 0.2 * decay)
+        score = float(row[6]) if row[6] is not None else None
     elif nfields == 6:
         hop = int(row[5]) if row[5] is not None else 1
     return n, rel, m, w, c, decay, score, hop
@@ -231,6 +240,19 @@ def undirected_knn_edges(
     return [(a, b, c) for (a, b), c in best.items()]
 
 
+def _stamp_graph_degree(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> None:
+    degree: Dict[str, int] = {}
+    for edge in edges:
+        src = str(edge.get("source") or edge.get("from") or "")
+        dst = str(edge.get("target") or edge.get("to") or "")
+        if src:
+            degree[src] = degree.get(src, 0) + 1
+        if dst:
+            degree[dst] = degree.get(dst, 0) + 1
+    for node in nodes:
+        node["val"] = 1 + degree.get(str(node.get("id") or ""), 0)
+
+
 def assemble_catalog(
     *,
     age_nodes: List[Dict[str, Any]],
@@ -239,85 +261,56 @@ def assemble_catalog(
     mentions: List[Dict[str, Any]],
     limit: int = 80,
 ) -> Dict[str, Any]:
-    """Assemble the Garden catalog from flower AGE rows and SQL nouns."""
-    nodes: Dict[str, Dict[str, Any]] = {}
-    links: List[Dict[str, Any]] = []
-    degree: Dict[str, int] = {}
+    """Unscoped manifold: the same pack_search graph as /search, no query beam.
 
-    for raw in age_nodes:
-        if raw.get("label") not in {"Session", "Turn"}:
-            continue
-        node = dict(raw)
-        node_id = f"age:{str(node['id']).removeprefix('age:')}"
-        node["id"] = node_id
-        nodes[node_id] = node
-        degree[node_id] = 0
-
-    for raw in age_links:
-        if raw.get("label") not in {"NEXT", "IN_SESSION"}:
-            continue
-        source = f"age:{str(raw.get('source')).removeprefix('age:')}"
-        target = f"age:{str(raw.get('target')).removeprefix('age:')}"
-        if source not in nodes or target not in nodes:
-            continue
-        link = dict(raw)
-        link.update({"source": source, "target": target})
-        links.append(link)
-        degree[source] += 1
-        degree[target] += 1
-
-    visible_nouns: set[int] = set()
-    for passport in passports:
-        noun_id = int(passport["noun_id"])
-        node_id = f"noun:{noun_id}"
-        turn_vertex_id = passport.get("vertex_id")
-        turn_id = (
-            f"age:{str(turn_vertex_id).removeprefix('age:')}"
-            if turn_vertex_id is not None
-            else None
-        )
-        props = {
-            "type": passport.get("type"),
-            "turn_id": passport.get("turn_id"),
-            "turn_vertex_id": turn_id,
-        }
-        nodes[node_id] = {
-            "id": node_id,
-            "label": "Noun",
-            "name": str(passport.get("label") or noun_id),
-            "props": props,
-        }
-        degree.setdefault(node_id, 0)
-        visible_nouns.add(noun_id)
-
+    Flower AGE rows are ignored. Session and turn stay on noun properties.
+    """
+    del age_nodes, age_links
+    triples: List[Tuple[Any, ...]] = []
     for raw in mentions:
         src_noun = int(raw["src_noun"])
         tgt_noun = int(raw["tgt_noun"])
-        if src_noun not in visible_nouns or tgt_noun not in visible_nouns:
-            continue
-        source, target = f"noun:{src_noun}", f"noun:{tgt_noun}"
-        links.append({
-            "source": source,
-            "target": target,
-            "label": "mentions",
-            "weight": float(raw.get("magnitude") or 0.0),
-            "cosine": float(raw.get("cosine") or 0.0),
-            "decay": float(raw.get("decay") or 1.0),
-            "score": float(raw.get("score") or 0.0),
-        })
-        degree[source] += 1
-        degree[target] += 1
-
-    for node_id, node in nodes.items():
-        node["val"] = 1 + degree.get(node_id, 0)
+        src_name = str(raw.get("src_label") or raw.get("label") or src_noun)
+        tgt_name = str(raw.get("tgt_label") or tgt_noun)
+        mag = float(raw.get("magnitude") or 0.0)
+        cosine = float(raw.get("cosine") or 0.0)
+        decay = float(raw.get("decay") or 1.0)
+        _c, _comp, score = beam_score(
+            sim=0.0,
+            src_align=0.0,
+            tgt_align=0.0,
+            prov_boost=0.0,
+            decay=decay,
+            magnitude=mag,
+        )
+        triples.append((
+            {"id": str(src_noun), "name": src_name, "label": "Noun"},
+            "mentions",
+            {"id": str(tgt_noun), "name": tgt_name, "label": "Noun"},
+            mag,
+            cosine,
+            decay,
+            score,
+            0,
+        ))
+    packed = pack_search("", 8, 0, [], [], triples)
+    packed = attach_passport_anchors(packed, passports)
+    graph = packed.get("graph") or {"nodes": [], "edges": []}
+    nodes = list(graph.get("nodes") or [])
+    edges = list(graph.get("edges") or graph.get("links") or [])
     return {
-        "nodes": list(nodes.values()),
-        "links": links,
+        "nodes": nodes,
+        "links": edges,
+        "edges": edges,
+        "graph": {"nodes": nodes, "edges": edges, "links": edges},
+        "seeds": packed.get("seeds") or [],
+        "paths": packed.get("paths") or [],
         "meta": {
             "limit": int(limit),
             "label": "Garden",
+            "scope": "manifold",
             "verts": len(nodes),
-            "edges": len(links),
+            "edges": len(edges),
         },
     }
 
@@ -326,7 +319,7 @@ def attach_passport_anchors(
     packed: Dict[str, Any],
     passports: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Dock search nouns onto Turn vertices Fountain can snap to."""
+    """Stamp session/turn provenance onto search nouns. Do not inject flower gems."""
     graph = packed.setdefault("graph", {"nodes": [], "edges": [], "links": []})
     nodes: Dict[str, Dict[str, Any]] = {
         str(node["id"]): dict(node) for node in (graph.get("nodes") or [])
@@ -336,24 +329,12 @@ def attach_passport_anchors(
     for passport in passports:
         noun_key = f"noun:{int(passport['noun_id'])}"
         vertex_id = passport.get("vertex_id")
-        turn_id = (
+        turn_hook = (
             f"age:{str(vertex_id).removeprefix('age:')}"
             if vertex_id is not None
             else None
         )
-        if turn_id is not None and turn_id not in nodes:
-            turn_name = f"turn {passport.get('turn_id') or turn_id}"
-            nodes[turn_id] = {
-                "id": turn_id,
-                "label": "Turn",
-                "group": "Turn",
-                "name": turn_name,
-                "title": turn_name,
-                "props": {"turn_id": passport.get("turn_id")},
-            }
         if noun_key not in nodes:
-            if turn_id is None:
-                continue
             noun_name = str(passport.get("label") or passport["noun_id"])
             nodes[noun_key] = {
                 "id": noun_key,
@@ -365,10 +346,12 @@ def attach_passport_anchors(
             }
         node = nodes[noun_key]
         props = dict(node.get("props") or node.get("properties") or {})
-        if turn_id is not None:
-            props["turn_vertex_id"] = turn_id
+        if turn_hook is not None:
+            props["turn_vertex_id"] = turn_hook
         if passport.get("turn_id") is not None:
             props["turn_id"] = passport.get("turn_id")
+        if passport.get("session_id") is not None:
+            props["session_id"] = passport.get("session_id")
         if passport.get("type") is not None:
             props["type"] = passport.get("type")
         node["props"] = props
@@ -378,6 +361,7 @@ def attach_passport_anchors(
 
     node_list = list(nodes.values())
     packed["graph"] = {"nodes": node_list, "edges": edges, "links": edges}
+    _stamp_graph_degree(node_list, edges)
     packed.setdefault("retrieval", {})["vertices_reached"] = len(node_list)
     return packed
 
@@ -441,6 +425,10 @@ def pack_search(
             "weight": w,
             "cosine": c,
         })
+        if decay is not None:
+            edges[-1]["decay"] = decay
+        if score is not None:
+            edges[-1]["score"] = score
         src_is_seed = src["id"] in seed_ids
         path: Dict[str, Any] = {
             "from": src["id"],
@@ -492,11 +480,7 @@ def pack_search(
             "id": p["to"],
             "title": p["to_name"],
             "group": p["to_label"],
-            "rank_score": (
-                p["score"]
-                if p.get("score") is not None
-                else 0.5 * p["cosine"] + 0.3 * p["weight"]
-            ),
+            "rank_score": p["score"] if p.get("score") is not None else None,
             "governed": False,
         })
     if not ranked:
@@ -523,12 +507,14 @@ def pack_search(
         "score": float(s.get("similarity") or 0.0),
         "file_path": "",
     } for s in seeds]
+    node_list = list(nodes.values())
+    _stamp_graph_degree(node_list, edges)
     return {
         "query": q,
         "ranked": ranked[:k],
         "results": results,
         "seeds": seed_out,
-        "graph": {"nodes": list(nodes.values()), "edges": edges, "links": edges},
+        "graph": {"nodes": node_list, "edges": edges, "links": edges},
         "paths": paths,
         "retrieval": {
             "k": k,
@@ -778,7 +764,13 @@ class Runtime:
             pw = os.environ.get("HERMES_PG_PASSWORD", "")
             dsn = dsn.replace("{pg_password}", pw)
         self.pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
-        self.store = Store(self.pool, graph_name=self.cfg.graph)
+        self.store = Store(
+            self.pool,
+            graph_name=self.cfg.graph,
+            embed_model=self.cfg.embed_model,
+            embed_dim=self.cfg.embed_dim,
+            hnsw_ef_search=int(getattr(self.cfg, "hnsw_ef_search", 100)),
+        )
         try:
             self.embedder = Embedder(self.cfg.embed_url, self.cfg.embed_model, self.cfg.embed_dim)
         except Exception:
@@ -953,105 +945,47 @@ class Runtime:
                 return []
 
     async def _fetch_catalog_data(self, conn, graph: str, limit: int):
-        """Fetch the latest Turn flower plus its SQL noun manifold."""
-        turn_body = f"""
-            MATCH (n:Turn)
-            {catalog_where_clause("Turn")}
-            RETURN n, null, null, 0.5, 0.5
-            ORDER BY coalesce(n.turn_id, 0) DESC
-            LIMIT {int(limit)}
-        """
-        turn_rows = await self._fetch_catalog_cypher(conn, graph, turn_body, 0)
-        age_nodes: List[Dict[str, Any]] = []
-        turn_vertex_ids: List[int] = []
-        turn_ids: List[int] = []
-        for row in turn_rows:
-            node = humanize_node(parse_vertex(row["n"]))
-            if not node:
-                continue
-            age_nodes.append(node)
-            turn_vertex_ids.append(int(node["id"]))
-            raw_turn_id = (node.get("props") or {}).get("turn_id")
-            if raw_turn_id is not None and str(raw_turn_id).strip("-").isdigit():
-                turn_ids.append(int(raw_turn_id))
-        if not turn_vertex_ids:
-            return age_nodes, [], [], []
+        """Load the full conversation mention manifold (same edges /search walks).
 
-        ids = ", ".join(str(vid) for vid in turn_vertex_ids)
-        in_session_body = f"""
-            MATCH (n:Turn)-[r:IN_SESSION]->(m:Session)
-            WHERE id(n) IN [{ids}]
-            RETURN n, type(r), m, coalesce(r.weight, 1.0), coalesce(r.cosine, 1.0)
+        ``limit`` is unused; kept so the Runtime call site stays stable.
+        AGE flower is not fetched. ``graph`` is unused.
         """
-        next_body = f"""
-            MATCH (n:Turn)-[r:NEXT]->(m:Turn)
-            WHERE id(n) IN [{ids}] AND id(m) IN [{ids}]
-            RETURN n, type(r), m, coalesce(r.weight, 1.0), coalesce(r.cosine, 1.0)
-        """
-        relation_rows = list(
-            await self._fetch_catalog_cypher(conn, graph, in_session_body, 1)
-        ) + list(await self._fetch_catalog_cypher(conn, graph, next_body, 2))
-        age_links: List[Dict[str, Any]] = []
-        known_age_ids = {node["id"] for node in age_nodes}
-        for row in relation_rows:
-            src = humanize_node(parse_vertex(row["n"]))
-            dst = humanize_node(parse_vertex(row["m"]))
-            rel = None if row["rel"] is None else str(row["rel"]).strip().strip('"')
-            if not src or not dst or rel not in {"NEXT", "IN_SESSION"}:
-                continue
-            if dst["label"] == "Session" and dst["id"] not in known_age_ids:
-                age_nodes.append(dst)
-                known_age_ids.add(dst["id"])
-            if src["id"] not in known_age_ids or dst["id"] not in known_age_ids:
-                continue
-            age_links.append({
-                "source": src["id"],
-                "target": dst["id"],
-                "label": rel,
-                "weight": parse_agtype_number(row["w"], 1.0),
-                "cosine": parse_agtype_number(row["c"], 1.0),
-            })
-
+        del graph, limit
         try:
             passport_rows = await conn.fetch(
                 """
                 SELECT DISTINCT ON (p.noun_id)
-                       p.noun_id, n.label, n.type, p.vertex_id, p.turn_id
+                       p.noun_id, n.label, n.type, p.vertex_id, p.turn_id,
+                       p.session_id
                   FROM memory_chunk_nodes p
                   JOIN noun n ON n.id = p.noun_id
                  WHERE p.source = 'conversation'
                    AND p.noun_id IS NOT NULL
-                   AND p.turn_id = ANY($1::bigint[])
                  ORDER BY p.noun_id, p.turn_id DESC
-                """,
-                turn_ids,
+                """
             )
             passports = [dict(row) for row in passport_rows]
-            noun_ids = [int(row["noun_id"]) for row in passports]
             mention_rows = await conn.fetch(
                 """
-                SELECT src_noun, tgt_noun, magnitude,
-                       0.0::float AS cosine,
+                SELECT e.src_noun, e.tgt_noun,
+                       src.label AS src_label, tgt.label AS tgt_label,
+                       e.magnitude,
+                       1 - (e.e_src_vec <=> e.e_tgt_vec) AS cosine,
                        exp(
                          -greatest(0, extract(epoch FROM (now() - last_active_ts)))
                          / 2592000.0
-                       ) AS decay,
-                       (magnitude / 8.0) * exp(
-                         -greatest(0, extract(epoch FROM (now() - last_active_ts)))
-                         / 2592000.0
-                       ) AS score
-                  FROM semantic_edge
-                 WHERE verb_type = 'mentions'
-                   AND src_noun = ANY($1::int[])
-                   AND tgt_noun = ANY($1::int[])
-                """,
-                noun_ids,
-            ) if noun_ids else []
+                       ) AS decay
+                  FROM semantic_edge e
+                  JOIN noun src ON src.id = e.src_noun
+                  JOIN noun tgt ON tgt.id = e.tgt_noun
+                 WHERE e.verb_type = 'mentions'
+                """
+            )
             mentions = [dict(row) for row in mention_rows]
         except Exception:
             logger.debug("Garden noun catalog unavailable", exc_info=True)
             passports, mentions = [], []
-        return age_nodes, age_links, passports, mentions
+        return [], [], passports, mentions
 
     def _assemble_3d(self, rows, limit: int, label: Optional[str]) -> Dict[str, Any]:
         nodes: Dict[str, Dict[str, Any]] = {}
@@ -1107,16 +1041,15 @@ class Runtime:
                 rows = await self._fetch_3d_rows(conn, graph, label, limit)
                 return self._assemble_3d(rows, limit, label)
             else:
-                catalog_limit = min(int(limit), 80)
                 age_nodes, age_links, passports, mentions = await self._fetch_catalog_data(
-                    conn, graph, catalog_limit
+                    conn, graph, int(limit),
                 )
                 return assemble_catalog(
                     age_nodes=age_nodes,
                     age_links=age_links,
                     passports=passports,
                     mentions=mentions,
-                    limit=catalog_limit,
+                    limit=int(limit),
                 )
 
     def ghost(self, k: int = 5, threshold: float = 0.70, limit: int = 200) -> Dict[str, Any]:
@@ -1531,6 +1464,9 @@ class Runtime:
         packed = attach_passport_anchors(packed, passports)
         packed["retrieval"]["embed_model"] = getattr(self.cfg, "embed_model", "nomic-embed-text")
         packed["retrieval"]["embed_dim"] = getattr(self.cfg, "embed_dim", 768)
+        packed["retrieval"]["hnsw_ef_search"] = clamp_hnsw_ef_search(
+            getattr(self.store, "hnsw_ef_search", 100)
+        )
         packed["retrieval"]["embed_ms"] = round((t_embed - t0) * 1000, 1)
         packed["retrieval"]["vector_ms"] = round((t_vec - t_embed) * 1000, 1)
         packed["retrieval"]["graph_ms"] = round((t_graph - t_vec) * 1000, 1)

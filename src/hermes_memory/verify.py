@@ -160,7 +160,7 @@ async def run_verify(dsn: Optional[str] = None,
             tokens_est = 0
             try:
                 if isinstance(out, str) and out:
-                    # format_injection Path headers match [A] -REL-> [B]
+                    # prompt.rendered has no Cypher; graph_lines should be 0
                     graph_lines = len(re.findall(r"\[.*?\]\s*-.*->\s*\[.*?\]", out))
                     total_prefetch_lines = len([ln for ln in out.splitlines() if ln.strip().startswith("- ")])
                     tokens_est = max(1, len(out) // 4) if out else 0
