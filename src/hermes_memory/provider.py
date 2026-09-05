@@ -295,7 +295,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             embed_dim=self.config.embed_dim,
             hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
         )
-        await self.store.require_embed_version_columns()
+        await self.store.require_schema_head()
         async with pool.acquire() as conn:
             await self.store.load_age(conn)
         # Strong reference so the drain loop is never garbage-collected mid-flight.

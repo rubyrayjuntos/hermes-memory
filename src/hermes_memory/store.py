@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import asyncpg
 
 from .embed import vec_to_literal
+from .schema_guard import list_expected_versions, missing_versions
 from .walk import (
     WalkHypothesis,
     WalkRow,
@@ -404,6 +405,32 @@ class Store:
         self.embed_model = embed_model
         self.embed_dim = int(embed_dim)
         self.hnsw_ef_search = clamp_hnsw_ef_search(hnsw_ef_search)
+
+    async def require_schema_head(self) -> None:
+        """Refuse to start if migration_history is behind sql/migrations.
+
+        Compose init runs once on an empty volume. pytest --migrate keeps
+        hermes_test current. CD does not run migrate.py against live.
+        Comparing history to on-disk V*.sql is the check that catches the
+        next V8/V9-style lag without another manual audit.
+        """
+        expected = list_expected_versions()
+        async with self.pool.acquire() as conn:
+            try:
+                rows = await conn.fetch("SELECT version FROM migration_history")
+            except Exception as exc:
+                raise RuntimeError(
+                    "migration_history is missing; run python scripts/migrate.py"
+                ) from exc
+        applied = [str(r["version"]) for r in rows]
+        missing = missing_versions(applied, expected)
+        if missing:
+            raise RuntimeError(
+                f"migration_history missing {missing}; "
+                "run python scripts/migrate.py before writing "
+                f"(applied={sorted(applied)})"
+            )
+        await self.require_embed_version_columns()
 
     async def require_embed_version_columns(self) -> None:
         """Fail loudly if V10 `embed_model`/`embed_dim` columns are missing.
@@ -966,6 +993,11 @@ class Store:
         File-backed ``memory_entries`` (metadata.file_path set) are omitted:
         ingest already stores those first-chunk embeddings in ``doc_chunks``,
         so including both would duplicate a slot at identical cosine.
+
+        Legacy NULL ``embed_model``/``embed_dim`` (trust_nomic_768): unstamped
+        rows stay in this candidate pool. They are not filtered and not
+        backfilled. Do not treat NULL as the live config default if a second
+        embed model is introduced.
 
         Each arm ``ORDER BY embedding <=> $1 LIMIT k`` so the HNSW indexes
         (memory_entries, doc_chunks, conversations) can serve ANN; the outer

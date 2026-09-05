@@ -771,6 +771,7 @@ class Runtime:
             embed_dim=self.cfg.embed_dim,
             hnsw_ef_search=int(getattr(self.cfg, "hnsw_ef_search", 100)),
         )
+        await self.store.require_schema_head()
         try:
             self.embedder = Embedder(self.cfg.embed_url, self.cfg.embed_model, self.cfg.embed_dim)
         except Exception:

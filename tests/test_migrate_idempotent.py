@@ -43,6 +43,10 @@ async def test_migration_history_consistent(migrated_db, db_pool):
         rows = await conn.fetch("SELECT version FROM migration_history ORDER BY version")
     versions = [r["version"] for r in rows]
     assert "V1" in versions, f"V1 missing from migration_history: {versions}"
+    from hermes_memory.schema_guard import list_expected_versions, missing_versions
+
+    missing = missing_versions(versions, list_expected_versions())
+    assert missing == [], f"hermes_test history behind sql/migrations: {missing}"
     async with db_pool.acquire() as conn:
         col = await conn.fetchval(
             "SELECT column_name FROM information_schema.columns WHERE table_name='migration_history' AND column_name='execution_time_ms'"

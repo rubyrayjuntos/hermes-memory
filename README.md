@@ -222,6 +222,14 @@ in committed yaml — they resolve from the env vars named by `dsn_env`/`embed_u
   Warm prefetch should run well under 2s. If you're hitting the cap, check that
   Ollama is reachable (`HYBRID_AGE_EMBED_URL`) and that the HNSW indexes exist
   (`sql/init/03_indexes.sql`). On any failure the provider returns `""` rather than raising.
+- **Live schema behind `hermes_test`.** Compose `sql/init/` runs once on an empty
+  volume; CI `--migrate` does not touch live. If the provider logs
+  `migration_history missing [...]`, run `python scripts/migrate.py` against
+  `HYBRID_AGE_DSN`. `_ainit` checks history against every on-disk `V*.sql`.
+- **Unstamped embeddings (`embed_model` NULL).** Pre-V10 rows are left NULL on
+  purpose (`trust_nomic_768`): they stay in ANN and are treated as nomic/768.
+  They are not backfilled. Mixing a second embed model requires a backfill or
+  an ANN filter first.
 - **A failed Cypher statement poisons the whole transaction.** In AGE, an error
   aborts the transaction, not just the statement. The store layer wraps every
   Cypher call in a SAVEPOINT and rolls back to it; keep that pattern if you add SQL

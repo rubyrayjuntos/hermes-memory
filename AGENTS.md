@@ -23,6 +23,8 @@ Key files an agent should read for context:
 - Postgres writes via `psycopg` with `psycopg.sql.Identifier` for dynamic identifiers — never string-concatenate SQL/Cypher
 - Every Cypher write wrapped in `SAVEPOINT` / `RELEASE` (AGE transaction poisoning)
 - Migrations under `sql/migrations/` must be idempotent (`IF NOT EXISTS`, advisory locks, `CREATE OR REPLACE`)
+- Compose init is first-boot only; live does not auto-apply new `V*.sql`. Provider `_ainit` and the pane boot call `Store.require_schema_head()` and refuse to start if `migration_history` is behind `sql/migrations/`. Run `python scripts/migrate.py` against the target DSN.
+- Legacy NULL `embed_model`/`embed_dim` is an explicit policy (`trust_nomic_768`): unstamped rows stay in ANN and are treated as nomic-embed-text/768. Do not treat NULL as the live config default when adding a second model.
 - AGE property syntax is `{key: 'value'}` (no JSON quotes); pre-declare labels via `create_vlabel`/`create_elabel` on a separate autocommit connection
 - `memory_entries` dedup is on `(agent_identity, target, md5(content))` — not on raw content; update via `metadata->>'file_path'` + `UPDATE`
 - Ollama `nomic-embed-text` is 768-dim; never mix dimensions; chunk safely (<6K chars) with shrinking retries
