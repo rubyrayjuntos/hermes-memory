@@ -407,12 +407,10 @@ class Store:
         self.hnsw_ef_search = clamp_hnsw_ef_search(hnsw_ef_search)
 
     async def require_schema_head(self) -> None:
-        """Refuse to start if migration_history is behind sql/migrations.
+        """Refuse to start if migration_history is still behind after apply.
 
-        Compose init runs once on an empty volume. pytest --migrate keeps
-        hermes_test current. CD does not run migrate.py against live.
-        Comparing history to on-disk V*.sql is the check that catches the
-        next V8/V9-style lag without another manual audit.
+        Process start runs ``apply_pending_migrations`` first. This check is
+        the backstop if that apply was skipped or failed silently.
         """
         expected = list_expected_versions()
         async with self.pool.acquire() as conn:

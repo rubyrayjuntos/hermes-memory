@@ -4,7 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from hermes_memory.schema_guard import (
+    DEPLOY_TOPOLOGY,
     LEGACY_NULL_EMBED_POLICY,
+    LIVE_EVAL_POLICY,
     list_expected_versions,
     missing_versions,
 )
@@ -25,6 +27,44 @@ def test_missing_versions_reports_gap_in_file_order() -> None:
     expected = ["V7", "V8", "V9", "V10"]
     assert missing_versions(["V1", "V7"], expected) == ["V8", "V9", "V10"]
     assert missing_versions(expected, expected) == []
+    # Older code vs a newer applied head: extra versions are not a failure.
+    assert missing_versions(["V7", "V8", "V9", "V10", "V11"], expected) == []
+
+
+def test_github_cd_does_not_migrate_live() -> None:
+    """GHA cannot reach 127.0.0.1:5450. Cutover migrate is process start, not CD."""
+    cd = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "cd.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "migrate.py" not in cd
+    assert DEPLOY_TOPOLOGY["github_cd_migrates_live"] is False
+    assert DEPLOY_TOPOLOGY["process_start_applies_migrations"] is True
+    assert DEPLOY_TOPOLOGY["require_schema_head_is_backstop"] is True
+    assert DEPLOY_TOPOLOGY["rolling_deploy"] is False
+
+
+def test_provider_applies_migrations_before_schema_head() -> None:
+    from hermes_memory import graph_api as graph_mod
+    from hermes_memory import provider as provider_mod
+
+    for mod in (provider_mod, graph_mod):
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        apply_at = src.find("apply_pending_migrations")
+        head_at = src.find("require_schema_head")
+        assert apply_at != -1, f"{mod.__name__} must apply migrations at boot"
+        assert head_at != -1
+        assert apply_at < head_at, f"{mod.__name__} must migrate before the head check"
+
+
+def test_live_eval_waits_for_v9_gap_backfill() -> None:
+    """Do not lock a live-shaped golden set on the 257 unpassported turns."""
+    assert LIVE_EVAL_POLICY["backfill_v9_gap_before_golden"] is True
+    assert LIVE_EVAL_POLICY["exclude_unpassported_turns_until_backfill"] is True
+    golden = (
+        Path(__file__).resolve().parents[1] / "tests" / "data" / "ann_golden_turn_ids.json"
+    ).read_text(encoding="utf-8")
+    assert "golden-ann-" in golden
+    assert "live" not in golden.lower() or "not a live-production" in golden.lower()
 
 
 def test_legacy_null_embed_policy_is_an_explicit_decision() -> None:

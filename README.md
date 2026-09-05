@@ -222,10 +222,11 @@ in committed yaml — they resolve from the env vars named by `dsn_env`/`embed_u
   Warm prefetch should run well under 2s. If you're hitting the cap, check that
   Ollama is reachable (`HYBRID_AGE_EMBED_URL`) and that the HNSW indexes exist
   (`sql/init/03_indexes.sql`). On any failure the provider returns `""` rather than raising.
-- **Live schema behind `hermes_test`.** Compose `sql/init/` runs once on an empty
-  volume; CI `--migrate` does not touch live. If the provider logs
-  `migration_history missing [...]`, run `python scripts/migrate.py` against
-  `HYBRID_AGE_DSN`. `_ainit` checks history against every on-disk `V*.sql`.
+- **Live schema behind `hermes_test`.** GitHub CD does not migrate the loopback
+  volume. Provider and pane boot run `scripts/migrate.py` (advisory lock), then
+  `require_schema_head` refuses to start if history still lags. The head check
+  is a backstop, not the apply path. Topology is one provider plus an optional
+  pane — not a rolling multi-instance cutover.
 - **Unstamped embeddings (`embed_model` NULL).** Pre-V10 rows are left NULL on
   purpose (`trust_nomic_768`): they stay in ANN and are treated as nomic/768.
   They are not backfilled. Mixing a second embed model requires a backfill or

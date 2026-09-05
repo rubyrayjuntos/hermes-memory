@@ -32,6 +32,7 @@ from .store import (
     savepoint_name,
     validate_graph_name,
 )
+from .schema_guard import apply_pending_migrations
 from .walk import beam_score
 
 logger = logging.getLogger("hermes_memory.graph_api")
@@ -763,6 +764,9 @@ class Runtime:
         if "{pg_password}" in dsn:
             pw = os.environ.get("HERMES_PG_PASSWORD", "")
             dsn = dsn.replace("{pg_password}", pw)
+        if "***" in dsn:
+            dsn = dsn.replace("***", os.environ.get("HERMES_PG_PASSWORD", ""))
+        await asyncio.to_thread(apply_pending_migrations, dsn)
         self.pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
         self.store = Store(
             self.pool,

@@ -35,6 +35,7 @@ except ImportError:  # running outside the Hermes runtime (tests, CI)
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config
 from .embed import Embedder, vec_to_literal
 from .graph_api import classify_session_kind
+from .schema_guard import apply_pending_migrations
 from .store import Store, clamp_hnsw_ef_search
 
 logger = logging.getLogger("hybrid_age")
@@ -286,6 +287,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         if '{pg_password}' in dsn or '***' in dsn:
             dsn = dsn.replace('{pg_password}', os.environ.get('HERMES_PG_PASSWORD', ''))
             dsn = dsn.replace('***', os.environ.get('HERMES_PG_PASSWORD', ''))
+        await asyncio.to_thread(apply_pending_migrations, dsn)
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
         self.pool = pool  # assign before await points so failure paths can close it
         self.store = Store(
