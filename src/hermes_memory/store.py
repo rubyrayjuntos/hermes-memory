@@ -369,9 +369,10 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             return int(row["id"]) if row and row["id"] is not None else None
 
     async def set_drain_status(self, turn_id: int, status: str) -> None:
-        """Stamp C–F outcome on an existing conversation row (V11).
+        """Stamp this drain's C–F outcome on an existing row (V11).
 
-        Not the V9 unpassported gap. L1 insert failure has no row to stamp.
+        Prospective. Not the V9 historical gap (row never got a passport).
+        L1 insert failure has no row to stamp.
         """
         from .write_outcome import DRAIN_STATUSES
 
@@ -385,8 +386,9 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             )
 
     async def count_unpassported_turns(self) -> int:
-        """V9 gap: rows with no conversation passport. Not drain_status.
+        """V9 historical gap: row exists, never got a conversation passport.
 
+        Not drain_status (prospective: this drain's C–F after insert B).
         Same SQL as schema_guard.UNPASSPORTED_TURNS_SQL — one formula.
         """
         from .schema_guard import UNPASSPORTED_TURNS_SQL

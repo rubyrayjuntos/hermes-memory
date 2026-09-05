@@ -57,11 +57,12 @@ LIVE_EVAL_POLICY = {
     "enforced": True,
 }
 
-# V9 historical gap: conversation row exists, no noun passport.
-# This is NOT conversations.drain_status = 'graph_degraded'.
-# drain_status is this-drain C–F outcome after insert B (V11).
-# A V9-gap row never got a Kind; a GRAPH_DEGRADED row was stamped this process.
-# Merging the two measurements is the scoring split-brain at observability.
+# V9 historical gap: conversation row exists, no noun passport
+# (never stamped — the turn predates C–F or C–F never ran).
+# drain_status is prospective: this drain's C–F outcome after insert B (V11).
+# A V9-gap row has drain_status NULL. A GRAPH_DEGRADED row was stamped now.
+# COUNT(drain_status=…) is a different fact. Merging them is the scoring
+# split-brain at observability.
 UNPASSPORTED_TURNS_SQL = """
 SELECT COUNT(*)::bigint
   FROM conversations c

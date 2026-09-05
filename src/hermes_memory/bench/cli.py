@@ -111,8 +111,9 @@ def load_golden_set(
     *,
     unpassported_count: int | None = None,
 ) -> List[GoldenPair]:
-    # unpassported_count must be the passport anti-join (Store.count_unpassported_turns
-    # / UNPASSPORTED_TURNS_SQL), never COUNT(drain_status='graph_degraded').
+    # unpassported_count is the V9 historical gap (passport anti-join:
+    # row exists, never got a noun passport). Not drain_status, which is
+    # this-drain C–F after insert B. Pre-V11 unpassported rows are NULL.
     with open(path, "r", encoding="utf-8") as fh:
         raw = json.load(fh)
     kind = parse_eval_kind(raw)
@@ -532,7 +533,7 @@ async def cmd_run(args: argparse.Namespace, extra_cfgs: List[BenchConfig],
     await harness.connect()
     with open(args.golden_set, "r", encoding="utf-8") as fh:
         kind = parse_eval_kind(json.load(fh))
-    # V9 passport anti-join. Distinct from conversations.drain_status (V11).
+    # V9 historical/never-stamped gap. Not this-drain drain_status (V11).
     unpassported = None
     if kind == "live_shaped":
         assert harness.store is not None

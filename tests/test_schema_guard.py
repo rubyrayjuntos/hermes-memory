@@ -66,7 +66,7 @@ def test_provider_applies_migrations_before_schema_head() -> None:
 
 
 def test_unpassported_sql_is_not_drain_status() -> None:
-    """One formula. drain_status must not appear in the V9-gap query."""
+    """V9 gap SQL is historical (never-stamped passport), not drain_status."""
     sql = " ".join(UNPASSPORTED_TURNS_SQL.lower().split())
     assert "memory_chunk_nodes" in sql
     assert "drain_status" not in sql

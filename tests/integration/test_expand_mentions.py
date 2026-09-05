@@ -77,6 +77,7 @@ async def test_expand_mentions_returns_scored_seven_tuple(
         "turn_id": turn_id,
         "chunk_id": f"conv_{turn_id}",
         "hop": 1,
+        "provenance_turns": [turn_id],
     }
 
 
