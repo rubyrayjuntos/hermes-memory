@@ -12,7 +12,7 @@ versioning follows [SemVer](https://semver.org/).
 - Fountain live inspector (`docs/graph/fountain.html`) via `hermes-memory-api` on `127.0.0.1:7890`.
 - First-time install CLI (`hermes-memory-install`) plus upgrade / migrate / uninstall / backfill.
 - Instrumented prefetch / injection cockpit and graph path expansion (#59).
-- Write-outcome ledger (`WriteOutcome` / `WriteLedger`): drain records enqueue, embed, SQL turn, flower, nouns, mentions, and memory SQL; counts `dropped_writes`, `writes_failed`, `embed_null`, `graph_degraded`. Counters are process-local (restart zeros them); `record()` redacts `detail`.
+- Write-outcome ledger (`WriteOutcome` / `WriteLedger`): drain records enqueue, embed, SQL turn, flower, nouns, mentions, and memory SQL; counts `dropped_writes`, `writes_failed`, `embed_null`, `graph_degraded`. Counters are process-local (restart zeros them); `record()` redacts `detail`. After insert B, `conversations.drain_status` is `complete` / `embed_null` / `graph_degraded` (V11). L1 insert failure still leaves no row. Live-shaped eval counts unpassported turns via the passport anti-join, not `drain_status`.
 
 ### Security
 - Viz API CORS scoped to loopback/`null`; bind remains `127.0.0.1` (#61).
@@ -29,6 +29,7 @@ versioning follows [SemVer](https://semver.org/).
 - Ingest boots like the provider: `apply_pending_migrations` then `Store.require_schema_head`.
 - Viz API split: `graph_runtime` / `graph_http` / `graph_server` entrypoints.
 - Librarian/pane health merges write-ledger counters into the Store health payload.
+- Conversation drain stamps `drain_status` after insert B (`complete` / `embed_null` / `graph_degraded`). Live-shaped eval still uses the passport anti-join for `unpassported_count`, not this column. Prefetch still returns `""` for both empty recall and read failure; logs distinguish them (`prefetch empty recall` vs `prefetch failed`).
 - Rewrote ABOUT recency integration as mentions + magnitude ranking (`test_expand_graph_stronger_mentions_ranks_first`); mentions decay stays in `store_expand` / walk tests.
 
 ### Fixed

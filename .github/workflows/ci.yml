@@ -106,6 +106,13 @@ jobs:
       - name: Run migrations (--migrate)
         run: |
           PGPASSWORD="$HERMES_PG_PASSWORD" python scripts/migrate.py --dsn "postgres://hermes@localhost:5432/hermes_test"
+      - name: Drain-status tests must stay in the integration set
+        run: |
+          # Same marker set as recency. Collect-only — must not silently drop.
+          collected=$(pytest --collect-only -q --override-ini="addopts=" \
+            -m "integration or store or idempotent")
+          echo "$collected" | grep -F test_l1_insert_failure_leaves_no_row
+          echo "$collected" | grep -F test_l3_flower_failure_stamps_graph_degraded
       - name: Integration + store + idempotent tests
         run: |
           # No silent -k excludes. Smoke tests use HYBRID_AGE_DSN (5432/hermes_test).

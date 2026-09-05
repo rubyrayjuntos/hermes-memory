@@ -39,6 +39,15 @@ class Kind(StrEnum):
     FAILED = "failed"
 
 
+# Persisted on conversations.drain_status after insert B succeeds.
+# L1 SQL failure leaves no row — there is nothing to stamp (accepted loss).
+# LEDGER.counts() remain process-local and are a different fact.
+DRAIN_COMPLETE = "complete"
+DRAIN_STATUSES = frozenset(
+    {DRAIN_COMPLETE, Kind.EMBED_NULL.value, Kind.GRAPH_DEGRADED.value}
+)
+
+
 @dataclass(frozen=True)
 class WriteOutcome:
     stage: Stage

@@ -111,6 +111,8 @@ def load_golden_set(
     *,
     unpassported_count: int | None = None,
 ) -> List[GoldenPair]:
+    # unpassported_count must be the passport anti-join (Store.count_unpassported_turns
+    # / UNPASSPORTED_TURNS_SQL), never COUNT(drain_status='graph_degraded').
     with open(path, "r", encoding="utf-8") as fh:
         raw = json.load(fh)
     kind = parse_eval_kind(raw)
@@ -525,10 +527,17 @@ async def cmd_run(args: argparse.Namespace, extra_cfgs: List[BenchConfig],
                   title: str) -> List[RunMetrics]:
     cfg = load_config()
     dsn = args.dsn or os.environ.get(cfg.dsn_env) or DEFAULT_DSN
-    pairs = load_golden_set(args.golden_set)
     harness = BenchHarness(dsn, cfg.embed_url, cfg.embed_model, cfg.embed_dim,
                            cfg.graph)
     await harness.connect()
+    with open(args.golden_set, "r", encoding="utf-8") as fh:
+        kind = parse_eval_kind(json.load(fh))
+    # V9 passport anti-join. Distinct from conversations.drain_status (V11).
+    unpassported = None
+    if kind == "live_shaped":
+        assert harness.store is not None
+        unpassported = await harness.store.count_unpassported_turns()
+    pairs = load_golden_set(args.golden_set, unpassported_count=unpassported)
     try:
         all_metrics: List[RunMetrics] = []
         for bc in extra_cfgs:

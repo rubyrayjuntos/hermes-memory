@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .config import HybridAgeConfig
 from .graph_view import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -94,7 +95,7 @@ class Runtime:
         self.pool = None
         self.store: Optional[Store] = None
         self.embedder = None
-        self.cfg = None
+        self.cfg: HybridAgeConfig | None = None
         _load_dotenv_files()
         self.loop.call(self._boot())
 
@@ -104,8 +105,9 @@ class Runtime:
         from .config import load_config
         from .embed import Embedder
 
-        self.cfg = load_config()
-        dsn = self.cfg.dsn
+        cfg = load_config()
+        self.cfg = cfg
+        dsn = cfg.dsn
         if "{pg_password}" in dsn:
             pw = os.environ.get("HERMES_PG_PASSWORD", "")
             dsn = dsn.replace("{pg_password}", pw)
@@ -115,14 +117,14 @@ class Runtime:
         self.pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
         self.store = Store(
             self.pool,
-            graph_name=self.cfg.graph,
-            embed_model=self.cfg.embed_model,
-            embed_dim=self.cfg.embed_dim,
-            hnsw_ef_search=int(getattr(self.cfg, "hnsw_ef_search", 100)),
+            graph_name=cfg.graph,
+            embed_model=cfg.embed_model,
+            embed_dim=cfg.embed_dim,
+            hnsw_ef_search=int(getattr(cfg, "hnsw_ef_search", 100)),
         )
         await self.store.require_schema_head()
         try:
-            self.embedder = Embedder(self.cfg.embed_url, self.cfg.embed_model, self.cfg.embed_dim)
+            self.embedder = Embedder(cfg.embed_url, cfg.embed_model, cfg.embed_dim)
         except Exception:
             logger.debug("embedder init failed", exc_info=True)
             self.embedder = None
@@ -755,7 +757,7 @@ class Runtime:
         if self.embedder is not None:
             vec = await self.embedder.embed_text(q[:800])
         t_embed = time.perf_counter()
-        seeds = []
+        seeds: list[dict] = []
         if vec:
             seeds = await self.store.vector_search(vec_to_literal(vec), k)
         t_vec = time.perf_counter()

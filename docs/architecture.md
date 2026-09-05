@@ -62,9 +62,9 @@ Write-outcome layers (L0–L6):
 | Layer | Functions | Swallow? | Outcome |
 |-------|-----------|----------|---------|
 | L0 | Hermes `prefetch`, `sync_turn`, `on_memory_write` | Yes — never raise | prefetch `""` + `logger.exception`; writes enqueue or `DROPPED` |
-| L1 | Durable SQL `insert_turn`, memory upsert/replace/remove | Catch once in drain | `Kind.FAILED`, `logger.error` |
-| L2 | Embed (`embed_text`, turn embed) | Yes — NULL vector is first-class | `Kind.EMBED_NULL`, `logger.warning`, still insert SQL |
-| L3 | Graph flower / nouns / mentions | Yes after SQL turn (B) | `Kind.GRAPH_DEGRADED`, `logger.warning` |
+| L1 | Durable SQL `insert_turn`, memory upsert/replace/remove | Catch once in drain | No row (accepted loss) + process `writes_failed`. Nothing to scan or replay. |
+| L2 | Embed (`embed_text`, turn embed) | Yes — NULL vector is first-class | Row `drain_status='embed_null'` + process `EMBED_NULL`; still insert SQL |
+| L3 | Graph flower / nouns / mentions | Yes after SQL turn (B) | Row `drain_status='graph_degraded'` + process `GRAPH_DEGRADED` |
 | L4 | SAVEPOINT MERGE helpers | Yes, savepoint only | `logger.warning` (not debug) with label/edge class |
 | L5 | Teardown: shutdown, pane embedder, ghost, taxonomy backfill | Yes | debug or warning; do **not** increment write `FAILED` |
 | L6 | `require_schema_head`, bind host | No | raise |
@@ -90,8 +90,11 @@ Read from pre-warmed cache (queue_prefetch fills it off-thread)
 ```
 
 Key points:
-- Target <2s warm; Hermes hard-kills prefetch at 8s. On any failure prefetch
-  returns `""` — it never raises.
+- Target <2s warm; Hermes hard-kills prefetch at 8s. Prefetch never raises.
+  The return value is `""` for both empty recall and read failure (L0).
+  Those are not one Kind: `prefetch empty recall` is a completed search
+  with nothing to inject; `prefetch failed` / `prefetch timeout` is the
+  read path throwing. No `drain_status` and no write-ledger key for reads.
 - Graph expansion scores SQL `mentions` via `beam_score × magnitude`
   (`store_expand` / `walk`), not AGE ABOUT `created_at`.
 

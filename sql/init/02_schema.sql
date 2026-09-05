@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     processing_attempts INT NOT NULL DEFAULT 0,
     last_error TEXT,
     embed_model TEXT,
-    embed_dim INT
+    embed_dim INT,
+    -- C–F drain stamp (NULL = never written; not the V9 passport gap)
+    drain_status TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (

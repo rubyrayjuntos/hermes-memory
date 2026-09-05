@@ -57,6 +57,23 @@ LIVE_EVAL_POLICY = {
     "enforced": True,
 }
 
+# V9 historical gap: conversation row exists, no noun passport.
+# This is NOT conversations.drain_status = 'graph_degraded'.
+# drain_status is this-drain C–F outcome after insert B (V11).
+# A V9-gap row never got a Kind; a GRAPH_DEGRADED row was stamped this process.
+# Merging the two measurements is the scoring split-brain at observability.
+UNPASSPORTED_TURNS_SQL = """
+SELECT COUNT(*)::bigint
+  FROM conversations c
+ WHERE NOT EXISTS (
+       SELECT 1
+         FROM memory_chunk_nodes p
+        WHERE p.chunk_id = ('conv_' || c.id::text)
+          AND p.source = 'conversation'
+          AND p.noun_id IS NOT NULL
+ )
+"""
+
 
 def find_migrations_dir() -> Path:
     start = Path(__file__).resolve()
@@ -103,8 +120,9 @@ def assert_live_shaped_eval_allowed(
 ) -> None:
     """Refuse live-shaped golden sets until the V9-gap C–F backfill is done.
 
-    ``unpassported_count is None`` (unknown) fails closed. Synthetic and
-    legacy_substring sets are not this gate.
+    ``unpassported_count`` is the passport anti-join (UNPASSPORTED_TURNS_SQL),
+    not COUNT(drain_status='graph_degraded'). ``None`` (unknown) fails closed.
+    Synthetic and legacy_substring sets are not this gate.
     """
     if eval_kind != "live_shaped":
         return

@@ -45,7 +45,7 @@ from .schema_guard import apply_pending_migrations
 from .session_kind import classify_session_kind
 from .store import Store, clamp_hnsw_ef_search
 from .turn_filter import _is_noise
-from .write_outcome import LEDGER, Kind, Stage, WriteOutcome
+from .write_outcome import DRAIN_COMPLETE, LEDGER, Kind, Stage, WriteOutcome
 
 logger = logging.getLogger("hybrid_age")
 
@@ -329,8 +329,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._write_queue.put_nowait(item)
 
     async def _awrite_drain(self) -> None:
+        q = self._write_queue
+        assert q is not None
         while True:
-            item = await self._write_queue.get()
+            item = await q.get()
             if item is None:
                 break
             try:
@@ -351,7 +353,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     item["_ledger_failed"] = True
                 logger.warning("write item failed", exc_info=True)
             finally:
-                self._write_queue.task_done()
+                q.task_done()
 
     async def _awrite_item(self, item: dict) -> None:
         store = self.store
@@ -495,6 +497,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
             item["_ledger_failed"] = True
             return
         self._last_turn_id[session_id] = int(conv_id)
+        degraded = False
+        await self._stamp_drain(
+            store,
+            int(conv_id),
+            Kind.EMBED_NULL.value if vec is None else DRAIN_COMPLETE,
+        )
 
         vertex_id = None
         try:
@@ -512,6 +520,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     turn_id=int(conv_id),
                 ),
                 exc=exc,
+            )
+            degraded = True
+            await self._stamp_drain(
+                store, int(conv_id), Kind.GRAPH_DEGRADED.value,
             )
             vertex_id = None
 
@@ -548,9 +560,18 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 ),
                 exc=exc,
             )
+            await self._stamp_drain(
+                store, int(conv_id), Kind.GRAPH_DEGRADED.value,
+            )
             return
 
         if vec is None or not mentions or len(noun_ids) < 2:
+            if not degraded:
+                await self._stamp_drain(
+                    store,
+                    int(conv_id),
+                    Kind.EMBED_NULL.value if vec is None else DRAIN_COMPLETE,
+                )
             return
         try:
             pairs: list[tuple[int, int]] = []
@@ -585,6 +606,19 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 ),
                 exc=exc,
             )
+            await self._stamp_drain(
+                store, int(conv_id), Kind.GRAPH_DEGRADED.value,
+            )
+            return
+        if not degraded:
+            await self._stamp_drain(store, int(conv_id), DRAIN_COMPLETE)
+
+    async def _stamp_drain(self, store: Store, turn_id: int, status: str) -> None:
+        """Persist C–F outcome. Must not raise; stamp failure is not L1 FAILED."""
+        try:
+            await store.set_drain_status(turn_id, status)
+        except Exception:
+            logger.warning("drain_status stamp failed", exc_info=True)
 
     async def _link_turn_flower(
         self,
@@ -666,6 +700,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             result = self._run(self._aprefetch(query), timeout=self.config.prefetch_timeout_s + 1.0)
             return result or ""
         except Exception:
+            # Read-path failure. Same return as empty recall (""). Log is the distinguish.
             logger.exception("prefetch failed")
             return ""
 
@@ -783,6 +818,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         selected = self._budget_seeds(seed_payload)
         self._last_recall_count = len(selected)
         block = format_injection(selected)
+        if not (block or "").strip():
+            logger.info("prefetch empty recall")
         graph_n = sum(len(s.get("paths") or []) for s in selected)
         logger.info(
             "prefetch seeds=%d graph=%d kept=%d chars=%d "
@@ -805,7 +842,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self,
         seeds: List[dict],
         *,
-        q_vec: list[float],
+        q_vec: list[float] | None,
     ) -> List[dict]:
         from .provider_helpers import format_triple, parse_agtype_vertex
         from .walk import WalkHypothesis, parse_embedding
@@ -943,10 +980,11 @@ class HybridAgeMemoryProvider(MemoryProvider):
         secret_keys = {f["key"] for f in CONFIG_SCHEMA_FIELDS if f.get("secret")}
         knobs = {k: v for k, v in (values or {}).items() if k not in secret_keys and v is not None}
         doc: Dict[str, Any] = {}
-        yaml = None
+        yaml_mod = None
         try:
             import yaml
 
+            yaml_mod = yaml
             with open(path, "r", encoding="utf-8") as fh:
                 doc = yaml.safe_load(fh) or {}
         except FileNotFoundError:
@@ -961,8 +999,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         fd, temp_path = tempfile.mkstemp(dir=hermes_home, prefix=".config.yaml.", suffix=".tmp", text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                if yaml is not None:
-                    yaml.safe_dump(doc, fh, sort_keys=False)
+                if yaml_mod is not None:
+                    yaml_mod.safe_dump(doc, fh, sort_keys=False)
                 else:
                     json.dump(doc, fh, indent=2)
             os.replace(temp_path, path)
@@ -981,18 +1019,19 @@ class HybridAgeMemoryProvider(MemoryProvider):
         if self._loop is not None and self._write_queue is not None:
             try:
                 loop = self._loop
+                q = self._write_queue
                 remaining = max(0.05, deadline - time.monotonic())
                 done = threading.Event()
 
                 async def _drain_then_stop() -> None:
                     try:
                         await asyncio.wait_for(
-                            self._write_queue.join(), timeout=max(0.1, deadline - time.monotonic())
+                            q.join(), timeout=max(0.1, deadline - time.monotonic())
                         )
                     except (asyncio.TimeoutError, TimeoutError):
                         pass
                     finally:
-                        self._write_queue.put_nowait(None)  # stop sentinel
+                        q.put_nowait(None)  # stop sentinel
                         done.set()
 
                 asyncio.run_coroutine_threadsafe(_drain_then_stop(), loop)

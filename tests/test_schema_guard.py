@@ -7,6 +7,7 @@ from hermes_memory.schema_guard import (
     DEPLOY_TOPOLOGY,
     LEGACY_NULL_EMBED_POLICY,
     LIVE_EVAL_POLICY,
+    UNPASSPORTED_TURNS_SQL,
     list_expected_versions,
     missing_versions,
 )
@@ -21,6 +22,7 @@ def test_expected_versions_include_every_on_disk_migration() -> None:
         disk.append(p.stem.split("__")[0])
     assert expected == disk
     assert "V8" in expected and "V9" in expected and "V10" in expected
+    assert "V11" in expected
 
 
 def test_missing_versions_reports_gap_in_file_order() -> None:
@@ -63,8 +65,19 @@ def test_provider_applies_migrations_before_schema_head() -> None:
         assert apply_at < head_at, f"{mod.__name__} must migrate before the head check"
 
 
+def test_unpassported_sql_is_not_drain_status() -> None:
+    """One formula. drain_status must not appear in the V9-gap query."""
+    sql = " ".join(UNPASSPORTED_TURNS_SQL.lower().split())
+    assert "memory_chunk_nodes" in sql
+    assert "drain_status" not in sql
+    assert "graph_degraded" not in sql
+
+
 def test_live_eval_waits_for_v9_gap_backfill() -> None:
-    """Do not lock a live-shaped golden set on the 257 unpassported turns."""
+    """Do not lock a live-shaped golden set on the 257 unpassported turns.
+
+    That count is the passport anti-join, not drain_status='graph_degraded'.
+    """
     assert LIVE_EVAL_POLICY["backfill_v9_gap_before_golden"] is True
     assert LIVE_EVAL_POLICY["exclude_unpassported_turns_until_backfill"] is True
     assert LIVE_EVAL_POLICY["enforced"] is True
