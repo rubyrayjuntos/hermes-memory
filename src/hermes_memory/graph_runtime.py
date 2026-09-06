@@ -165,14 +165,15 @@ class Runtime:
         try:
             unpassported = await self.store.count_unpassported_turns()
         except Exception:
-            logger.debug("unpassported count unavailable", exc_info=True)
+            logger.warning("unpassported count unavailable", exc_info=True)
             unpassported = None
-        drain: Dict[str, int] | None = {
+        drain: Dict[str, int] = {
             "complete": 0,
             "embed_null": 0,
             "graph_degraded": 0,
             "unset": 0,
         }
+        drain_status: Dict[str, int] | None = drain
         pool = getattr(self, "pool", None)
         if pool is not None:
             try:
@@ -189,10 +190,10 @@ class Runtime:
                     elif status is None:
                         drain["unset"] += n
             except Exception:
-                logger.debug("drain_status counts unavailable", exc_info=True)
-                drain = None
+                logger.warning("drain_status counts unavailable", exc_info=True)
+                drain_status = None
         return {
-            "drain_status": drain,
+            "drain_status": drain_status,
             "unpassported_count": unpassported,
         }
 
