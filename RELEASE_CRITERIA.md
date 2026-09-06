@@ -55,14 +55,16 @@ telemetry is most of the *view* half; it is not 75% of a view-and-control pane.
 
 ## Criteria
 
-Status column is a **snapshot against `origin/main` @ `d7fbb5f` (2026-09-05)**.
+Status column is a **snapshot against `origin/main` @ `9428da0` (2026-09-05)**.
 Re-check before treating a row as closed. Execution state, not opinion.
+Narrative (why a row exists) is [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/HERMES_MEMORY_SPEC.md) §5;
+**Open/Met lives only in this table.**
 
-| ID | Track | Bar | Criterion | Why it is a row (already surfaced) | Status @ d7fbb5f |
+| ID | Track | Bar | Criterion | Why it is a row (already surfaced) | Status @ 9428da0 |
 |----|-------|-----|-----------|------------------------------------|------------------|
 | `D-MVP-1` | Delivery | MVP | Writes fail loud **or** are durably marked. L0 never raises. L1 = no row + process `writes_failed` (accepted loss). L2 = row + `embed_null`. L3 = row + `drain_status='graph_degraded'`. | Silent loss was the original lie. | **Met** under the OR. L1 is still not a durable mark — do not collapse it into `drain_status`. |
 | `D-MVP-2` | Delivery | MVP | Boot refuses to start on schema drift (`apply_pending_migrations` then `Store.require_schema_head`). | Compose init is first-boot only; live migrate is a backstop. | **Met** |
-| `D-MVP-3` | Delivery | MVP | CI on every merge runs the write-path tests (L1/L3 names collectable; `integration or store or idempotent` including `test_drain_status`). | A red `main` with “36 passed” is not a green write path until the failure is opened. | **Met** on `d7fbb5f` (run 33988783433). `f154df5` was **merged-but-red** on `expand_mentions` audit — historical, named, not parenthetical. |
+| `D-MVP-3` | Delivery | MVP | CI on every merge runs the write-path tests (L1/L3 names collectable; `integration or store or idempotent` including `test_drain_status`). | A red `main` with “36 passed” is not a green write path until the failure is opened. | **Met** on `d7fbb5f` (run 33988783433); still the write-path gate on `9428da0`. `f154df5` was **merged-but-red** on `expand_mentions` audit — historical, named. |
 | `D-MVP-4` | Delivery | MVP | One scoring function in-tree (`beam_score`). No dead competing formulas. | Four-formula split-brain. | **Met** (also `RQ-MVP-1`) |
 | `D-PROD-1` | Delivery | Production | Fleet-safe: revisit `DEPLOY_TOPOLOGY.rolling_deploy` vs `head_check=expected_not_applied_only`. Topology today is one provider + optional pane, not a rolling fleet. | Flipping one without the other is a known foot-gun (`AGENTS.md`). | **Open** — current topology is loopback / single-node by design. |
 | `D-PROD-2` | Delivery | Production | CD runs migrations against live, not boot-time backstop only. | GitHub CD does not migrate live. | **Open** |
@@ -73,8 +75,8 @@ Re-check before treating a row as closed. Execution state, not opinion.
 | `RQ-PROD-1` | Retrieval Quality | Production | Live-shaped golden set with human-judged expected memories, a defined bar, enforced in CI. | Spec Injection-Hit ≥ 0.85 is advisory until that set exists (≥50 was the sprint gate). `assert_live_shaped_eval_allowed` must keep refusing while the V9 gap remains. | **Open** — must not be locked yet. |
 | `RQ-PROD-2` | Retrieval Quality | Production | Documented, measured behavior for the V9-gap window (passport anti-join, not `drain_status`). | Historical unpassported turns vs this-drain C–F are two facts. | **Documented**; gap **not closed**. Closing the gap is backfill work, not a formula merge. |
 | `RQ-PROD-3` | Retrieval Quality | Production | Measured (not hedged) tokenizer accuracy for at least the dominant Hermes profile. | tiktoken `cl100k_base` is used for budget *counting*; that is not a measured match to Hermes’ tokenizer. | **Open** |
-| `OC-MVP-1` | Observability & Control | MVP | Pane is **read-only** and renders live `drain_status` aggregates, `LEDGER.snapshot()` / `LEDGER.counts()`, current `beam_score` inputs/outputs, and `hnsw.ef_search` / budget usage **directly from source**. No independent “degraded” or score formula. No stale field names. | A drifted pane is a false picture that looks authoritative. | **This session implemented** (Fountain `/api/health`, no mixer fallback). **origin/main CI: not yet.** Do not mark Met until CI is opened. |
-| `OC-MVP-2` | Observability & Control | MVP | Every pane-rendered value is traced to one real field (audit table). Integrity / “healthy” / “drifted” must not mean `GRAPH_DEGRADED` or V9-gap. | Same split-brain class, one layer up. | **This session implemented** for the status line (`live · ledger… · drain_status… · unpassported…`). Ingest `integrity.healthy` is no longer the badge. `verify_readonly` still reuses ingest hygiene as PASS/FAIL — remaining named leftover, not this status line. **CI: not yet.** |
+| `OC-MVP-1` | Observability & Control | MVP | Pane is **read-only** and renders live `drain_status` aggregates, `LEDGER.snapshot()` / `LEDGER.counts()`, current `beam_score` inputs/outputs, and `hnsw.ef_search` / budget usage **directly from source**. No independent “degraded” or score formula. No stale field names. | A drifted pane is a false picture that looks authoritative. | **In tree on `9428da0`** (Fountain `/api/health`, no mixer fallback). **Not Met** until that SHA’s CI run is opened and green. |
+| `OC-MVP-2` | Observability & Control | MVP | Every pane-rendered value is traced to one real field (audit table). Integrity / “healthy” / “drifted” must not mean `GRAPH_DEGRADED` or V9-gap. | Same split-brain class, one layer up. | **In tree on `9428da0`** for the status line (`live · ledger… · drain_status… · unpassported…`). `verify_readonly` still reuses ingest hygiene as PASS/FAIL — named leftover. **Not Met** until CI is opened. |
 | `OC-PROD-1` | Observability & Control | Production | Authenticated access to the pane when it is not loopback-only. | Bound to `D-PROD-3`. Loopback bind is Alpha, not auth. | **Open** |
 | `OC-PROD-2` | Observability & Control | Production | Control actions (backfill trigger, golden-set rerun, migration status/apply) require explicit confirmation, are authorized, and write their own audit trail. Mutating routes stay 501 until this row. | `visual-pane.md` CRUD / Cypher studio / re-embed. Unauthenticated writes would reintroduce silent failure. | **Open** — `match_route` already 501s POST/PATCH/DELETE. Keep it that way until this row. |
 
@@ -87,16 +89,13 @@ Opened `docs/graph/fountain.html`, `graph_http.py`, `graph_runtime.py`,
 
 | What the human sees | What it actually reads | Real field today | Verdict |
 |---------------------|------------------------|------------------|---------|
-| Cockpit hint `score=0.5c+0.3w+0.2decay` | Hardcoded `LEVEL_DEF[4]` | `beam_score` is `0.4*sim + 0.4*c*prov + 0.2*decay`, then `composite * (magnitude/8)` | **Stale formula** |
-| Mentions edge tooltip `score=` | `l.score` if present, else `score=unavailable` | Walker slot 6; no local mixer | **This session:** fallback guess removed |
+| Cockpit hint | `LEVEL_DEF[4]` | Walker `beam_score`; missing score is unavailable | **Updated on `9428da0`** |
+| Mentions edge tooltip `score=` | `l.score` if present, else `score=unavailable` | Walker slot 6; no local mixer | **Updated on `9428da0`** |
 | Injection debug `w=` `c=` `decay=` `score=` | `/api/librarian/search` paths + `retrieval.hnsw_ef_search` | `ef_search` is live from `clamp_hnsw_ef_search(store)`. `score` is walker score when present. Pane does not show `sim` / `prov_boost` / `magnitude` | **Partial** — ANN knob live; score decomposition is old mixer language |
-| Prompt-debug sibling in Python | **Opened:** `format_injection` (production) has no mixer. `format_debug_injection` had `score={bs}` plus an f-string *label* `(0.5*{bc}+0.3*{bw}+0.2*{br})`. `bs` is the real walker score; `0.5`/`0.3`/`0.2` are never multiplied. AST BinOp guard does not see JoinedStr. | Case **1** — static label, not live arithmetic, not a post-collapse reintroduction. Label deleted; JoinedStr scan added. | **Resolved this session** (CI not yet) |
+| Prompt-debug sibling in Python | `format_injection` has no mixer. `format_debug_injection` prints `score={bs}` only. JoinedStr scan in `test_score_contract`. | Case **1** label deleted on `9428da0`. | **In tree; CI not yet for OC rows** |
 | VECTOR metric caption `composite × (magnitude / 8)` | Caption only; value is `stats.vector.chunks` = `count(memory_entries)` | Caption matches `beam_score` last step; count is not ANN quality | **Caption closer than tooltip** |
-| `live · drifted N · isolated M` | `stats.integrity` (`missing_hash` + `missing_doc_type`; `isolated_files` hardcoded `0`) | File-backed ingest hygiene. **Not** `drain_status`, **not** V9 anti-join | **Wrong referent for “degraded”** |
-| `verify_readonly` PASS/FAIL | Reuses `integrity.healthy` | Same file-hash fact. Does **not** run `hermes-memory-verify` (correctly — that writes) | **Name collision** |
-| LEDGER (`dropped_writes`, `writes_failed`, `embed_null`, `graph_degraded`) | `Runtime.health()` and `librarian_health()` merge `LEDGER.snapshot()` / `counts()` | Process-local; pane **never fetches** `/health` or `/api/librarian/health` | **Invisible** |
-| `conversations.drain_status` | Nowhere in pane or `stats()` | V11 column | **Invisible** |
-| V9 unpassported count | Nowhere in pane | `UNPASSPORTED_TURNS_SQL` | **Invisible** (must not be labeled `graph_degraded` if added) |
+| Status badge | Fountain `GET /api/health` | `LEDGER` + `drain_status` + `unpassported_count` | **Wired on `9428da0`** — not ingest `isolated_files` |
+| `verify_readonly` PASS/FAIL | Reuses `integrity.healthy` | Same file-hash fact. Does **not** run `hermes-memory-verify` | **Name collision leftover** |
 | Catalog / ghost / search | GET `/graph/3d`, `/graph/stats`, `/graph/ghost`, `/search` | Live graph + ANN path | **Mechanism view works**; scoring overlay does not |
 | Control (backfill, migrate, CRUD) | POST/PATCH/DELETE → `501 read-only viz API` | Intended Alpha | **Correct for MVP** — do not “complete” `visual-pane.md` Issues C–D as MVP |
 
