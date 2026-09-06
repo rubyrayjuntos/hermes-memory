@@ -225,12 +225,12 @@ their status into a single score.**
 |-------|----------|---------|-----------------|
 | **Delivery** | Did the write happen, survive restart, stay marked? | `D-MVP-1..4` | `D-PROD-1..4` |
 | **Retrieval Quality** | Did the right memory come back? | `RQ-MVP-1/2`: mechanism smoke only | `RQ-PROD-*`: live-shaped golden set stays ungated |
-| **Observability & Control** | Can a human see those facts, then later act? | `OC-MVP-1/2`: pane reads source fields | `OC-PROD-1/2`: auth + confirmed mutations; `501` until then |
+| **Observability & Control** | Can a human see those facts, then later act? | `OC-MVP-1/2`: pane reads source fields (honesty). `OC-MVP-3`: a human can read the session from the live graph (meaning). | `OC-PROD-1/2`: auth + confirmed mutations; `501` until then |
 
 **Binding MVP decision:** Delivery-trustworthy on loopback. Live-shaped/human-judged recall
 quality does **not** block MVP. A second scoring formula in-tree **does**. Unauthenticated
 pane control is out of MVP. A pane view that disagrees with `drain_status` / `LEDGER` /
-`beam_score` blocks `OC-MVP-1`.
+`beam_score` blocks `OC-MVP-1`. A wired-but-illegible live graph blocks `OC-MVP-3`.
 
 **Live Open/Met cells:** [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) only.
 Re-verified against `9428da0` for this document: Delivery MVP and RQ MVP mechanism rows
@@ -296,6 +296,9 @@ same `embed_model`/`embed_dim` versioning already built for nomic (§2).
 
 - `OC-MVP-1/2` on `9428da0`: implemented in tree; **not Met** until that SHA’s `origin/main`
   CI run is opened and green. Not a hedge on whether the code exists.
+- `OC-MVP-3`: written bar in `RELEASE_CRITERIA.md` only. **Open.** Honesty rows do not
+  close it. Needs a level-6 human artifact against the Given/when/then, not a non-null
+  graph JSON.
 - Epistemic notice, bi-temporal invalidation, and Pre-Compress Checkpoint API V2 are
   **not on `origin/main`**. They are §6 proposals. There is nothing left to “confirm merge.”
 - Run the Gromov δ-hyperbolicity measurement (§7) — not executed; script not in this repo.

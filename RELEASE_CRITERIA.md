@@ -31,6 +31,7 @@ release gate.
 | Does `hermes-memory-verify` / synthetic ANN path failing in CI block an MVP cut? | **Yes.** That is `RQ-MVP-2` (mechanism smoke, not a quality floor). |
 | Does Injection-Hit ≥ 0.85 (spec §) block an MVP cut? | **No.** Sprint already marked that advisory until a ≥50-item golden set. That floor is Production-RQ, and only after `RQ-PROD-1` exists. |
 | Does an unauthenticated control action on the pane block an MVP cut? | **Control is out of MVP.** A stale *view* that disagrees with `drain_status` / `LEDGER` / `beam_score` blocks `OC-MVP-1`. |
+| Does a live graph that is wired to real fields but unreadable as a session block MVP? | **Yes.** Honesty (`OC-MVP-1`/`OC-MVP-2`) is not meaning. That is `OC-MVP-3`. |
 
 Both scopes are legitimate for an alpha memory system. This repo picks the first:
 **do not lose or mis-mark writes; do not pretend retrieval quality is closed.**
@@ -79,12 +80,15 @@ Narrative (why a row exists) is [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/
 | `RQ-PROD-3` | Retrieval Quality | Production | Measured (not hedged) tokenizer accuracy for at least the dominant Hermes profile. | tiktoken `cl100k_base` is used for budget *counting*; that is not a measured match to Hermes’ tokenizer. | **Open** |
 | `OC-MVP-1` | Observability & Control | MVP | Pane is **read-only** and renders live `drain_status` aggregates, `LEDGER.snapshot()` / `LEDGER.counts()`, current `beam_score` inputs/outputs, and `hnsw.ef_search` / budget usage **directly from source**. No independent “degraded” or score formula. No stale field names. | A drifted pane is a false picture that looks authoritative. | **Level 5/6 this session** — see [`docs/reports/pane-level6-2026-09-05.md`](docs/reports/pane-level6-2026-09-05.md). **Not Met** until CI at `9428da0` is opened and green. |
 | `OC-MVP-2` | Observability & Control | MVP | Every pane-rendered value is traced to one real field (audit table). Integrity / “healthy” / “drifted” must not mean `GRAPH_DEGRADED` or V9-gap. | Same split-brain class, one layer up. | **In tree on `9428da0`** for the status line (`live · ledger… · drain_status… · unpassported…`). `verify_readonly` still reuses ingest hygiene as PASS/FAIL — named leftover. **Not Met** until CI is opened. |
+| `OC-MVP-3` | Observability & Control | MVP | **Given** a session with ≥3 turns mentioning ≥2 named entities each, **when** that session is opened in the pane’s live graph view, **then**: (a) at least one node per mentioned entity, labeled from `noun.label` — not a placeholder or id; (b) at least one edge between two of them, and hover/click shows real source `magnitude` / `beam_score` — not `undefined` or a guessed number; (c) layout is not the Session/Turn flower — node positions must differ from a prior unrelated session (driven by this session’s relationships, not a fixed shape); (d) a human can say, without being told, roughly what the conversation was about from the graph alone. (d) is not automatable. A non-null query is not a pass. | Honesty (`OC-MVP-1`/`OC-MVP-2`) says the pane must not lie. This row says a populated pane must convey the session. Same class of gap as a plausible “the pane is fixed” with no pass bar. | **Open.** Written bar only. No demonstration; [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md) level 6 + artifact required. Do not credit `OC-MVP-1`/`OC-MVP-2` in-tree work as this row. |
 | `OC-PROD-1` | Observability & Control | Production | Authenticated access to the pane when it is not loopback-only. | Bound to `D-PROD-3`. Loopback bind is Alpha, not auth. | **Open** |
 | `OC-PROD-2` | Observability & Control | Production | Control actions (backfill trigger, golden-set rerun, migration status/apply) require explicit confirmation, are authorized, and write their own audit trail. Mutating routes stay 501 until this row. | `visual-pane.md` CRUD / Cypher studio / re-embed. Unauthenticated writes would reintroduce silent failure. | **Open** — `match_route` already 501s POST/PATCH/DELETE. Keep it that way until this row. |
 
 ---
 
-## Pane audit (2026-09-05) — evidence for `OC-MVP-*`
+## Pane audit (2026-09-05) — evidence for `OC-MVP-1` / `OC-MVP-2`
+
+Honesty only. Does **not** close `OC-MVP-3` (meaning / human-readable session graph).
 
 Opened `docs/graph/fountain.html`, `graph_http.py`, `graph_runtime.py`,
 `graph_view.pack_search`, `provider_helpers.format_injection`. Not a redesign.
@@ -135,3 +139,4 @@ A local pytest pass is not a repository claim. A green PR is not a green `main`.
 - Pane control actions, Cypher studio writes, or re-embed triggers (`visual-pane.md` Issues C–D).
 - Letting the pane (or `format_injection`) recompute a score instead of showing `beam_score` output.
 - Treating ingest `integrity.healthy` as write-path `graph_degraded` or as `hermes-memory-verify`.
+- Treating `OC-MVP-1`/`OC-MVP-2` (pane does not lie) as `OC-MVP-3` (a human can read the session from the graph). A non-null `/graph/3d` body is not (d).
