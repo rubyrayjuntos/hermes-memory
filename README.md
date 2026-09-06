@@ -142,7 +142,9 @@ Alpha (`0.1.0` in `pyproject.toml`). The tagged release is `v0.1.0` (2026-08-24)
 hardening). This is not a production multi-tenant service.
 
 **What the machine is:** [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/HERMES_MEMORY_SPEC.md).
-**Where “done” is defined:** [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md)
+**Where “done” is defined:** [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
+**What evidence “done” needs:** [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md)
+(user-facing = level 6 + artifact).
 (Delivery vs Retrieval Quality, plus derived Observability & Control). The
 table below is an inventory of what exists on `main`, not a release gate.
 

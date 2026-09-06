@@ -7,7 +7,9 @@ This file says what **done** means, on two independent tracks plus one
 **derived** seam (Observability & Control), at two bars.
 
 When a change lands, name the row it closes (or say it is out of scope). Do not
-treat a trail of verified incident-fixes as arrival.
+treat a trail of verified incident-fixes as arrival. A Met flip also needs
+[`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md): user-facing rows need level 6
+and an artifact, not “the code claims to.”
 
 **Supersedes** the 2026-09-01 “v0.2 production-ready plugin” wording in
 `docs/plans/board.md` and `docs/plans/sprint-v02.md`. Those files are sprint
@@ -75,7 +77,7 @@ Narrative (why a row exists) is [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/
 | `RQ-PROD-1` | Retrieval Quality | Production | Live-shaped golden set with human-judged expected memories, a defined bar, enforced in CI. | Spec Injection-Hit ≥ 0.85 is advisory until that set exists (≥50 was the sprint gate). `assert_live_shaped_eval_allowed` must keep refusing while the V9 gap remains. | **Open** — must not be locked yet. |
 | `RQ-PROD-2` | Retrieval Quality | Production | Documented, measured behavior for the V9-gap window (passport anti-join, not `drain_status`). | Historical unpassported turns vs this-drain C–F are two facts. | **Documented**; gap **not closed**. Closing the gap is backfill work, not a formula merge. |
 | `RQ-PROD-3` | Retrieval Quality | Production | Measured (not hedged) tokenizer accuracy for at least the dominant Hermes profile. | tiktoken `cl100k_base` is used for budget *counting*; that is not a measured match to Hermes’ tokenizer. | **Open** |
-| `OC-MVP-1` | Observability & Control | MVP | Pane is **read-only** and renders live `drain_status` aggregates, `LEDGER.snapshot()` / `LEDGER.counts()`, current `beam_score` inputs/outputs, and `hnsw.ef_search` / budget usage **directly from source**. No independent “degraded” or score formula. No stale field names. | A drifted pane is a false picture that looks authoritative. | **In tree on `9428da0`** (Fountain `/api/health`, no mixer fallback). **Not Met** until that SHA’s CI run is opened and green. |
+| `OC-MVP-1` | Observability & Control | MVP | Pane is **read-only** and renders live `drain_status` aggregates, `LEDGER.snapshot()` / `LEDGER.counts()`, current `beam_score` inputs/outputs, and `hnsw.ef_search` / budget usage **directly from source**. No independent “degraded” or score formula. No stale field names. | A drifted pane is a false picture that looks authoritative. | **Level 5/6 this session** — see [`docs/reports/pane-level6-2026-09-05.md`](docs/reports/pane-level6-2026-09-05.md). **Not Met** until CI at `9428da0` is opened and green. |
 | `OC-MVP-2` | Observability & Control | MVP | Every pane-rendered value is traced to one real field (audit table). Integrity / “healthy” / “drifted” must not mean `GRAPH_DEGRADED` or V9-gap. | Same split-brain class, one layer up. | **In tree on `9428da0`** for the status line (`live · ledger… · drain_status… · unpassported…`). `verify_readonly` still reuses ingest hygiene as PASS/FAIL — named leftover. **Not Met** until CI is opened. |
 | `OC-PROD-1` | Observability & Control | Production | Authenticated access to the pane when it is not loopback-only. | Bound to `D-PROD-3`. Loopback bind is Alpha, not auth. | **Open** |
 | `OC-PROD-2` | Observability & Control | Production | Control actions (backfill trigger, golden-set rerun, migration status/apply) require explicit confirmation, are authorized, and write their own audit trail. Mutating routes stay 501 until this row. | `visual-pane.md` CRUD / Cypher studio / re-embed. Unauthenticated writes would reintroduce silent failure. | **Open** — `match_route` already 501s POST/PATCH/DELETE. Keep it that way until this row. |

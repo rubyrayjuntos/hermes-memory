@@ -21,8 +21,9 @@ open [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md).
 |------|----------|-----|------------|
 | 1 | `origin/main` + tests | The machine | Ambition |
 | 2 | This document, §§2–4 (NOW contracts) | Describe that machine in words | Invent cache, sub-50ms prefetch, typed verbs, or anything not in code |
-| 3 | [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) | Destination rows: Delivery / RQ / OC × MVP / Prod (the only Open/Met table) | Define how prefetch works |
-| 4 | This document, §6 (Destination Deltas) | Proposed future work, explicitly labeled | Be quoted as `main` |
+| 3 | [`DEFINITION_OF_DONE.md`](../../DEFINITION_OF_DONE.md) | Evidence level required before a row may become Met / NOW | Substitute “closes D-MVP-3” for a running artifact |
+| 4 | [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) | Destination rows: Delivery / RQ / OC × MVP / Prod (the only Open/Met table) | Define how prefetch works |
+| 5 | This document, §6 (Destination Deltas) | Proposed future work, explicitly labeled | Be quoted as `main` |
 | — | `docs/plans/*`, sprint scratch | Working notes | Define release |
 
 A claim in §6 is a **proposal**, not a requirement, until it has a row in

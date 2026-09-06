@@ -8,6 +8,7 @@ This file is auto-loaded by OpenCode for every agent and command in this repo. I
 
 Key files an agent should read for context:
 - `docs/specs/HERMES_MEMORY_SPEC.md` — narrative: what the machine is and why (NOW contracts, destination deltas). Do not quote §6 as `main`.
+- `DEFINITION_OF_DONE.md` — evidence levels 1–6. User-facing work (pane, CLIs you open) is not done below level 6; attach the artifact, not the sentence. A Met cell in `RELEASE_CRITERIA.md` requires this gate first.
 - `RELEASE_CRITERIA.md` — the only Open/Met table (Delivery vs Retrieval Quality, plus derived Observability & Control). Cite row IDs (`D-MVP-*`, `RQ-PROD-*`, `OC-MVP-*`). Do not treat `docs/plans/board.md` “v0.2 production-ready” as current. MVP is Delivery-trustworthy; live-shaped retrieval quality does not block MVP. Pane view must read source fields (`drain_status`, `LEDGER`, `beam_score`); pane control is Production.
 - `README.md` — Quick Start, provider config
 - `CONTRIBUTING.md` — contribution guidelines
