@@ -109,7 +109,10 @@ def main():
             HERMES_HOME / "plugins" / "hybrid-age",
             HERMES_HOME / "profiles" / "librarian" / "plugins" / "hybrid-age",
         ):
-            if plugin_dir.exists():
+            if plugin_dir.is_symlink():
+                plugin_dir.unlink()
+                print(f"    Unlinked {plugin_dir}")
+            elif plugin_dir.exists():
                 shutil.rmtree(str(plugin_dir))
                 print(f"    Removed {plugin_dir}")
             else:

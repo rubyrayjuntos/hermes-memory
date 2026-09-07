@@ -38,8 +38,9 @@ else
   TARGET_DIR="$TMPDIR/repo"
 fi
 
-# Source files live in hermes-memory (canonical) or fallback to meta cookbook cache
-SRC_ROOT="$HOME/hermes-memory"
+# Source files live in this clone (the directory that contains scripts/).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 if [[ ! -f "$SRC_ROOT/opencode.json" ]]; then
   SRC_ROOT="$HOME/.hermes/docs/meta-cookbook-github-agent/recipe"
 fi

@@ -63,9 +63,16 @@ hermes-memory-verify
 # 6. New Hermes session — load skill librarian-setup and *you* seed three facts in chat
 ```
 
-`hermes-memory-install` copies the plugin **and** the `librarian-setup` skill,
-runs `pip install -e .`, sets `memory.provider=hybrid-age`, starts
-`docker compose`, and serves the inspector on `http://127.0.0.1:7890`.
+`hermes-memory-install` installs a **pinned git tree** (`--ref`, default
+`origin/main` via `git archive` — GitHub, not the dirty working clone or
+the `v0.1.0` tag): it copies
+`src/hermes_memory` into `~/.hermes/plugins/hybrid-age`, writes
+`.hermes-memory-version` (SHA + ref), `pip install`s that archive
+(non-editable), and starts compose project `hermes-memory-installed` on
+`127.0.0.1:5452` / `hermes_memory_installed`. It refuses the dev stack
+(`127.0.0.1:5450/hermes_memory`) unless you pass `--reuse-dsn`. Then it
+sets `memory.provider=hybrid-age` and serves the inspector on
+`http://127.0.0.1:7890`.
 Optional: `docker compose --profile pooled up -d` also starts PgBouncer on
 `127.0.0.1:6432`.
 
@@ -263,12 +270,13 @@ until re-tested.
 
 | Command | What it does |
 |---|---|
-| `hermes-memory-install` | First-time setup: compose, plugin + `librarian-setup` skill, pip, `memory.provider=hybrid-age`, viz API `:7890`, verify. |
+| `hermes-memory-install` | Pin a git ref into `~/.hermes/plugins/hybrid-age` (copy + `.hermes-memory-version`), non-editable pip, installed DB on `:5452` / `hermes_memory_installed`, viz API `:7890`, verify. Does not attach to the `:5450` dev stack. |
 | `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
 | `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
 | `hermes-memory-uninstall` | Stop viz API, disable hybrid‑age, drop hermes_memory DB (unless `--keep-db`), remove plugin dirs, fall back to built‑in MEMORY.md/USER.md. |
 | `hermes-memory-api` | Read-only viz API (`start`/`stop`/`status`/`serve`) on 127.0.0.1:7890. Pane: `http://127.0.0.1:7890/api/librarian/pane`. |
-| `hermes-memory-backfill` | Graph unlinked `conversations` via the provider Turn linker (skips C5 verify synthetics). |
+| `hermes-memory-backfill` | Legacy AGE `:Concept` + `ABOUT` only (`AboutConceptLinker`). Does **not** run live C–F (no nouns, passports, `semantic_edge`, or `drain_status`). |
+| `scripts/replay_conversation_manifold.py --live` | The C–F backfill: flower, `extract_nouns`, passports, `upsert_mentions_chain`, `drain_status` on `hermes_memory`. Default (no `--live`) copies onto `hermes_test`. |
 
 ### Backup & restore
 

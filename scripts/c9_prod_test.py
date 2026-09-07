@@ -1,44 +1,60 @@
-"""V2/V3: real-turn test against production DSN via installed plugin path."""
-import asyncio, importlib.util, sys, time
+"""V2/V3: real-turn test against an explicit DSN via the installed package.
 
-DSN = [l for l in open('/home/rswan/.hermes/.env') if l.startswith('HYBRID_AGE_DSN=')][0].split('=',1)[1].strip()
+Requires HYBRID_AGE_DSN. Does not read ~/.hermes/.env or load
+~/.hermes/plugins/hybrid-age — those paths are the old copy-install layout.
+"""
+from __future__ import annotations
+
+import asyncio
 import os
-os.environ['HYBRID_AGE_DSN'] = DSN
+import sys
+import time
 
-spec = importlib.util.spec_from_file_location(
-    "hybrid_age_plugin", "/home/rswan/.hermes/plugins/hybrid-age/__init__.py")
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-from hermes_memory.provider import HybridAgeMemoryProvider  # resolves to installed path
-import hermes_memory.provider as p
-print("provider module:", p.__file__)
+DSN = os.environ.get("HYBRID_AGE_DSN", "").strip()
+if not DSN:
+    print("c9_prod_test: set HYBRID_AGE_DSN (refuses ~/.hermes/.env)", file=sys.stderr)
+    raise SystemExit(2)
 
 from hermes_memory.config import load_config
-cfg = load_config()
-print("dsn tail:", cfg.dsn[-20:], "embed:", cfg.embed_model)
+from hermes_memory.provider import HybridAgeMemoryProvider
+import hermes_memory.provider as p
 
-async def main():
+print("provider module:", p.__file__)
+
+cfg = load_config()
+print("dsn host/db only:", cfg.dsn.split("@")[-1] if "@" in cfg.dsn else "(unset)", "embed:", cfg.embed_model)
+
+
+async def main() -> None:
     prov = HybridAgeMemoryProvider(config=cfg)
     prov.initialize("v2-prod-test", agent_identity="c9-verify", agent_context="primary")
 
     marker = f"c9-{int(time.time())}"
-    user = f"C9 prod test user turn: remember that Card Nine ships the Atlas recall."
-    asst = f"C9 prod test assistant turn: Noted — Card Nine's Atlas recall is stored."
+    user = "C9 prod test user turn: remember that Card Nine ships the Atlas recall."
+    asst = "C9 prod test assistant turn: Noted — Card Nine's Atlas recall is stored."
 
     prov.sync_turn(user, asst, session_id=marker)
-    prov.on_memory_write("add", "memory",
-                         f"c9-verify-memory-row: Card Nine -> Atlas recall",
-                         metadata={"source": marker})
+    prov.on_memory_write(
+        "add",
+        "memory",
+        "c9-verify-memory-row: Card Nine -> Atlas recall",
+        metadata={"source": marker},
+    )
 
-    # wait for drain
+    nconv = nmem = 0
     for _ in range(60):
         await asyncio.sleep(1)
         import asyncpg
+
         conn = await asyncpg.connect(DSN, timeout=10)
         nconv = await conn.fetchval(
-            "SELECT count(*) FROM conversations WHERE session_id=$1 AND content LIKE '%Atlas%'", marker)
+            "SELECT count(*) FROM conversations WHERE session_id=$1 AND content LIKE '%Atlas%'",
+            marker,
+        )
         nmem = await conn.fetchval(
-            "SELECT count(*) FROM memory_entries WHERE agent_identity='c9-verify' AND content LIKE 'c9-verify-memory-row:%'")
+            "SELECT count(*) FROM memory_entries WHERE agent_identity='c9-verify' "
+            "AND content LIKE 'c9-verify-memory-row:%'"
+        )
         await conn.close()
         if nconv >= 2 and nmem >= 1:
             break
@@ -49,5 +65,6 @@ async def main():
     print("prefetch contains 'Atlas':", "Atlas" in out)
     print(out[:600])
     prov.shutdown()
+
 
 asyncio.run(main())
