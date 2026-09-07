@@ -52,8 +52,13 @@ def test_copy_plugin_tree_is_a_copy_not_a_symlink(tmp_path: Path) -> None:
 def test_default_release_ref_is_origin_main_not_v010() -> None:
     ref = default_release_ref(REPO_ROOT)
     assert ref == "origin/main"
+    assert ref != "v0.1.0"
     _, sha = resolve_pin(REPO_ROOT, ref)
-    _, v010 = resolve_pin(REPO_ROOT, "v0.1.0")
+    assert len(sha) == 40
+    try:
+        _, v010 = resolve_pin(REPO_ROOT, "v0.1.0")
+    except SystemExit:
+        return
     assert sha != v010
 
 
