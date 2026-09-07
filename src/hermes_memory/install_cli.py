@@ -148,19 +148,50 @@ def installed_dsn(password: str, *, host: str = "127.0.0.1") -> str:
     return f"postgres://hermes:{password}@{host}:{INSTALLED_PORT}/{INSTALLED_DB}"
 
 
-def write_installed_compose_override(path: Path) -> None:
+def write_installed_compose(path: Path) -> None:
+    """Standalone compose for the installed DB. No ``sql/init``.
+
+    Dev compose first-boot mounts ``sql/init`` (HEAD schema). Merging that
+    with ``migrate.py`` from empty ``migration_history`` reapplies V1–V11
+    on top of HEAD tables: V1's ``CREATE TABLE IF NOT EXISTS`` skips the
+    ``memory_chunk_nodes`` PK, then V8's ``ON CONFLICT (chunk_id, source,
+    vertex_id)`` fails. Installed volumes are empty; ``migrate.py`` is the
+    schema owner. Write this file into a pin export that contains ``./docker``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "services:\n"
         "  postgres:\n"
+        "    build:\n"
+        "      context: ./docker\n"
+        "      dockerfile: Dockerfile\n"
+        "    image: hermes-memory-postgres:local\n"
         f"    container_name: {INSTALLED_CONTAINER}\n"
-        f'    ports:\n'
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        "      POSTGRES_USER: ${HERMES_PG_USER:-hermes}\n"
+        "      POSTGRES_PASSWORD: ${HERMES_PG_PASSWORD:?set HERMES_PG_PASSWORD}\n"
+        f"      POSTGRES_DB: ${{HERMES_PG_DB:-{INSTALLED_DB}}}\n"
+        "    ports:\n"
         f'      - "127.0.0.1:{INSTALLED_PORT}:5432"\n'
+        "    volumes:\n"
+        "      - pgdata:/var/lib/postgresql/data\n"
+        "    healthcheck:\n"
+        f'      test: ["CMD-SHELL", "pg_isready -U $${{POSTGRES_USER:-hermes}} -d $${{POSTGRES_DB:-{INSTALLED_DB}}}"]\n'
+        "      interval: 5s\n"
+        "      timeout: 5s\n"
+        "      retries: 12\n"
+        "      start_period: 30s\n"
         "volumes:\n"
         "  pgdata:\n"
         f"    name: {INSTALLED_COMPOSE_PROJECT}_pgdata\n",
         encoding="utf-8",
     )
+
+
+def write_installed_compose_override(path: Path) -> None:
+    """Backward-compatible name — writes the standalone installed compose."""
+    write_installed_compose(path)
 
 
 def write_hybrid_age_block(config_path: Path, embed_model: str, graph: str) -> None:
@@ -449,14 +480,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    updated {config_path}")
 
         print(f"[5/7] Starting installed Postgres ({_redact_dsn(dsn)})…")
-        compose_path = export / "docker-compose.yml"
-        override_path = HERMES_HOME / "compose" / "hermes-memory-installed.yml"
-        if not compose_path.exists():
-            print("    WARNING: docker-compose.yml not in pin.")
-        elif is_dev_clone_dsn(dsn):
+        compose_path = export / "docker-compose.installed.yml"
+        record_path = HERMES_HOME / "compose" / "hermes-memory-installed.yml"
+        if is_dev_clone_dsn(dsn):
             print("    --reuse-dsn: not creating a new compose project.")
+        elif not (export / "docker" / "Dockerfile").is_file():
+            print("    WARNING: pin is missing docker/Dockerfile.")
+            return 1
         else:
-            write_installed_compose_override(override_path)
+            write_installed_compose(compose_path)
+            write_installed_compose(record_path)
             env = os.environ.copy()
             parsed = urlparse(dsn)
             if parsed.password:
@@ -471,8 +504,6 @@ def main(argv: list[str] | None = None) -> int:
                     INSTALLED_COMPOSE_PROJECT,
                     "-f",
                     str(compose_path),
-                    "-f",
-                    str(override_path),
                     "up",
                     "-d",
                     "postgres",

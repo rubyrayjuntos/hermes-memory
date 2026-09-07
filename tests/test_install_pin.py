@@ -4,6 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from hermes_memory.install_cli import (
+    INSTALLED_CONTAINER,
+    INSTALLED_DB,
+    INSTALLED_PORT,
     REPO_ROOT,
     VERSION_FILENAME,
     copy_plugin_tree,
@@ -12,6 +15,7 @@ from hermes_memory.install_cli import (
     is_dev_clone_dsn,
     read_version_stamp,
     resolve_pin,
+    write_installed_compose,
     write_version_stamp,
 )
 
@@ -60,6 +64,19 @@ def test_default_release_ref_is_origin_main_not_v010() -> None:
     except SystemExit:
         return
     assert sha != v010
+
+
+def test_installed_compose_has_no_first_boot_init(tmp_path: Path) -> None:
+    path = tmp_path / "docker-compose.installed.yml"
+    write_installed_compose(path)
+    text = path.read_text(encoding="utf-8")
+    assert "sql/init" not in text
+    assert "docker-entrypoint-initdb.d" not in text
+    assert INSTALLED_CONTAINER in text
+    assert INSTALLED_PORT in text
+    assert INSTALLED_DB in text
+    assert "hermes-memory-installed_pgdata" in text
+    assert "pgdata:/var/lib/postgresql/data" in text
 
 
 def test_resolve_and_export_pin_is_this_repo_head(tmp_path: Path) -> None:
