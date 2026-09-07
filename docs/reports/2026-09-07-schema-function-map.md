@@ -7,24 +7,41 @@ This is the load-bearing inventory: table, function, and (for write + recall) ci
 | Field | Value |
 |---|---|
 | `pwd` | `/home/rswan/Documents/hermes-memory` |
-| `git rev-parse HEAD` | `1d9aa0851f586bb8b4c0597869d7293ebe5157cf` (`1d9aa08` — `docs: add OC-MVP-3 as the pane meaning bar (#69)`) |
+| `git rev-parse HEAD` | `8c3e0de1c360219c6d5d2f34349a1f44a047fdbe` (`8c3e0de` — `fix: installed plugin verifies schema from migration_history, not sql/`) |
 | Branch | `main` tracking `origin/main` |
-| Editable install | **Not this tree.** `pip show hermes-memory` → `Editable project location: /home/rswan/hermes-memory` (stalled clone). Hermes writes still follow that install unless `PYTHONPATH`/`pip install -e` is retargeted at Documents. Same Postgres (`127.0.0.1:5450`). |
+| Runtime install | **Not an editable clone.** `hermes-memory-install` pins `origin/main` via `git archive`, copies the package into `~/.hermes/plugins/hybrid-age` (not a symlink, no `.git`), `pip install`s that pin into site-packages, and stamps `~/.hermes/plugins/hybrid-age/.hermes-memory-version` (`sha=8c3e0de…`, `ref=origin/main`, `installed_at=2026-09-07T21:15:53Z`). The stalled clone at `/home/rswan/hermes-memory` is **gone**. |
 
-`--live` C–F on `scripts/replay_conversation_manifold.py` is on GitHub in the commit that lands this line. `.serena/` remains local-only.
+`--live` C–F on `scripts/replay_conversation_manifold.py` is on `main` (`90f8a94`). `.serena/` remains local-only.
 
-Do not treat “the review was from Documents” as “runtime is Documents.”
+Do not treat “the review was from Documents” as “runtime is Documents.” Runtime after install is the pin + `:5452` / `hermes_memory_installed`.
 
 ---
 
-## Two stores
+## Two stores, two loopback DBs
 
-Postgres 17 on loopback `:5450`:
+Two Postgres 17 instances on loopback (do not collapse them):
+
+| Stack | Port / DB | Who owns schema | Role tonight |
+|---|---|---|---|
+| Dev clone | `:5450` / `hermes_memory` | Compose first-boot `sql/init` (HEAD) + later `migrate.py` | Clone / historical 800+ turns. Documents has **no** `.env`; only `.env.example` names this DSN. |
+| Installed pin | `:5452` / `hermes_memory_installed` | Empty volume + pinned `scripts/migrate.py`. **No** `sql/init` mount (`install_cli.write_installed_compose`). | Live Hermes + pane after `hermes-memory-install`. Pin `8c3e0de`. |
+
+On each instance:
 
 1. **Relational + pgvector** (`public.*`) — turns, nouns, mention edges, file chunks, bridge rows.
 2. **Apache AGE** graph `hermes_knowledge` — flower (`:Turn` / `:Session` / `NEXT` / `IN_SESSION`) and ingest (`:File` / `:Module` / `:Dependency` / `Imports`).
 
 Conversation-meaning recall walks **SQL** `semantic_edge`, not AGE.
+
+### Installer schema check (landed after the first draft of this map)
+
+The 1d9aa08 draft described an editable clone sharing `:5450`. That is stale.
+
+`hermes-memory-install` does **not** copy `sql/` into `~/.hermes/plugins/hybrid-age`. The plugin tree is package code only. Schema apply is `migrate.py --dsn` against the installed DSN during install. After that, boot is `apply_pending_migrations` (no-op when `sql/migrations` is not next to the plugin) then `Store.require_schema_head()`.
+
+Installed `require_schema_head` does **not** diff a copied `sql/` tree. It compares `CONSUMER_HEAD_VERSIONS` (`V1`, `V9`, `V10`, `V11`) to the live `migration_history` table (`schema_guard.expected_versions_for_head_check` / `store.py:288-312`). Clone/CI still compare on-disk `V*.sql` when that directory exists.
+
+Merging first-boot `sql/init` (HEAD tables) with empty `migration_history` + V1–V11 is the I-INSTALL-1 foot-gun the installer now avoids on `:5452`.
 
 ---
 
@@ -39,7 +56,16 @@ Conversation-meaning recall walks **SQL** `semantic_edge`, not AGE.
 | `doc_chunks` | `Ingestor._index_file` | `Store.vector_search` (ANN arm 2) |
 | `memory_entries` | ingest `_index_file`; `Store.upsert_memory_entry` / `replace` / `remove` | `vector_search` (`file_path IS NULL` only); `librarian_health` |
 
-DDL-only (confirmed unused by `src/`): `sessions`, `messages`, `librarian_chunks`, extractor-queue columns on `conversations`, most V1 AGE labels. Safe to prune (not ticketed here; do not mix with SQL `mentions`).
+DDL-only (reconfirmed unused by `src/` DML at `8c3e0de`; empty on `:5452` tonight — 0 rows each for `sessions`, `messages`, `librarian_chunks`): extractor-queue columns on `conversations` (`processed_at`, `relations_processed_at`, `processing_attempts`, `last_error` — V1 still creates them; no `src/` reader/writer), plus unused V1 AGE labels (`Person`, `Project`, `Technology`, `Organization`, `Domain`, `Skill`, `Tool`, `Repo`, `Standard`, AGE `Mentions` / `CoMentioned` / `SemanticallyRelated`). Live AGE labels stay: `Session`/`Turn`/`NEXT`/`IN_SESSION`, ingest `File`/`Module`/`Dependency`/`Imports`, leftover `Concept`/`ABOUT`.
+
+**Dead-schema prune — deferred (2026-09-07, fourth confirmation).** Not executed. Why:
+
+1. It is a real schema mutation (new `V*.sql` `DROP` / AGE label surgery), not a doc/ticket. Session rule: do not land that on `main` without a CI-gated PR.
+2. V1 and `sql/init/02_schema.sql` still `CREATE` these objects. A drop that is not also removed from V1/`sql/init` (or isolated to a later idempotent migration) re-creates them on the next empty-volume install or first-boot compose.
+3. AGE `Mentions` must not be mixed with SQL `semantic_edge.verb_type='mentions'`. A “prune unused labels” patch that touches the wrong `Mentions` is the expensive failure mode.
+4. `Concept`/`ABOUT` look unused on the provider hot path but `hermes-memory-backfill` / `store_concepts` still write them — they are leftover, not dead.
+
+Ticket the prune as its own PR when Documents `:5450` and installed `:5452` both have an explicit DSN story (#74 acceptance). Do not sneak it into installer or pane work.
 
 ---
 
