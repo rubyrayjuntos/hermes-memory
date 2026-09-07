@@ -11,7 +11,7 @@ This is the load-bearing inventory: table, function, and (for write + recall) ci
 | Branch | `main` tracking `origin/main` |
 | Editable install | **Not this tree.** `pip show hermes-memory` → `Editable project location: /home/rswan/hermes-memory` (stalled clone). Hermes writes still follow that install unless `PYTHONPATH`/`pip install -e` is retargeted at Documents. Same Postgres (`127.0.0.1:5450`). |
 
-Working tree at capture: `M scripts/replay_conversation_manifold.py` (`--live` C–F, uncommitted); untracked `.serena/`.
+`--live` C–F on `scripts/replay_conversation_manifold.py` is on GitHub in the commit that lands this line. `.serena/` remains local-only.
 
 Do not treat “the review was from Documents” as “runtime is Documents.”
 
