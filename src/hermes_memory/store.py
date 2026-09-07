@@ -34,7 +34,7 @@ from .age_cypher import (  # noqa: F401 — re-export public + test aliases
     validate_graph_name,
 )
 from .embed import vec_to_literal
-from .schema_guard import list_expected_versions, missing_versions
+from .schema_guard import expected_versions_for_head_check, missing_versions
 from .store_concepts import StoreConceptsMixin
 from .store_expand import StoreExpandMixin
 from .store_merge import StoreMergeMixin
@@ -288,10 +288,12 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
     async def require_schema_head(self) -> None:
         """Refuse to start if migration_history is still behind after apply.
 
-        Process start runs ``apply_pending_migrations`` first. This check is
-        the backstop if that apply was skipped or failed silently.
+        Process start runs ``apply_pending_migrations`` first (no-op when
+        ``sql/migrations`` is not next to the plugin). This check is the
+        backstop: clone/CI compare disk V*.sql; installed plugin compares
+        ``CONSUMER_HEAD_VERSIONS`` to the live ``migration_history`` table.
         """
-        expected = list_expected_versions()
+        expected = expected_versions_for_head_check()
         async with self.pool.acquire() as conn:
             try:
                 rows = await conn.fetch("SELECT version FROM migration_history")

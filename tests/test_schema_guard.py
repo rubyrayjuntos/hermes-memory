@@ -4,10 +4,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from hermes_memory.schema_guard import (
+    CONSUMER_HEAD_VERSIONS,
     DEPLOY_TOPOLOGY,
     LEGACY_NULL_EMBED_POLICY,
     LIVE_EVAL_POLICY,
     UNPASSPORTED_TURNS_SQL,
+    apply_pending_migrations,
+    expected_versions_for_head_check,
     list_expected_versions,
     missing_versions,
 )
@@ -23,6 +26,21 @@ def test_expected_versions_include_every_on_disk_migration() -> None:
     assert expected == disk
     assert "V8" in expected and "V9" in expected and "V10" in expected
     assert "V11" in expected
+
+
+def test_installed_plugin_head_reads_consumer_versions_not_disk(monkeypatch) -> None:
+    import hermes_memory.schema_guard as sg
+
+    monkeypatch.setattr(sg, "try_find_migrations_dir", lambda: None)
+    assert expected_versions_for_head_check() == list(CONSUMER_HEAD_VERSIONS)
+    assert "V11" in CONSUMER_HEAD_VERSIONS
+    apply_pending_migrations("postgres://hermes:x@127.0.0.1:5452/hermes_memory_installed")
+
+
+def test_clone_head_check_still_uses_on_disk_migrations() -> None:
+    expected = expected_versions_for_head_check()
+    assert expected == list_expected_versions()
+    assert set(CONSUMER_HEAD_VERSIONS).issubset(set(expected))
 
 
 def test_missing_versions_reports_gap_in_file_order() -> None:

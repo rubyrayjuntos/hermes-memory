@@ -76,23 +76,50 @@ SELECT COUNT(*)::bigint
 """
 
 
-def find_migrations_dir() -> Path:
+# Versions this process must see in migration_history when sql/migrations is
+# not shipped next to the plugin (hermes-memory-install). The installer owns
+# apply; the plugin only consumes. Bump when plugin code starts depending on
+# a newer V*. Do not copy the SQL tree into ~/.hermes/plugins to keep these
+# in sync — that is a second source of truth.
+CONSUMER_HEAD_VERSIONS = ("V1", "V9", "V10", "V11")
+
+
+def try_find_migrations_dir() -> Path | None:
     start = Path(__file__).resolve()
     for p in [start, *start.parents]:
         cand = p / "sql" / "migrations"
         if cand.is_dir() and any(cand.glob("V*.sql")):
             return cand
-    raise RuntimeError("sql/migrations not found; cannot verify schema head")
+    return None
+
+
+def find_migrations_dir() -> Path:
+    found = try_find_migrations_dir()
+    if found is None:
+        raise RuntimeError("sql/migrations not found; cannot verify schema head")
+    return found
 
 
 def list_expected_versions(migrations_dir: Path | None = None) -> list[str]:
-    root = migrations_dir or find_migrations_dir()
+    root = migrations_dir if migrations_dir is not None else find_migrations_dir()
     versions: list[str] = []
     for p in sorted(root.glob("V*.sql")):
         if not MIGRATION_RE.match(p.name):
             continue
         versions.append(p.stem.split("__")[0])
     return versions
+
+
+def expected_versions_for_head_check() -> list[str]:
+    """Disk V*.sql when present (dev/CI); otherwise CONSUMER_HEAD_VERSIONS.
+
+    Installed plugins have no sibling sql/migrations. Head is the live
+    ``migration_history`` table the installer already applied.
+    """
+    found = try_find_migrations_dir()
+    if found is not None:
+        return list_expected_versions(found)
+    return list(CONSUMER_HEAD_VERSIONS)
 
 
 def missing_versions(applied: Iterable[str], expected: Sequence[str]) -> list[str]:
@@ -144,7 +171,14 @@ def apply_pending_migrations(dsn: str) -> None:
     """
     if not dsn or not (dsn.startswith("postgres://") or dsn.startswith("postgresql://")):
         raise RuntimeError("apply_pending_migrations requires a postgres DSN")
-    script = find_migrations_dir().parent.parent / "scripts" / "migrate.py"
+    found = try_find_migrations_dir()
+    if found is None:
+        logger.info(
+            "sql/migrations not in this tree; skip apply "
+            "(installer owns schema; require_schema_head reads migration_history)"
+        )
+        return
+    script = found.parent.parent / "scripts" / "migrate.py"
     if not script.is_file():
         raise RuntimeError("scripts/migrate.py not found")
     env = os.environ.copy()
