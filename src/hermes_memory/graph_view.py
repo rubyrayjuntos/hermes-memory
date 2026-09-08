@@ -501,6 +501,151 @@ def pack_search(
     }
 
 
+EMBED_UNSTAMPED = (
+    "Embedding version not recorded (pre-V10) — trusted as nomic-768 by "
+    "policy, not directly confirmed."
+)
+NO_CONNECTIONS = (
+    "No connections yet — mentioned once, not yet linked to anything else."
+)
+TURN_UNAVAILABLE = (
+    "Connected, but the source turn is unavailable (turn {turn_id} not found)."
+)
+TURN_GRAPH_DEGRADED = (
+    "Extraction failed for this turn — this connection may be incomplete."
+)
+TURN_UNPASSPORTED = (
+    "This turn predates full extraction and was never linked — see `RQ-PROD-2`."
+)
+SCORE_ONLY_IN_SEARCH = (
+    "Score only available in the context of a search — run a query to see relevance."
+)
+
+
+def pack_retrieval_funnel(
+    *,
+    ann_candidates: int,
+    above_similarity: int,
+    min_similarity: float,
+    seed_nodes: int,
+    expanded_nodes: int,
+    kept_after_beam: int,
+) -> Dict[str, Any]:
+    """Surface pipeline counts already computed — no new scoring."""
+    after = int(seed_nodes) + int(expanded_nodes)
+    line = (
+        f"ANN candidates: {int(ann_candidates)}  →  "
+        f"above similarity {min_similarity:g}: {int(above_similarity)}  →  "
+        f"after graph expand: {after} ({int(seed_nodes)} seed + "
+        f"{int(expanded_nodes)} new via edges)  →  "
+        f"kept after beam/budget: {int(kept_after_beam)}"
+    )
+    return {
+        "ann_candidates": int(ann_candidates),
+        "above_similarity": int(above_similarity),
+        "min_similarity": float(min_similarity),
+        "after_graph_expand": after,
+        "seed_nodes": int(seed_nodes),
+        "expanded_nodes": int(expanded_nodes),
+        "kept_after_beam": int(kept_after_beam),
+        "line": line,
+    }
+
+
+def parse_noun_id_param(raw: str) -> int:
+    s = str(raw).strip()
+    if s.startswith("noun:"):
+        s = s[5:]
+    return int(stringify_id(s))
+
+
+def embed_stamps_from_turns(turn_rows: List[Dict[str, Any]]) -> tuple[Any, Any]:
+    """Pane display stamps. Any NULL row keeps the hop unconfirmed.
+
+    ANN still trusts legacy NULL as nomic-768 (``trust_nomic_768``). The pane
+    must not present a later stamped turn as proof for a mixed-provenance edge.
+    """
+    if not turn_rows:
+        return None, None
+    models: set[tuple[Any, Any]] = set()
+    any_null = False
+    for row in turn_rows:
+        model = row.get("embed_model")
+        dim = row.get("embed_dim")
+        if model in (None, "") or dim is None:
+            any_null = True
+        models.add((model, dim))
+    if any_null or len(models) != 1:
+        return None, None
+    return next(iter(models))
+
+
+def pack_neighborhood(
+    noun: Dict[str, Any],
+    edges: List[Dict[str, Any]],
+    turns: Dict[int, Dict[str, Any]],
+    *,
+    unpassported_ids: Optional[set[int]] = None,
+) -> Dict[str, Any]:
+    """1-hop mentions panel. Every empty path has a sourced reason."""
+    unpassported_ids = unpassported_ids or set()
+    embed_model = noun.get("embed_model")
+    embed_dim = noun.get("embed_dim")
+    if embed_model in (None, "") or embed_dim is None:
+        embed_reason = EMBED_UNSTAMPED
+    else:
+        embed_reason = None
+    neighbors: List[Dict[str, Any]] = []
+    reasons: List[str] = []
+    if not edges:
+        reasons.append(NO_CONNECTIONS)
+    for edge in edges:
+        prov = [int(x) for x in (edge.get("provenance_turns") or [])]
+        excerpts: List[Dict[str, Any]] = []
+        for tid in prov:
+            if tid in unpassported_ids:
+                reasons.append(TURN_UNPASSPORTED)
+            row = turns.get(tid)
+            if row is None:
+                reasons.append(TURN_UNAVAILABLE.format(turn_id=tid))
+                continue
+            status = row.get("drain_status")
+            if status == "graph_degraded":
+                reasons.append(TURN_GRAPH_DEGRADED)
+            content = str(row.get("content") or "").strip()
+            excerpts.append({
+                "turn_id": tid,
+                "excerpt": content[:240],
+                "drain_status": status,
+            })
+        neighbors.append({
+            "noun_id": int(edge["neighbor_id"]),
+            "label": edge.get("neighbor_label"),
+            "type": edge.get("neighbor_type"),
+            "magnitude": edge.get("magnitude"),
+            "provenance_turns": prov,
+            "excerpts": excerpts,
+        })
+    # unique reasons, stable order
+    seen: set[str] = set()
+    uniq: List[str] = []
+    for r in reasons:
+        if r not in seen:
+            seen.add(r)
+            uniq.append(r)
+    return {
+        "id": f"noun:{int(noun['id'])}",
+        "noun_id": int(noun["id"]),
+        "label": noun.get("label"),
+        "type": noun.get("type"),
+        "embed_model": embed_model,
+        "embed_dim": embed_dim,
+        "embed_reason": embed_reason,
+        "neighbors": neighbors,
+        "empty_reasons": uniq,
+    }
+
+
 def catalog_where_clause(label: Optional[str]) -> str:
     """Push synthetic-session exclusion into Cypher so LIMIT is not starved.
 
@@ -589,6 +734,14 @@ def match_route(method: str, path: str) -> Tuple[str, Dict[str, str]]:
         return "chunks", {}
     if method == "GET" and path in ("/api/librarian/search",):
         return "search", {}
+    if len(path.split("/")) == 6:
+        hop_parts = path.split("/")
+        if (
+            hop_parts[1:4] == ["api", "librarian", "nouns"]
+            and hop_parts[5] == "hop"
+        ):
+            if method == "GET":
+                return "noun_hop", {"noun_id": hop_parts[4]}
     if method == "GET" and path in ("/api/librarian/verify",):
         return "verify", {}
     if method == "GET" and path in ("/", "/3d.html", "/fountain.html", "/api/librarian/pane"):

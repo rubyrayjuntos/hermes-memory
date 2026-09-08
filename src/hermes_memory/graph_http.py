@@ -15,6 +15,7 @@ from .graph_view import (
     clamp_limit,
     find_pane_dir,
     match_route,
+    parse_noun_id_param,
     parse_vertex_id_param,
     safe_label,
 )
@@ -128,6 +129,10 @@ class Handler(BaseHTTPRequestHandler):
                 k = clamp_limit((qs.get("k") or [8])[0], default=8)
                 hops = clamp_limit((qs.get("hops") or [2])[0], default=2)
                 self._json(200, rt.search(q, k, hops))
+                return
+            if route == "noun_hop":
+                nid = parse_noun_id_param(params["noun_id"])
+                self._json(200, rt.noun_hop(nid))
                 return
             if route == "verify":
                 self._json(200, rt.verify_readonly())

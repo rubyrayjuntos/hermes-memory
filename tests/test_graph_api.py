@@ -456,6 +456,10 @@ def test_validate_bind_host_loopback_only():
 
 
 def test_routes_read_and_mutations():
+    assert match_route("GET", "/api/librarian/nouns/9/hop") == (
+        "noun_hop",
+        {"noun_id": "9"},
+    )
     assert match_route("GET", "/api/librarian/graph/stats")[0] == "stats"
     assert match_route("GET", "/api/librarian/graph/3d")[0] == "graph_3d"
     assert match_route("GET", "/api/health")[0] == "health"
@@ -700,6 +704,65 @@ async def test_search_builds_hypotheses_only_from_conversation_passports():
         "file seed",
     }
     assert out["paths"][0]["session_id"] == "session-a"
+    assert out["retrieval"]["funnel"]["ann_candidates"] == 2
+    assert out["retrieval"]["funnel"]["above_similarity"] == 2
+
+
+@pytest.mark.asyncio
+async def test_search_thresholds_before_expand_and_funnel():
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.graph_api import Runtime
+
+    class FakeEmbedder:
+        async def embed_text(self, _text):
+            return [1.0, 0.0]
+
+    class FakeStore:
+        async def vector_search(self, _literal, _k):
+            return [
+                {
+                    "id": "41",
+                    "content": "hot",
+                    "similarity": 0.8,
+                    "src": "conversation",
+                    "embedding": "[1,0]",
+                },
+                {
+                    "id": "99",
+                    "content": "cold",
+                    "similarity": 0.1,
+                    "src": "conversation",
+                    "embedding": "[1,0]",
+                },
+            ]
+
+        async def passports_for_conversations(self, conv_ids):
+            assert conv_ids == [41]
+            return [{
+                "noun_id": 11,
+                "chunk_id": "conv_41",
+                "session_id": "s",
+                "turn_id": 41,
+            }]
+
+        async def expand_graph(self, hypotheses, *, q_vec, hops, k):
+            del q_vec, hops, k
+            assert [h.turn_id for h in hypotheses] == [41]
+            return []
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.store = FakeStore()
+    runtime.embedder = FakeEmbedder()
+    runtime.cfg = HybridAgeConfig(embed_dim=2, min_similarity=0.55)
+
+    out = await runtime._asearch("noun", 4, 2)
+    contents = {r["content"] for r in out["results"]}
+    assert contents == {"hot"}
+    assert "cold" not in contents
+    funnel = out["retrieval"]["funnel"]
+    assert funnel["ann_candidates"] == 2
+    assert funnel["above_similarity"] == 1
+    assert funnel["seed_nodes"] == 1
 
 
 def test_undirected_knn_emits_pair_selected_by_one_side_only():
@@ -712,3 +775,72 @@ def test_undirected_knn_emits_pair_selected_by_one_side_only():
     pairs = {(a, b) for a, b, _ in edges}
     assert ("3", "9") in pairs
     assert ("1", "3") in pairs
+
+
+def test_pack_retrieval_funnel_line_uses_pipeline_counts():
+    from hermes_memory.graph_view import pack_retrieval_funnel
+
+    funnel = pack_retrieval_funnel(
+        ann_candidates=12,
+        above_similarity=6,
+        min_similarity=0.55,
+        seed_nodes=6,
+        expanded_nodes=2,
+        kept_after_beam=2,
+    )
+    assert funnel["after_graph_expand"] == 8
+    assert funnel["line"] == (
+        "ANN candidates: 12  →  above similarity 0.55: 6  →  "
+        "after graph expand: 8 (6 seed + 2 new via edges)  →  "
+        "kept after beam/budget: 2"
+    )
+
+
+def test_pack_neighborhood_empty_and_missing_turn_reasons():
+    from hermes_memory.graph_view import (
+        EMBED_UNSTAMPED,
+        NO_CONNECTIONS,
+        TURN_GRAPH_DEGRADED,
+        TURN_UNAVAILABLE,
+        TURN_UNPASSPORTED,
+        pack_neighborhood,
+    )
+
+    empty = pack_neighborhood({"id": 1, "label": "Atlas", "type": "Person"}, [], {})
+    assert empty["empty_reasons"] == [NO_CONNECTIONS]
+    assert empty["embed_reason"] == EMBED_UNSTAMPED
+    filled = pack_neighborhood(
+        {
+            "id": 2,
+            "label": "Nightingale",
+            "type": "Person",
+            "embed_model": "nomic-embed-text",
+            "embed_dim": 768,
+        },
+        [{"neighbor_id": 3, "neighbor_label": "Hermes", "neighbor_type": "Project",
+          "magnitude": 1.2, "provenance_turns": [9, 10, 11]}],
+        {
+            10: {"id": 10, "content": "Nightingale met Hermes.", "drain_status": "graph_degraded"},
+        },
+        unpassported_ids={11},
+    )
+    assert filled["embed_reason"] is None
+    assert filled["neighbors"][0]["magnitude"] == 1.2
+    assert TURN_UNAVAILABLE.format(turn_id=9) in filled["empty_reasons"]
+    assert TURN_GRAPH_DEGRADED in filled["empty_reasons"]
+    assert TURN_UNPASSPORTED in filled["empty_reasons"]
+
+
+def test_embed_stamps_null_row_keeps_hop_unconfirmed():
+    from hermes_memory.graph_view import embed_stamps_from_turns
+
+    mixed = embed_stamps_from_turns([
+        {"embed_model": None, "embed_dim": None},
+        {"embed_model": "nomic-embed-text", "embed_dim": 768},
+    ])
+    assert mixed == (None, None)
+    stamped = embed_stamps_from_turns([
+        {"embed_model": "nomic-embed-text", "embed_dim": 768},
+        {"embed_model": "nomic-embed-text", "embed_dim": 768},
+    ])
+    assert stamped == ("nomic-embed-text", 768)

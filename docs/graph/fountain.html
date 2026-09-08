@@ -119,7 +119,7 @@
     </div>
     <div class="legend">
       <span><i class="gem" style="background:#234A8A"></i> NOUN</span>
-      <span title="co-occurrence in mention order"><i class="thread"></i> MENTIONS</span>
+      <span title="co-occurrence (mention order)"><i class="thread"></i> MENTIONS</span>
     </div>
     <div class="level-ctl" id="level-ctl" title="Progressive reveal: 1 Garden → 4 Cockpit (controls gate by level)">
       <span class="mono" style="font-size:9px; color:#5E7A97; letter-spacing:.12em; margin-right:2px">LEVEL</span>
@@ -137,6 +137,7 @@
       <div class="row"><h2>MANIFOLD METRICS</h2><span class="mono" id="mode-tag">CATALOG</span></div>
       <div class="metrics" id="metrics"></div>
       <div class="banner weak" id="contrib" style="margin-top:8px">awaiting hybrid retrieval</div>
+      <div class="banner weak" id="funnel" style="margin-top:6px">funnel — run a search to see ANN → graph → kept</div>
       <div class="row" id="ghost-row" style="margin-top:8px"><span class="mono" id="ghost-meta" style="color:#7A92B1">ghost off — vector kNN hidden</span><button class="ghost" id="btn-ghost" type="button">GHOST OFF</button></div>
       <div class="row" id="ghost-ctl" style="margin-top:6px;gap:6px;flex-wrap:wrap"><label class="mono" style="color:#7A92B1">k <input id="ghost-k" type="range" min="1" max="8" value="5" style="width:64px"></label><span class="mono" id="ghost-k-val">5</span><label class="mono" style="color:#7A92B1">thr <input id="ghost-thr" type="range" min="0.40" max="0.85" step="0.05" value="0.70" style="width:72px"></label><span class="mono" id="ghost-thr-val">0.70</span></div>
       <div class="row" id="bench-row" style="margin-top:4px"><label class="mono" style="color:#7A92B1"><input type="checkbox" id="hide-bench" checked> hide bench/verify</label><span class="mono" id="live-persisted" style="color:#1E3A5F">persisted —</span></div>
@@ -189,6 +190,8 @@ const LABEL_GEM = {
 const EDGE_COLOR = { IMPORTS: 0x2A5DB0, mentions: 0x2F8F8A, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F, GHOST_KNN: 0xE040B0 };
 
 let raw = { nodes: [], links: [] };
+let degreeById = new Map();
+let hopSeq = 0;
 let catalogPayload = null;
 let hops = new Map();
 let seedIds = new Set();
@@ -196,6 +199,8 @@ let highlighted = new Set();
 let selected = null;
 let lastStats = null;
 let lastHealth = null;
+let lastSearch = null;
+let searchActive = false;
 let scene, camera, renderer, controls, graphGroup, clock;
 // ——— Progressive reveal state machine (single source of truth) ———
 const LEVEL_DEF = {
@@ -444,6 +449,7 @@ function applyManifold(payload, { seeds = [], mode = 'catalog' } = {}) {
   }));
   const allLinks = ghostEnabled && ghostEdges.length ? [...baseLinks, ...ghostEdges] : baseLinks;
   raw.links = allLinks;
+  recomputeDegrees();
   layout(raw.nodes, raw.links, seedIds, mode);
   highlighted = new Set();
   rebuildScene();
@@ -604,24 +610,34 @@ function initThree() {
   const mouse = new THREE.Vector2();
   let hoverEdge = null;
   const tip = document.getElementById('edge-tip');
-  function showEdgeTip(l, ev) {
-    const w = Number(l.weight ?? 0.5), c = Number(l.cosine ?? 0.5);
-    const dec = l.decay != null ? Number(l.decay) : 0.5;
-    const scoreBit = (l.score != null && l.score !== '')
-      ? `score=${Number(l.score).toFixed(2)}`
-      : 'score=unavailable';
-    const a = raw.nodes.find(n=>sid(n.id)===sid(l.source));
-    const b = raw.nodes.find(n=>sid(n.id)===sid(l.target));
-    let body = `<b>${escapeHTML(l.label||'REL')}</b> ${escapeHTML(a?nodeName(a):String(l.source))} → ${escapeHTML(b?nodeName(b):String(l.target))}`;
-    if (l.label === 'mentions') body += `<br>w=${w.toFixed(2)} · c=${c.toFixed(2)} · decay=${dec.toFixed(2)} · <b>${scoreBit}</b><br><span style="opacity:.8">co-occurrence (mention order)</span>`;
-    else if (l.label === 'GHOST_KNN') body += '<br><span style="opacity:.8">vector proximity (kNN) — not persisted</span>';
-    else if (l.label === 'NEXT') body += '<br><span style="opacity:.8">sequential turn</span>';
-    else if (l.label === 'IN_SESSION') body += '<br><span style="opacity:.8">session membership</span>';
-    else body += `<br><span style="opacity:.8">${escapeHTML(l.label||'connected')}</span>`;
-    tip.innerHTML = body;
+  function placeTip(ev) {
     tip.style.left = (ev.clientX + 14) + 'px';
     tip.style.top = (ev.clientY + 10) + 'px';
     tip.style.display = 'block';
+  }
+  function showNodeTip(n, ev) {
+    const degree = degreeById.get(sid(n.id)) || 0;
+    const typ = (n.props || n.properties || {}).type || n.type || n.label || 'Noun';
+    tip.innerHTML = `<b>${escapeHTML(nodeName(n))}</b><br>type=${escapeHTML(String(typ))} · degree=${degree} (loaded graph)`;
+    placeTip(ev);
+  }
+  function showEdgeTip(l, ev) {
+    const a = raw.nodes.find(n=>sid(n.id)===sid(l.source));
+    const b = raw.nodes.find(n=>sid(n.id)===sid(l.target));
+    let body = `<b>${escapeHTML(l.label||'REL')}</b> ${escapeHTML(a?nodeName(a):String(l.source))} → ${escapeHTML(b?nodeName(b):String(l.target))}`;
+    if (l.label === 'GHOST_KNN') {
+      body += '<br><span style="opacity:.8">vector proximity (kNN) — not persisted</span>';
+    } else if (searchActive && l.score != null && l.score !== '') {
+      const mag = l.weight != null ? Number(l.weight) : l.magnitude;
+      const dec = l.decay != null ? Number(l.decay) : null;
+      body += `<br>magnitude=${mag == null ? 'unavailable' : Number(mag).toFixed(2)}`;
+      if (dec != null) body += ` · decay=${dec.toFixed(2)}`;
+      body += ` · beam_score=${Number(l.score).toFixed(2)}`;
+    } else {
+      body += '<br><span style="opacity:.8">Score only available in the context of a search — run a query to see relevance.</span>';
+    }
+    tip.innerHTML = body;
+    placeTip(ev);
   }
   function hideEdgeTip(){ hoverEdge=null; if(tip) tip.style.display='none'; }
   renderer.domElement.addEventListener('pointermove', ev => {
@@ -630,8 +646,10 @@ function initThree() {
     mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
     ray.setFromCamera(mouse, camera);
     const hits = ray.intersectObjects(graphGroup ? graphGroup.children : [], false);
-    const hit = hits.find(h => h.object.userData.edge);
-    if (hit) { hoverEdge = hit.object.userData.edge; showEdgeTip(hoverEdge, ev); }
+    const nodeHit = hits.find(h => h.object.userData.node);
+    const edgeHit = hits.find(h => h.object.userData.edge);
+    if (nodeHit) { hoverEdge = null; showNodeTip(nodeHit.object.userData.node, ev); }
+    else if (edgeHit) { hoverEdge = edgeHit.object.userData.edge; showEdgeTip(hoverEdge, ev); }
     else hideEdgeTip();
   });
   renderer.domElement.addEventListener('pointerleave', hideEdgeTip);
@@ -682,31 +700,71 @@ function initThree() {
   });
 }
 
+function recomputeDegrees() {
+  degreeById = new Map();
+  for (const n of raw.nodes) degreeById.set(sid(n.id), 0);
+  for (const l of raw.links) {
+    const a = sid(l.source), b = sid(l.target);
+    degreeById.set(a, (degreeById.get(a) || 0) + 1);
+    degreeById.set(b, (degreeById.get(b) || 0) + 1);
+  }
+}
+
 function nodeName(n) {
   return n.name || n.title || n.label || n.id;
 }
 
-function selectNode(n) {
+function nounApiId(n) {
+  const rawId = n.noun_id != null ? n.noun_id : String(n.id || '').replace(/^noun:/, '');
+  return String(rawId);
+}
+
+async function selectNode(n) {
   selected = n; AppState.selectedNode = n?.id || null;
   AppState._coachClicks = (AppState._coachClicks||0)+1; maybeCoach();
-  const props = n.props || n.properties || {};
-  const snippet = n.snippet || props.content || '';
-  document.getElementById('sel-meta').textContent = (n.label || 'Noun') + (props.session_id ? ' · ' + props.session_id : '');
-  const nbr = raw.links.filter(l => sid(l.source) === n.id || sid(l.target) === n.id);
-  const lines = [];
-  lines.push(nodeName(n));
-  if (snippet) lines.push('', snippet);
-  if (props.session_id) lines.push('', 'session ' + props.session_id);
-  if (props.turn_id != null) lines.push('turn ' + props.turn_id);
-  nbr.slice(0, 8).forEach(l => {
-    const other = sid(l.source) === n.id ? sid(l.target) : sid(l.source);
-    const on = raw.nodes.find(x => x.id === other);
-    lines.push(`  ${l.label || 'REL'} → ${on ? nodeName(on) : other}`);
-  });
-  document.getElementById('hook').textContent = lines.join('\n');
+  const token = ++hopSeq;
+  const typ = (n.props || n.properties || {}).type || n.type || n.label || 'Noun';
+  document.getElementById('sel-meta').textContent = (n.label || 'Noun') + ' · ' + typ;
+  document.getElementById('hook').textContent = 'loading 1-hop…';
   [...document.querySelectorAll('#nodelist button')].forEach(b => {
     b.classList.toggle('on', b.dataset.id === n.id);
   });
+  const hop = await safeFetch(`${API}/api/librarian/nouns/${encodeURIComponent(nounApiId(n))}/hop`);
+  if (token !== hopSeq) return;
+  if (!hop || hop.error) {
+    document.getElementById('hook').textContent = hop && hop.error
+      ? String(hop.error)
+      : '1-hop fetch failed';
+    return;
+  }
+  const lines = [];
+  lines.push(`${hop.label || nodeName(n)}  type=${hop.type || typ}`);
+  if (hop.embed_reason) lines.push('', hop.embed_reason);
+  else lines.push('', `embed ${hop.embed_model} / ${hop.embed_dim}`);
+  if ((hop.empty_reasons || []).length) {
+    hop.empty_reasons.forEach(r => lines.push('', r));
+  }
+  (hop.neighbors || []).forEach(nb => {
+    lines.push('', `mentions → ${nb.label}  magnitude=${nb.magnitude ?? 'unavailable'}`);
+    (nb.excerpts || []).forEach(ex => {
+      lines.push(`  turn ${ex.turn_id}: ${(ex.excerpt || '').slice(0, 160)}`);
+    });
+  });
+  document.getElementById('hook').textContent = lines.join('\n');
+  const extra = document.getElementById('nodelist');
+  if (hop.neighbors && hop.neighbors.length) {
+    extra.innerHTML = hop.neighbors.map(nb => {
+      const id = `noun:${nb.noun_id}`;
+      return `<button data-id="${escapeHTML(id)}" type="button"><i class="gem" style="background:#234A8A"></i><span>${escapeHTML((nb.label||id).slice(0,42))}</span><span class="mono" style="margin-left:auto;color:#7A92B1">mag ${nb.magnitude ?? '—'}</span></button>`;
+    }).join('');
+    extra.querySelectorAll('button').forEach(b => {
+      b.onclick = () => {
+        const id = b.dataset.id;
+        const existing = raw.nodes.find(x => sid(x.id) === sid(id));
+        selectNode(existing || { id, label: 'Noun', noun_id: id.replace(/^noun:/,'') });
+      };
+    });
+  }
 }
 
 function renderList() {
@@ -846,6 +904,9 @@ function focusPath(p) {
 }
 
 function applyCatalog(payload) {
+  searchActive = false;
+  lastSearch = null;
+  renderFunnel(null);
   const filt = filteredCatalog(payload);
   applyManifold(filt, { seeds: [], mode: 'catalog' });
   document.getElementById('mode-tag').textContent = ghostEnabled ? 'CATALOG+GHOST' : 'CATALOG';
@@ -859,10 +920,29 @@ function applyCatalog(payload) {
   }
 }
 
+function renderFunnel(res) {
+  const el = document.getElementById('funnel');
+  if (!el) return;
+  const line = res?.retrieval?.funnel?.line;
+  if (line) {
+    el.className = 'banner good';
+    el.textContent = line;
+  } else {
+    el.className = 'banner weak';
+    el.textContent = 'funnel — run a search to see ANN → graph → kept';
+  }
+}
+
 function applySearch(res) {
+  lastSearch = res;
+  searchActive = true;
+  renderFunnel(res);
   const seeds = res.seeds || [];
   if (!seeds.length) {
     applyCatalog(catalogPayload || {nodes: [], links: []});
+    searchActive = true;
+    lastSearch = res;
+    renderFunnel(res);
     raw.nodes.forEach(n => { n._dimmed = true; });
     rebuildScene();
     if (graphGroup) graphGroup.traverse(obj => {
@@ -943,6 +1023,7 @@ async function refreshGhost() {
     const base = raw.links.filter(l => l.label !== 'GHOST_KNN');
     const all = [...base, ...ghostEdges];
     raw.links = all;
+    recomputeDegrees();
     layout(raw.nodes, raw.links, seedIds, 'catalog');
     document.getElementById('mode-tag').textContent = 'CATALOG+GHOST';
     rebuildScene();
@@ -1039,6 +1120,7 @@ function dispatch(action, payload) {
         try{ localStorage.setItem('fountain.ghostEnabled','0'); }catch{}
         ghostEdges = []; ghostMeta = null;
         raw.links = (raw.links||[]).filter(l => l.label !== 'GHOST_KNN');
+        recomputeDegrees();
         if (raw.nodes.length) { layout(raw.nodes, raw.links, seedIds, 'catalog'); rebuildScene(); updateGhostMeta(); }
       }
       renderUIForCurrentLevel();
@@ -1049,7 +1131,7 @@ function dispatch(action, payload) {
       AppState.ghost.enabled = !AppState.ghost.enabled; ghostEnabled = AppState.ghost.enabled;
       try{ localStorage.setItem('fountain.ghostEnabled', AppState.ghost.enabled?'1':'0'); }catch{}
       if (AppState.ghost.enabled) refreshGhost();
-      else { ghostEdges=[]; ghostMeta=null; raw.links=(raw.links||[]).filter(l=>l.label!=='GHOST_KNN'); if(raw.nodes.length){ layout(raw.nodes,raw.links,seedIds,'catalog'); document.getElementById('mode-tag').textContent='CATALOG'; rebuildScene(); } updateGhostMeta(); renderUIForCurrentLevel(); }
+      else { ghostEdges=[]; ghostMeta=null; raw.links=(raw.links||[]).filter(l=>l.label!=='GHOST_KNN'); recomputeDegrees(); if(raw.nodes.length){ layout(raw.nodes,raw.links,seedIds,'catalog'); document.getElementById('mode-tag').textContent='CATALOG'; rebuildScene(); } updateGhostMeta(); renderUIForCurrentLevel(); }
       break;
     }
     case 'UPDATE_GHOST_PARAMS': {

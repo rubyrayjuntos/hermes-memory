@@ -688,7 +688,8 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id::text AS id, session_id, content, ts, role
+                SELECT id::text AS id, session_id, content, ts, role,
+                       drain_status, embed_model, embed_dim
                   FROM conversations
                  WHERE id = ANY($1::bigint[])
                 """,
