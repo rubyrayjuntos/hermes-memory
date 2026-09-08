@@ -118,10 +118,11 @@ async def main() -> int:
             file=sys.stderr,
         )
         return 2
+    target_label = "installed" if db == "hermes_memory_installed" else "live"
     conn = await asyncpg.connect(dsn)
     try:
         fks = await _fk_report(conn)
-        print("database", db)
+        print("database", target_label)
         print("fk")
         for line in fks:
             print(" ", line)
