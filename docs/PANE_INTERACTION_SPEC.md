@@ -9,12 +9,11 @@ the running pane does something different from this document, the pane is
 wrong (or this document is stale and needs a dated edit — never both treated
 as simultaneously true).
 
-**Companion artifacts (not the live pane):**
-[`docs/pane-prototype.html`](pane-prototype.html) and
-[`docs/hermes_librarian_traversal_expansion_simulator.html`](hermes_librarian_traversal_expansion_simulator.html)
-— local HTML that settled hover/click/search and the §5 vector/graph split.
-They do not render on github.com. The live inspector is
-[`docs/graph/fountain.html`](graph/fountain.html) on `:7890`.
+**Companion artifact:** `docs/specs/pane-shape-prototype.html` — an
+illustrative three.js prototype demonstrating hover, click, search
+highlighting, and the vector/graph relationship in §5, using fake data. Open
+it locally in a browser (it doesn't render on github.com). It settled the
+mental model this spec depends on; check it for drift if this spec changes.
 
 **Governing rule, inherited from `OC-MVP-1`/`OC-MVP-2`:** every value shown
 anywhere in the pane traces to one real field. No local recomputation of a
@@ -247,3 +246,101 @@ good idea.
   connection. This is a hard requirement, not a style preference, given the
   false-grounding risk named above.
 
+
+## 6. Visual encoding — nodes, edges, search (added after user review of the
+first shipped pane)
+
+§§1–3 specified *mechanism* (what data a hover/click/search fetches) but not
+*encoding* (what it looks like). The result was a graph where hover said
+"Node," every node was the same color, and search results were a text panel
+next to an unchanged picture. That gap is closed here — same governing rule
+as everywhere else in this document: every visual property traces to a real,
+already-computed field, or it's named as new computation and deferred.
+
+### 6.1 Node encoding
+
+| Property | Driven by | Status |
+|---|---|---|
+| Size | `degree` (existing `_stamp_graph_degree`) | Live |
+| Dim / orphan treatment | `degree = 0` OR (`magnitude < 0.6` AND `len(provenance_turns) = 1`) → render at ~30% opacity | Live — this is a rendering decision on data already computed, not new data |
+| Color | `noun.type` | Live field, needs a fixed palette — enumerate the real `DISTINCT type` values before assigning colors; do not invent categories |
+| In-situ label | Always shown for the top-N nodes by `degree` (config threshold, e.g. top 15) | Live, rendering decision |
+| Pinned "canonical" labels | **No `noun.is_canonical` field exists.** If specific entities (e.g. project names) should always be labeled regardless of degree, that needs either a small new config list (label strings to always show) or reuse of the degree-threshold rule. Decide which — don't imply a canonical concept the schema doesn't have. | Needs a decision |
+
+### 6.2 Edge encoding
+
+| Property | Driven by | Status |
+|---|---|---|
+| Thickness / opacity | `magnitude / 8` | Live (already noted as the intended encoding in the companion pane-spec doc; this section makes it binding) |
+| Direction (arrowhead) | `src_noun → tgt_noun`, i.e. extraction order — "this was said first" | Live, real fact. **Correction:** this is not semantic directionality (causal, hierarchical) — it's temporal order of mention within the turn. Label the encoding accordingly so it isn't misread as meaning more than it does. |
+| Edge type / color by `verb_type` | **`semantic_edge.verb_type` has exactly one live value today: `'mentions'`.** `IMPORTS`/`NEXT` are AGE edge labels on the separate ingest graph (`:File`/`:Module`) — they do not appear on this table. If richer edge semantics (e.g. distinguishing kinds of connection) are wanted, that's new extraction-layer work, not a rendering fix. Do not encode a `verb_type` distinction that doesn't exist yet. | Correction — not currently buildable as stated |
+| Score, in search context | `sim`/`c`/`decay`/`score` from the active search's `beam_score` output | Live, already governed by §1 (score only shown when part of an active search) |
+
+### 6.3 Hover — expanded from §1
+
+§1's original scope (label/type/degree) undersold what's available cheaply.
+Hover should show, still with no query beyond what's already fetched for
+the current view:
+
+- `noun.label`, `noun.type`, `degree` (as before)
+- `len(provenance_turns)` — "mentioned in N turns"
+- `last_active_ts` — when this noun was last touched
+- Co-fired chunk ids for the same turn(s), via `memory_chunk_nodes` bridge — "what else was linked in the same turn"
+
+**Not included: drift.** "Has this noun's embedding changed" is not a
+measurable fact today — `noun` has no stored embedding column at all (the
+same gap the similarity-inferred-edges backtest had to work around by
+re-embedding labels fresh; see the experiment brief). The only vector that
+changes over time is an edge's `e_tgt_vec` (EMA-blended on reinforcement),
+and nothing stores a prior snapshot to compare against. Do not show a drift
+indicator until a real before/after value exists to source it from — an
+invented drift flag would violate the same honesty rule that governs
+everything else in this pane.
+
+### 6.4 Search — focus and fade, not a separate panel
+
+The funnel (§3) stays — it's the precise, auditable numeric readout, and it
+does not get recomputed or replaced. But it should not be the *only* visual
+consequence of a search. On search:
+
+- Seed nodes (direct ANN hits) render at full opacity, distinct color/glow.
+- Graph-expanded nodes (reached via the walk) render at an opacity or size
+  scaled by their real `score` / hop distance — closer to the query, more
+  visually present.
+- Every node not touched by this search's walk fades to ~15% opacity.
+
+This uses the same `sim`/`score`/hop values the funnel already reports —
+it's the same data rendered as the picture instead of only as a line of
+text. The funnel becomes the debug companion to this fade, not a
+replacement for it.
+
+### 6.5 Degraded state — a pulse, not buried text
+
+Any node or edge whose `provenance_turns` include a turn with
+`drain_status != 'complete'` (i.e. `'graph_degraded'` or historically
+unpassported) gets a visible pulse or distinct border treatment on the node
+or edge itself — not a line of text at the bottom of the screen the user
+has to go looking for. Source: the same `drain_status` join already
+required for the click panel's empty-state messages (§2) — no new query,
+a different rendering priority for a fact that was already being fetched.
+
+### 6.6 Explicit scope
+
+**MVP-in (real fields, rendering decisions only — no new computation):**
+- Orphan dimming, degree-based sizing, type-based color
+- Magnitude-based edge thickness, extraction-order arrowheads
+- Expanded hover (turn count, recency, co-fired chunks)
+- Search focus+fade using existing `sim`/`score`/hop values
+- In-situ labels for top-N-degree nodes
+- Degraded-state pulse from existing `drain_status` joins
+
+**MVP-out (real, named, deferred — not silently missing):**
+- Betweenness / hub-vs-source visual shape — genuinely new computation, not
+  a rendering gap. Matches the theory brief's own recommendation to defer
+  until noun count justifies it (conversational-graph-theory-brief.md §1).
+- Per-noun drift detection — not measurable until a stored noun embedding
+  and a snapshot-comparison mechanism exist.
+- Multiple `verb_type` values / richer edge semantics — extraction-layer
+  work, not a pane change.
+- A formal "canonical entity" concept — needs a decision (config list vs.
+  threshold rule) before it's built, not before it's discussed.
