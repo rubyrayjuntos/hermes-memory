@@ -53,17 +53,38 @@ def test_copy_plugin_tree_is_a_copy_not_a_symlink(tmp_path: Path) -> None:
     assert "beam_score" in (plugin / "walk.py").read_text(encoding="utf-8")
 
 
-def test_default_release_ref_is_origin_main_not_v010() -> None:
-    ref = default_release_ref(REPO_ROOT)
+def test_default_release_ref_prefers_origin_main_not_v010(tmp_path: Path) -> None:
+    """Do not use the CI checkout: PR jobs often lack origin/main."""
+    import subprocess
+
+    repo = tmp_path / "pin-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    (repo / "README").write_text("pin\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.email=ci@example.test", "-c", "user.name=ci",
+            "commit", "-m", "init",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head], cwd=repo, check=True)
+    subprocess.run(["git", "tag", "v0.1.0", head], cwd=repo, check=True)
+    ref = default_release_ref(repo)
     assert ref == "origin/main"
     assert ref != "v0.1.0"
-    _, sha = resolve_pin(REPO_ROOT, ref)
-    assert len(sha) == 40
-    try:
-        _, v010 = resolve_pin(REPO_ROOT, "v0.1.0")
-    except SystemExit:
-        return
-    assert sha != v010
+    _, sha = resolve_pin(repo, ref)
+    _, v010 = resolve_pin(repo, "v0.1.0")
+    assert sha == head
+
+
+def test_live_checkout_default_ref_is_never_v010() -> None:
+    assert default_release_ref(REPO_ROOT) != "v0.1.0"
+
 
 
 def test_installed_compose_has_no_first_boot_init(tmp_path: Path) -> None:
