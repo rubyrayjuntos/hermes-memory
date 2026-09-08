@@ -737,20 +737,29 @@ async function selectNode(n) {
       : '1-hop fetch failed';
     return;
   }
-  const lines = [];
-  lines.push(`${hop.label || nodeName(n)}  type=${hop.type || typ}`);
-  if (hop.embed_reason) lines.push('', hop.embed_reason);
-  else lines.push('', `embed ${hop.embed_model} / ${hop.embed_dim}`);
+  // Spec §2: 4 sourced sections, not a raw lines dump (OC-MVP-4). Never blank.
+  const hookEl = document.getElementById('hook');
+  const esc = escapeHTML;
+  const sections = [];
+  // 1. Identity
+  sections.push(`<div class="mono" style="font-weight:700;color:var(--foreground)">${esc(hop.label || nodeName(n))} <span style="color:var(--muted-foreground)">· ${esc(hop.type || typ)}</span></div>`);
+  // 2. Embedding provenance
+  if (hop.embed_reason) sections.push(`<div class="mono" style="margin-top:8px;color:#8A6D1E">⚠ ${esc(hop.embed_reason)}</div>`);
+  else sections.push(`<div class="mono" style="margin-top:8px;color:var(--muted-foreground)">embed ${esc(String(hop.embed_model))} / ${esc(String(hop.embed_dim))}</div>`);
+  // 3. Empty reasons (never blank)
   if ((hop.empty_reasons || []).length) {
-    hop.empty_reasons.forEach(r => lines.push('', r));
+    sections.push(`<div class="mono" style="margin-top:10px">${hop.empty_reasons.map(r => `<div style="color:var(--muted-foreground)">• ${esc(r)}</div>`).join('')}</div>`);
   }
-  (hop.neighbors || []).forEach(nb => {
-    lines.push('', `mentions → ${nb.label}  magnitude=${nb.magnitude ?? 'unavailable'}`);
-    (nb.excerpts || []).forEach(ex => {
-      lines.push(`  turn ${ex.turn_id}: ${(ex.excerpt || '').slice(0, 160)}`);
+  // 4. 1-hop neighbors: label, magnitude, provenance_turns → excerpts (the "why")
+  if (!(hop.neighbors || []).length && !(hop.empty_reasons || []).length) {
+    sections.push(`<div class="mono" style="margin-top:10px;color:var(--muted-foreground)">${esc('No connections yet — mentioned once, not yet linked to anything else.')}</div>`);
+  } else {
+    (hop.neighbors || []).forEach(nb => {
+      const prov = (nb.provenance_turns || []).join(', ');
+      sections.push(`<div style="margin-top:12px"><div class="mono" style="color:var(--foreground)">mentions → ${esc(nb.label || String(nb.noun_id))} <span style="color:var(--muted-foreground)">magnitude=${esc(String(nb.magnitude ?? 'unavailable'))} ${prov ? `· turns ${esc(prov)}` : ''}</span></div>${(nb.excerpts || []).map(ex => `<div class="mono" style="margin-left:10px;margin-top:4px;padding-left:8px;border-left:2px solid var(--border);color:var(--muted-foreground)">turn ${esc(String(ex.turn_id))}: ${esc((ex.excerpt || '').slice(0,240))} <span style="font-size:11px">[${esc(String(ex.drain_status || 'unknown'))}]</span></div>`).join('')}</div>`);
     });
-  });
-  document.getElementById('hook').textContent = lines.join('\n');
+  }
+  hookEl.innerHTML = sections.join('');
   const extra = document.getElementById('nodelist');
   if (hop.neighbors && hop.neighbors.length) {
     extra.innerHTML = hop.neighbors.map(nb => {
