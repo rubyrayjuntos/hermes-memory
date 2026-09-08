@@ -541,7 +541,7 @@ function rebuildScene() {
       roughness: isGhost ? 0.35 : 0.32,
       metalness: kind === 'mentions' ? 0.18 : isGhost ? 0.10 : 0.12,
       transparent: true,
-      opacity: isGhost ? 0.25 : (0.38 + force * 0.55),
+      opacity: isGhost ? 0.25 : (0.38 + magNorm * 0.55),
       transmission: 0,
       thickness: 0.2,
       emissive: isGhost ? 0xE040B0 : (lit ? 0xffffff : 0x000000),
