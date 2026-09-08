@@ -20,6 +20,7 @@ from .graph_view import (
     assemble_catalog,
     attach_passport_anchors,
     catalog_where_clause,
+    embed_stamps_from_turns,
     humanize_node,
     pack_neighborhood,
     pack_retrieval_funnel,
@@ -791,7 +792,12 @@ class Runtime:
         if vec:
             seeds = await self.store.vector_search(vec_to_literal(vec), k)
         t_vec = time.perf_counter()
-        conversation_seeds = [s for s in seeds if s.get("src") == "conversation"]
+        min_sim = float(getattr(self.cfg, "min_similarity", 0.55))
+        ann_n = len(seeds)
+        kept = [
+            s for s in seeds if float(s.get("similarity") or 0.0) >= min_sim
+        ]
+        conversation_seeds = [s for s in kept if s.get("src") == "conversation"]
         conv_ids = [
             int(str(s["id"]).removeprefix("conv_"))
             for s in conversation_seeds
@@ -843,7 +849,7 @@ class Runtime:
         seed_noun_ids = list(
             dict.fromkeys(str(passport["noun_id"]) for passport in passports)
         )
-        packed = pack_search(q, k, hops, seeds, seed_noun_ids, triples)
+        packed = pack_search(q, k, hops, kept, seed_noun_ids, triples)
         packed = attach_passport_anchors(packed, passports)
         packed["retrieval"]["embed_model"] = getattr(self.cfg, "embed_model", "nomic-embed-text")
         packed["retrieval"]["embed_dim"] = getattr(self.cfg, "embed_dim", 768)
@@ -854,15 +860,11 @@ class Runtime:
         packed["retrieval"]["vector_ms"] = round((t_vec - t_embed) * 1000, 1)
         packed["retrieval"]["graph_ms"] = round((t_graph - t_vec) * 1000, 1)
         packed["retrieval"]["fusion_ms"] = round((time.perf_counter() - t_graph) * 1000, 1)
-        min_sim = float(getattr(self.cfg, "min_similarity", 0.55))
-        above = sum(
-            1 for s in seeds if float(s.get("similarity") or 0.0) >= min_sim
-        )
         seed_n = len(seed_noun_ids)
         verts = int(packed["retrieval"].get("vertices_reached") or 0)
         packed["retrieval"]["funnel"] = pack_retrieval_funnel(
-            ann_candidates=len(seeds),
-            above_similarity=above,
+            ann_candidates=ann_n,
+            above_similarity=len(kept),
             min_similarity=min_sim,
             seed_nodes=seed_n,
             expanded_nodes=max(0, verts - seed_n),
@@ -875,7 +877,7 @@ class Runtime:
         return self.loop.call(self._anoun_hop(int(noun_id)))
 
     async def _anoun_hop(self, noun_id: int) -> Dict[str, Any]:
-        assert self.store is not None
+        assert self.store is not None and self.pool is not None
         async with self.pool.acquire() as conn:
             noun = await conn.fetchrow(
                 "SELECT id, label, type FROM noun WHERE id = $1",
@@ -904,17 +906,7 @@ class Runtime:
                 turn_ids.append(int(tid))
         turn_rows = await self.store.conversations_by_ids(turn_ids)
         turns = {int(r["id"]): r for r in turn_rows}
-        models = {
-            (r.get("embed_model"), r.get("embed_dim"))
-            for r in turn_rows
-            if r.get("embed_model") or r.get("embed_dim") is not None
-        }
-        embed_model = embed_dim = None
-        if len(models) == 1:
-            embed_model, embed_dim = next(iter(models))
-        elif len(models) > 1:
-            # Conflicting stamps: do not pick one. Surface unstamped reason.
-            embed_model, embed_dim = None, None
+        embed_model, embed_dim = embed_stamps_from_turns(turn_rows)
         unpassported: set[int] = set()
         if turn_ids:
             async with self.pool.acquire() as conn:

@@ -559,6 +559,27 @@ def parse_noun_id_param(raw: str) -> int:
     return int(stringify_id(s))
 
 
+def embed_stamps_from_turns(turn_rows: List[Dict[str, Any]]) -> tuple[Any, Any]:
+    """Pane display stamps. Any NULL row keeps the hop unconfirmed.
+
+    ANN still trusts legacy NULL as nomic-768 (``trust_nomic_768``). The pane
+    must not present a later stamped turn as proof for a mixed-provenance edge.
+    """
+    if not turn_rows:
+        return None, None
+    models: set[tuple[Any, Any]] = set()
+    any_null = False
+    for row in turn_rows:
+        model = row.get("embed_model")
+        dim = row.get("embed_dim")
+        if model in (None, "") or dim is None:
+            any_null = True
+        models.add((model, dim))
+    if any_null or len(models) != 1:
+        return None, None
+    return next(iter(models))
+
+
 def pack_neighborhood(
     noun: Dict[str, Any],
     edges: List[Dict[str, Any]],

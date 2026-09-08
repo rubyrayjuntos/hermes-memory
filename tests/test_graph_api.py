@@ -704,6 +704,65 @@ async def test_search_builds_hypotheses_only_from_conversation_passports():
         "file seed",
     }
     assert out["paths"][0]["session_id"] == "session-a"
+    assert out["retrieval"]["funnel"]["ann_candidates"] == 2
+    assert out["retrieval"]["funnel"]["above_similarity"] == 2
+
+
+@pytest.mark.asyncio
+async def test_search_thresholds_before_expand_and_funnel():
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.graph_api import Runtime
+
+    class FakeEmbedder:
+        async def embed_text(self, _text):
+            return [1.0, 0.0]
+
+    class FakeStore:
+        async def vector_search(self, _literal, _k):
+            return [
+                {
+                    "id": "41",
+                    "content": "hot",
+                    "similarity": 0.8,
+                    "src": "conversation",
+                    "embedding": "[1,0]",
+                },
+                {
+                    "id": "99",
+                    "content": "cold",
+                    "similarity": 0.1,
+                    "src": "conversation",
+                    "embedding": "[1,0]",
+                },
+            ]
+
+        async def passports_for_conversations(self, conv_ids):
+            assert conv_ids == [41]
+            return [{
+                "noun_id": 11,
+                "chunk_id": "conv_41",
+                "session_id": "s",
+                "turn_id": 41,
+            }]
+
+        async def expand_graph(self, hypotheses, *, q_vec, hops, k):
+            del q_vec, hops, k
+            assert [h.turn_id for h in hypotheses] == [41]
+            return []
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.store = FakeStore()
+    runtime.embedder = FakeEmbedder()
+    runtime.cfg = HybridAgeConfig(embed_dim=2, min_similarity=0.55)
+
+    out = await runtime._asearch("noun", 4, 2)
+    contents = {r["content"] for r in out["results"]}
+    assert contents == {"hot"}
+    assert "cold" not in contents
+    funnel = out["retrieval"]["funnel"]
+    assert funnel["ann_candidates"] == 2
+    assert funnel["above_similarity"] == 1
+    assert funnel["seed_nodes"] == 1
 
 
 def test_undirected_knn_emits_pair_selected_by_one_side_only():
@@ -770,3 +829,18 @@ def test_pack_neighborhood_empty_and_missing_turn_reasons():
     assert TURN_UNAVAILABLE.format(turn_id=9) in filled["empty_reasons"]
     assert TURN_GRAPH_DEGRADED in filled["empty_reasons"]
     assert TURN_UNPASSPORTED in filled["empty_reasons"]
+
+
+def test_embed_stamps_null_row_keeps_hop_unconfirmed():
+    from hermes_memory.graph_view import embed_stamps_from_turns
+
+    mixed = embed_stamps_from_turns([
+        {"embed_model": None, "embed_dim": None},
+        {"embed_model": "nomic-embed-text", "embed_dim": 768},
+    ])
+    assert mixed == (None, None)
+    stamped = embed_stamps_from_turns([
+        {"embed_model": "nomic-embed-text", "embed_dim": 768},
+        {"embed_model": "nomic-embed-text", "embed_dim": 768},
+    ])
+    assert stamped == ("nomic-embed-text", 768)

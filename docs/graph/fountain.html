@@ -190,6 +190,8 @@ const LABEL_GEM = {
 const EDGE_COLOR = { IMPORTS: 0x2A5DB0, mentions: 0x2F8F8A, GOVERNED_BY: 0xC9943F, NEXT: 0x2F8F8A, IN_SESSION: 0xC9943F, GHOST_KNN: 0xE040B0 };
 
 let raw = { nodes: [], links: [] };
+let degreeById = new Map();
+let hopSeq = 0;
 let catalogPayload = null;
 let hops = new Map();
 let seedIds = new Set();
@@ -447,6 +449,7 @@ function applyManifold(payload, { seeds = [], mode = 'catalog' } = {}) {
   }));
   const allLinks = ghostEnabled && ghostEdges.length ? [...baseLinks, ...ghostEdges] : baseLinks;
   raw.links = allLinks;
+  recomputeDegrees();
   layout(raw.nodes, raw.links, seedIds, mode);
   highlighted = new Set();
   rebuildScene();
@@ -613,7 +616,7 @@ function initThree() {
     tip.style.display = 'block';
   }
   function showNodeTip(n, ev) {
-    const degree = raw.links.filter(l => sid(l.source)===sid(n.id) || sid(l.target)===sid(n.id)).length;
+    const degree = degreeById.get(sid(n.id)) || 0;
     const typ = (n.props || n.properties || {}).type || n.type || n.label || 'Noun';
     tip.innerHTML = `<b>${escapeHTML(nodeName(n))}</b><br>type=${escapeHTML(String(typ))} · degree=${degree} (loaded graph)`;
     placeTip(ev);
@@ -697,6 +700,16 @@ function initThree() {
   });
 }
 
+function recomputeDegrees() {
+  degreeById = new Map();
+  for (const n of raw.nodes) degreeById.set(sid(n.id), 0);
+  for (const l of raw.links) {
+    const a = sid(l.source), b = sid(l.target);
+    degreeById.set(a, (degreeById.get(a) || 0) + 1);
+    degreeById.set(b, (degreeById.get(b) || 0) + 1);
+  }
+}
+
 function nodeName(n) {
   return n.name || n.title || n.label || n.id;
 }
@@ -709,6 +722,7 @@ function nounApiId(n) {
 async function selectNode(n) {
   selected = n; AppState.selectedNode = n?.id || null;
   AppState._coachClicks = (AppState._coachClicks||0)+1; maybeCoach();
+  const token = ++hopSeq;
   const typ = (n.props || n.properties || {}).type || n.type || n.label || 'Noun';
   document.getElementById('sel-meta').textContent = (n.label || 'Noun') + ' · ' + typ;
   document.getElementById('hook').textContent = 'loading 1-hop…';
@@ -716,6 +730,7 @@ async function selectNode(n) {
     b.classList.toggle('on', b.dataset.id === n.id);
   });
   const hop = await safeFetch(`${API}/api/librarian/nouns/${encodeURIComponent(nounApiId(n))}/hop`);
+  if (token !== hopSeq) return;
   if (!hop || hop.error) {
     document.getElementById('hook').textContent = hop && hop.error
       ? String(hop.error)
@@ -1008,6 +1023,7 @@ async function refreshGhost() {
     const base = raw.links.filter(l => l.label !== 'GHOST_KNN');
     const all = [...base, ...ghostEdges];
     raw.links = all;
+    recomputeDegrees();
     layout(raw.nodes, raw.links, seedIds, 'catalog');
     document.getElementById('mode-tag').textContent = 'CATALOG+GHOST';
     rebuildScene();
@@ -1104,6 +1120,7 @@ function dispatch(action, payload) {
         try{ localStorage.setItem('fountain.ghostEnabled','0'); }catch{}
         ghostEdges = []; ghostMeta = null;
         raw.links = (raw.links||[]).filter(l => l.label !== 'GHOST_KNN');
+        recomputeDegrees();
         if (raw.nodes.length) { layout(raw.nodes, raw.links, seedIds, 'catalog'); rebuildScene(); updateGhostMeta(); }
       }
       renderUIForCurrentLevel();
@@ -1114,7 +1131,7 @@ function dispatch(action, payload) {
       AppState.ghost.enabled = !AppState.ghost.enabled; ghostEnabled = AppState.ghost.enabled;
       try{ localStorage.setItem('fountain.ghostEnabled', AppState.ghost.enabled?'1':'0'); }catch{}
       if (AppState.ghost.enabled) refreshGhost();
-      else { ghostEdges=[]; ghostMeta=null; raw.links=(raw.links||[]).filter(l=>l.label!=='GHOST_KNN'); if(raw.nodes.length){ layout(raw.nodes,raw.links,seedIds,'catalog'); document.getElementById('mode-tag').textContent='CATALOG'; rebuildScene(); } updateGhostMeta(); renderUIForCurrentLevel(); }
+      else { ghostEdges=[]; ghostMeta=null; raw.links=(raw.links||[]).filter(l=>l.label!=='GHOST_KNN'); recomputeDegrees(); if(raw.nodes.length){ layout(raw.nodes,raw.links,seedIds,'catalog'); document.getElementById('mode-tag').textContent='CATALOG'; rebuildScene(); } updateGhostMeta(); renderUIForCurrentLevel(); }
       break;
     }
     case 'UPDATE_GHOST_PARAMS': {
