@@ -63,7 +63,7 @@ DDL-only (reconfirmed unused by `src/` DML at `8c3e0de`; empty on `:5452` tonigh
 1. It is a real schema mutation (new `V*.sql` `DROP` / AGE label surgery), not a doc/ticket. Session rule: do not land that on `main` without a CI-gated PR.
 2. V1 and `sql/init/02_schema.sql` still `CREATE` these objects. A drop that is not also removed from V1/`sql/init` (or isolated to a later idempotent migration) re-creates them on the next empty-volume install or first-boot compose.
 3. AGE `Mentions` must not be mixed with SQL `semantic_edge.verb_type='mentions'`. A “prune unused labels” patch that touches the wrong `Mentions` is the expensive failure mode.
-4. `Concept`/`ABOUT` look unused on the provider hot path but `hermes-memory-backfill` / `store_concepts` still write them — they are leftover, not dead.
+4. `Concept`/`ABOUT` look unused on the provider hot path but `hermes-memory-backfill-about` / `store_concepts` still write them — they are leftover, not dead.
 
 Ticket the prune as its own PR when Documents `:5450` and installed `:5452` both have an explicit DSN story (#74 acceptance). Do not sneak it into installer or pane work.
 
@@ -143,4 +143,4 @@ Opened 2026-09-07 from this tree. Priority is data correctness, not pane polish 
 | 2 (loudest) | Dim mismatch on `semantic_edge` UPDATE `continue`s; no `GRAPH_DEGRADED` | [#70](https://github.com/rubyrayjuntos/hermes-memory/issues/70) |
 | 1 | Ingest writes new NULL `embed_model`/`embed_dim`; policy was for leftover rows | [#71](https://github.com/rubyrayjuntos/hermes-memory/issues/71) |
 | 3 | Adjacent-only mention chains are an RQ *construction* ceiling | [#72](https://github.com/rubyrayjuntos/hermes-memory/issues/72) |
-| 5 | `hermes-memory-backfill` is ABOUT/Concept; live C–F is `replay_conversation_manifold.py` | [#73](https://github.com/rubyrayjuntos/hermes-memory/issues/73) |
+| 5 | `hermes-memory-backfill-about` is ABOUT/Concept; live C–F is `replay_conversation_manifold.py` | [#73](https://github.com/rubyrayjuntos/hermes-memory/issues/73) |

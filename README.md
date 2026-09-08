@@ -282,7 +282,7 @@ until re-tested.
 | `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
 | `hermes-memory-uninstall` | Stop viz API, disable hybrid‑age, drop hermes_memory DB (unless `--keep-db`), remove plugin dirs, fall back to built‑in MEMORY.md/USER.md. |
 | `hermes-memory-api` | Read-only viz API (`start`/`stop`/`status`/`serve`) on 127.0.0.1:7890. Pane: `http://127.0.0.1:7890/api/librarian/pane`. |
-| `hermes-memory-backfill` | Legacy Title-Case linker only. Does **not** run live C–F (no nouns, passports, `semantic_edge`, or `drain_status`). |
+| `hermes-memory-backfill-about` | Legacy Title-Case linker only. Does **not** run live C–F (no nouns, passports, `semantic_edge`, or `drain_status`). The old name `hermes-memory-backfill` now exits 2 and prints this distinction. |
 | `scripts/replay_conversation_manifold.py --live` | The C–F backfill: flower, `extract_nouns`, passports, `upsert_mentions_chain`, `drain_status` on `hermes_memory`. Default (no `--live`) copies onto `hermes_test`. |
 
 ### Backup & restore

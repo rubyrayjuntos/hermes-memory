@@ -1,12 +1,14 @@
-"""hermes-memory-backfill — graph unlinked conversations via AboutConceptLinker.
+"""hermes-memory-backfill-about — leftover AGE Concept/ABOUT linker only.
 
-Skips C5 verify synthetics. Does not resurrect extractors.
+Does not run live C–F (no nouns, passports, semantic_edge, drain_status).
+Manifold backfill is: python scripts/replay_conversation_manifold.py --live
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import os
+import sys
 from typing import Optional
 
 from .about_concepts import AboutConceptLinker
@@ -111,12 +113,25 @@ async def run_backfill(dsn: Optional[str] = None, limit: int = 0) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="hermes-memory-backfill")
+    ap = argparse.ArgumentParser(prog="hermes-memory-backfill-about")
     ap.add_argument("--dsn", default=None)
     ap.add_argument("--limit", type=int, default=0, help="0 = all unlinked")
     args = ap.parse_args(argv)
     n = asyncio.run(run_backfill(dsn=args.dsn, limit=args.limit))
     return 0 if n >= 0 else 1
+
+
+def deprecated_main(argv: Optional[list[str]] = None) -> int:
+    """Old name. Fail loud so it cannot be mistaken for C–F manifold backfill."""
+    del argv
+    print(
+        "hermes-memory-backfill was renamed: it only writes AGE Concept/ABOUT.\n"
+        "  ABOUT leftover:  hermes-memory-backfill-about\n"
+        "  live C–F drain:  python scripts/replay_conversation_manifold.py --live\n"
+        "Refusing to run under the old name (issue #73).",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

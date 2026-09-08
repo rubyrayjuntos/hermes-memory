@@ -570,7 +570,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Installation complete! pin={sha[:12]} dsn={_redact_dsn(dsn)} verify=PASS")
         else:
             print("Installation finished with verify: FAIL")
-        print("    skipped hermes-memory-backfill (ABOUT/Concept only; not C–F).")
+        print("    skipped hermes-memory-backfill-about (ABOUT/Concept only; not C–F).")
         return 0 if result.returncode == 0 else 1
 
 
