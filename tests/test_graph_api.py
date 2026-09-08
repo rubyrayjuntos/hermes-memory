@@ -456,6 +456,10 @@ def test_validate_bind_host_loopback_only():
 
 
 def test_routes_read_and_mutations():
+    assert match_route("GET", "/api/librarian/nouns/9/hop") == (
+        "noun_hop",
+        {"noun_id": "9"},
+    )
     assert match_route("GET", "/api/librarian/graph/stats")[0] == "stats"
     assert match_route("GET", "/api/librarian/graph/3d")[0] == "graph_3d"
     assert match_route("GET", "/api/health")[0] == "health"
@@ -712,3 +716,57 @@ def test_undirected_knn_emits_pair_selected_by_one_side_only():
     pairs = {(a, b) for a, b, _ in edges}
     assert ("3", "9") in pairs
     assert ("1", "3") in pairs
+
+
+def test_pack_retrieval_funnel_line_uses_pipeline_counts():
+    from hermes_memory.graph_view import pack_retrieval_funnel
+
+    funnel = pack_retrieval_funnel(
+        ann_candidates=12,
+        above_similarity=6,
+        min_similarity=0.55,
+        seed_nodes=6,
+        expanded_nodes=2,
+        kept_after_beam=2,
+    )
+    assert funnel["after_graph_expand"] == 8
+    assert funnel["line"] == (
+        "ANN candidates: 12  →  above similarity 0.55: 6  →  "
+        "after graph expand: 8 (6 seed + 2 new via edges)  →  "
+        "kept after beam/budget: 2"
+    )
+
+
+def test_pack_neighborhood_empty_and_missing_turn_reasons():
+    from hermes_memory.graph_view import (
+        EMBED_UNSTAMPED,
+        NO_CONNECTIONS,
+        TURN_GRAPH_DEGRADED,
+        TURN_UNAVAILABLE,
+        TURN_UNPASSPORTED,
+        pack_neighborhood,
+    )
+
+    empty = pack_neighborhood({"id": 1, "label": "Atlas", "type": "Person"}, [], {})
+    assert empty["empty_reasons"] == [NO_CONNECTIONS]
+    assert empty["embed_reason"] == EMBED_UNSTAMPED
+    filled = pack_neighborhood(
+        {
+            "id": 2,
+            "label": "Nightingale",
+            "type": "Person",
+            "embed_model": "nomic-embed-text",
+            "embed_dim": 768,
+        },
+        [{"neighbor_id": 3, "neighbor_label": "Hermes", "neighbor_type": "Project",
+          "magnitude": 1.2, "provenance_turns": [9, 10, 11]}],
+        {
+            10: {"id": 10, "content": "Nightingale met Hermes.", "drain_status": "graph_degraded"},
+        },
+        unpassported_ids={11},
+    )
+    assert filled["embed_reason"] is None
+    assert filled["neighbors"][0]["magnitude"] == 1.2
+    assert TURN_UNAVAILABLE.format(turn_id=9) in filled["empty_reasons"]
+    assert TURN_GRAPH_DEGRADED in filled["empty_reasons"]
+    assert TURN_UNPASSPORTED in filled["empty_reasons"]

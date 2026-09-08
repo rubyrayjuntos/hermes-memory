@@ -21,6 +21,8 @@ from .graph_view import (
     attach_passport_anchors,
     catalog_where_clause,
     humanize_node,
+    pack_neighborhood,
+    pack_retrieval_funnel,
     pack_search,
     parse_agtype_number,
     parse_vertex,
@@ -852,7 +854,95 @@ class Runtime:
         packed["retrieval"]["vector_ms"] = round((t_vec - t_embed) * 1000, 1)
         packed["retrieval"]["graph_ms"] = round((t_graph - t_vec) * 1000, 1)
         packed["retrieval"]["fusion_ms"] = round((time.perf_counter() - t_graph) * 1000, 1)
+        min_sim = float(getattr(self.cfg, "min_similarity", 0.55))
+        above = sum(
+            1 for s in seeds if float(s.get("similarity") or 0.0) >= min_sim
+        )
+        seed_n = len(seed_noun_ids)
+        verts = int(packed["retrieval"].get("vertices_reached") or 0)
+        packed["retrieval"]["funnel"] = pack_retrieval_funnel(
+            ann_candidates=len(seeds),
+            above_similarity=above,
+            min_similarity=min_sim,
+            seed_nodes=seed_n,
+            expanded_nodes=max(0, verts - seed_n),
+            kept_after_beam=len(packed.get("ranked") or []),
+        )
         return packed
+
+    def noun_hop(self, noun_id: int) -> Dict[str, Any]:
+        assert self.store is not None
+        return self.loop.call(self._anoun_hop(int(noun_id)))
+
+    async def _anoun_hop(self, noun_id: int) -> Dict[str, Any]:
+        assert self.store is not None
+        async with self.pool.acquire() as conn:
+            noun = await conn.fetchrow(
+                "SELECT id, label, type FROM noun WHERE id = $1",
+                noun_id,
+            )
+            if noun is None:
+                return {"error": "not found", "noun_id": noun_id}
+            edge_rows = await conn.fetch(
+                """
+                SELECT e.src_noun, e.tgt_noun, e.magnitude, e.provenance_turns,
+                       n.id AS neighbor_id, n.label AS neighbor_label,
+                       n.type AS neighbor_type
+                  FROM semantic_edge e
+                  JOIN noun n ON n.id = CASE
+                        WHEN e.src_noun = $1 THEN e.tgt_noun
+                        ELSE e.src_noun END
+                 WHERE e.verb_type = 'mentions'
+                   AND (e.src_noun = $1 OR e.tgt_noun = $1)
+                """,
+                noun_id,
+            )
+        edges = [dict(row) for row in edge_rows]
+        turn_ids: list[int] = []
+        for row in edges:
+            for tid in row.get("provenance_turns") or []:
+                turn_ids.append(int(tid))
+        turn_rows = await self.store.conversations_by_ids(turn_ids)
+        turns = {int(r["id"]): r for r in turn_rows}
+        models = {
+            (r.get("embed_model"), r.get("embed_dim"))
+            for r in turn_rows
+            if r.get("embed_model") or r.get("embed_dim") is not None
+        }
+        embed_model = embed_dim = None
+        if len(models) == 1:
+            embed_model, embed_dim = next(iter(models))
+        elif len(models) > 1:
+            # Conflicting stamps: do not pick one. Surface unstamped reason.
+            embed_model, embed_dim = None, None
+        unpassported: set[int] = set()
+        if turn_ids:
+            async with self.pool.acquire() as conn:
+                gap = await conn.fetch(
+                    """
+                    SELECT c.id
+                      FROM conversations c
+                     WHERE c.id = ANY($1::bigint[])
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM memory_chunk_nodes p
+                            WHERE p.chunk_id = ('conv_' || c.id::text)
+                              AND p.source = 'conversation'
+                              AND p.noun_id IS NOT NULL
+                       )
+                    """,
+                    turn_ids,
+                )
+            unpassported = {int(r["id"]) for r in gap}
+        noun_d = dict(noun)
+        noun_d["embed_model"] = embed_model
+        noun_d["embed_dim"] = embed_dim
+        return pack_neighborhood(
+            noun_d,
+            edges,
+            turns,
+            unpassported_ids=unpassported,
+        )
 
     def node(self, vid: int) -> Dict[str, Any]:
         assert self.store is not None
