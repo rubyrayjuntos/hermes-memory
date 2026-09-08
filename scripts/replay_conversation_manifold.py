@@ -25,7 +25,7 @@ import psycopg
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
 
-from hermes_memory.config import load_config  # noqa: E402
+from hermes_memory.config import dotenv_key_from_file, load_config  # noqa: E402
 from hermes_memory.embed import Embedder  # noqa: E402
 from hermes_memory.extract_nouns import extract_nouns  # noqa: E402
 from hermes_memory.graph_api import _load_dotenv_files, is_synthetic_session  # noqa: E402
@@ -109,10 +109,17 @@ async def replay(
     label_vecs: dict[str, list[float]] = {}
 
     async with pool.acquire() as conn:
-        if turn_ids:
+        if turn_ids is not None:
             rows = await conn.fetch(
                 """
-                SELECT id, session_id, content, embedding::text AS embedding
+                SELECT id, session_id, content, embedding::text AS embedding,
+                       (
+                         SELECT p.id FROM conversations p
+                          WHERE p.session_id = conversations.session_id
+                            AND p.id < conversations.id
+                          ORDER BY p.id DESC
+                          LIMIT 1
+                       ) AS prev_id
                   FROM conversations
                  WHERE id = ANY($1::bigint[])
                  ORDER BY session_id, id
@@ -122,7 +129,8 @@ async def replay(
         else:
             rows = await conn.fetch(
                 """
-                SELECT id, session_id, content, embedding::text AS embedding
+                SELECT id, session_id, content, embedding::text AS embedding,
+                       NULL::bigint AS prev_id
                   FROM conversations
                  ORDER BY session_id, id
                 """
@@ -134,7 +142,7 @@ async def replay(
     except Exception:
         existing = []
 
-    pending: list[tuple[int, str, str, list[float], list]] = []
+    pending: list[tuple[int, str, str, list[float], list, int | None]] = []
     labels_needed: set[str] = set()
     for row in rows:
         stats["seen"] += 1
@@ -146,7 +154,7 @@ async def replay(
             continue
         if _is_noise(content):
             stats["noise"] += 1
-            pending.append((conv_id, session_id, content, [], []))
+            pending.append((conv_id, session_id, content, [], [], row["prev_id"]))
             continue
         vec = parse_embedding(row["embedding"])
         mentions = extract_nouns(
@@ -158,7 +166,7 @@ async def replay(
             if m.label not in existing:
                 existing.append(m.label)
             labels_needed.add(m.label)
-        pending.append((conv_id, session_id, content, vec, mentions))
+        pending.append((conv_id, session_id, content, vec, mentions, row["prev_id"]))
 
     missing_labels = sorted(lab for lab in labels_needed if lab not in label_vecs)
     batch = 64
@@ -182,20 +190,28 @@ async def replay(
         embedded = await embedder.embed_texts([c[2][:8000] for c in chunk])
         for (idx, _cid, _content), vec in zip(chunk, embedded):
             if vec:
-                conv_id, session_id, content, _old, mentions = pending[idx]
-                pending[idx] = (conv_id, session_id, content, vec, mentions)
+                conv_id, session_id, content, _old, mentions, pred = pending[idx]
+                pending[idx] = (conv_id, session_id, content, vec, mentions, pred)
                 stats["reembedded"] += 1
 
     prev: dict[str, int] = {}
-    for n, (conv_id, session_id, content, vec, mentions) in enumerate(pending, 1):
+    targeted = turn_ids is not None
+    for n, (conv_id, session_id, content, vec, mentions, sql_prev) in enumerate(
+        pending, 1
+    ):
+        if targeted:
+            pred = int(sql_prev) if sql_prev is not None else None
+        else:
+            pred = prev.get(session_id)
         try:
             vertex_id = await flower._link_turn_flower(
-                store, conv_id, session_id, content, prev.get(session_id),
+                store, conv_id, session_id, content, pred,
             )
         except Exception:
             vertex_id = None
             stats["flower_exc"] += 1
-        prev[session_id] = conv_id
+        if not targeted:
+            prev[session_id] = conv_id
         if vertex_id is None:
             stats["flower_fail"] += 1
         status = DRAIN_COMPLETE
@@ -279,6 +295,21 @@ async def replay(
     return dict(stats)
 
 
+LIVE_DBS = frozenset({"hermes_memory", "hermes_memory_installed"})
+
+
+def _parse_turn_ids(raw: str | None) -> list[int] | None:
+    """None means all rows. A present --turn-ids flag (even empty) is a list."""
+    if raw is None:
+        return None
+    out: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part:
+            out.append(int(part))
+    return out
+
+
 def _redact(msg: str, *secrets: str) -> str:
     out = msg
     for secret in secrets:
@@ -297,8 +328,9 @@ def main() -> int:
     )
     ap.add_argument(
         "--turn-ids",
-        default="",
-        help="Comma-separated conversation ids (with --live). Replays only those rows.",
+        default=None,
+        help="Comma-separated conversation ids (with --live). Replays only those "
+             "rows. Empty list replays zero rows (does not mean all).",
     )
     ap.add_argument(
         "--installed",
@@ -308,13 +340,10 @@ def main() -> int:
     args = ap.parse_args()
     _load_dotenv_files()
     if args.installed:
-        env_path = Path.home() / ".hermes" / ".env"
-        live_raw = ""
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("HYBRID_AGE_DSN="):
-                live_raw = line.split("=", 1)[1].strip().strip("'").strip('"')
-                break
-        live = _resolve_dsn(live_raw)
+        live = _resolve_dsn(
+            dotenv_key_from_file(Path.home() / ".hermes" / ".env", "HYBRID_AGE_DSN")
+            or ""
+        )
     else:
         live = _resolve_dsn(os.environ.get("HYBRID_AGE_DSN", ""))
     if not live:
@@ -325,7 +354,7 @@ def main() -> int:
         if args.live:
             parsed = urlparse(live)
             db = (parsed.path or "/").rsplit("/", 1)[-1]
-            if db not in ("hermes_memory", "hermes_memory_installed"):
+            if db not in LIVE_DBS:
                 print(
                     "refusing --live (database is not hermes_memory "
                     "or hermes_memory_installed)",
@@ -333,10 +362,7 @@ def main() -> int:
                 )
                 return 2
             print("live_cf_backfill start", flush=True)
-            ids: list[int] | None = None
-            raw_ids = (args.turn_ids or "").strip()
-            if raw_ids:
-                ids = [int(x) for x in raw_ids.split(",") if x.strip()]
+            ids = _parse_turn_ids(args.turn_ids)
             stats = asyncio.run(
                 replay(live, stamp_drain=True, turn_ids=ids)
             )

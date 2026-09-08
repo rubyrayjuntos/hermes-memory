@@ -22,10 +22,13 @@ import asyncpg
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
 
-from hermes_memory.config import load_config  # noqa: E402
+from hermes_memory.config import dotenv_key_from_file, load_config  # noqa: E402
 from hermes_memory.extract_nouns import is_junk_fragment_label  # noqa: E402
 from hermes_memory.graph_api import _load_dotenv_files  # noqa: E402
 from hermes_memory.schema_guard import UNPASSPORTED_TURNS_SQL  # noqa: E402
+
+
+LIVE_DBS = frozenset({"hermes_memory", "hermes_memory_installed"})
 
 
 def _resolve_dsn(raw: str) -> str:
@@ -36,11 +39,10 @@ def _resolve_dsn(raw: str) -> str:
 
 
 def _dsn_from_hermes_env() -> str:
-    path = Path.home() / ".hermes" / ".env"
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("HYBRID_AGE_DSN="):
-            return _resolve_dsn(line.split("=", 1)[1].strip().strip("'").strip('"'))
-    raise SystemExit("missing HYBRID_AGE_DSN in ~/.hermes/.env")
+    raw = dotenv_key_from_file(Path.home() / ".hermes" / ".env", "HYBRID_AGE_DSN")
+    if not raw:
+        raise SystemExit("missing HYBRID_AGE_DSN in ~/.hermes/.env")
+    return _resolve_dsn(raw)
 
 
 async def _fk_report(conn: asyncpg.Connection) -> list[str]:
@@ -110,6 +112,12 @@ async def main() -> int:
         )
     parsed = urlparse(dsn)
     db = (parsed.path or "/").lstrip("/")
+    if db not in LIVE_DBS:
+        print(
+            "refusing (database is not hermes_memory or hermes_memory_installed)",
+            file=sys.stderr,
+        )
+        return 2
     conn = await asyncpg.connect(dsn)
     try:
         fks = await _fk_report(conn)
@@ -128,11 +136,33 @@ async def main() -> int:
         print("candidates", len(candidates))
         for nid, lab in candidates:
             print(f"  {nid}\t{lab}")
+        ids = [c[0] for c in candidates]
+        affected: list[int] = []
+        if ids:
+            affected_rows = await conn.fetch(
+                """
+                SELECT DISTINCT x AS turn_id FROM (
+                    SELECT turn_id AS x
+                      FROM memory_chunk_nodes
+                     WHERE noun_id = ANY($1::int[])
+                       AND turn_id IS NOT NULL
+                    UNION
+                    SELECT unnest(provenance_turns) AS x
+                      FROM semantic_edge
+                     WHERE src_noun = ANY($1::int[])
+                        OR tgt_noun = ANY($1::int[])
+                ) t
+                 WHERE x IS NOT NULL
+                 ORDER BY 1
+                """,
+                ids,
+            )
+            affected = [int(r["turn_id"]) for r in affected_rows]
+        print("affected_turns", len(affected), affected)
         if not args.apply:
             print("dry_run (pass --apply to delete)")
             return 0
         before_passported = await _passported_turn_ids(conn)
-        ids = [c[0] for c in candidates]
         deleted = 0
         if ids:
             deleted = int(
@@ -153,6 +183,7 @@ async def main() -> int:
         ]
         print("deleted_nouns", deleted)
         print("after", " ".join(f"{k}={v}" for k, v in after.items()))
+        print("affected_turns", len(affected), affected)
         print("newly_unpassported", len(newly_unpassported), newly_unpassported)
         print("leftover_junk", len(leftover))
         return 0

@@ -100,6 +100,30 @@ def dotenv_paths() -> list[Path]:
     return paths
 
 
+def iter_dotenv_assignments(text: str):
+    """Yield (key, value) in file order. First assignment for a key wins at the caller."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("export "):
+            stripped = stripped[7:].strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        yield key.strip(), value.strip().strip('"').strip("'")
+
+
+def dotenv_key_from_file(path: Path, key: str) -> str | None:
+    """Read one key from a dotenv file (export, comments, whitespace). First wins."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for k, v in iter_dotenv_assignments(text):
+        if k == key:
+            return v
+    return None
+
+
 def load_dotenv_files() -> None:
     """Pull HYBRID_AGE_* / HERMES_PG_PASSWORD from dotenv files if missing."""
     for path in dotenv_paths():
@@ -107,14 +131,7 @@ def load_dotenv_files() -> None:
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("export "):
-                stripped = stripped[7:].strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            key, value = stripped.split("=", 1)
-            key, value = key.strip(), value.strip().strip('"').strip("'")
+        for key, value in iter_dotenv_assignments(text):
             if key.startswith("HYBRID_AGE_") or key == "HERMES_PG_PASSWORD":
                 os.environ.setdefault(key, value)
 

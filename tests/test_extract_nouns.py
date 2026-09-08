@@ -87,3 +87,9 @@ def test_issue79_rejects_contraction_and_aux_fragments():
     assert not is_junk_fragment_label("Tokyo Eye")
     assert not is_junk_fragment_label("as-is")
     assert not is_junk_fragment_label("M src/hermes_memory/graph_api.py")
+    assert not is_junk_fragment_label("Model T")
+    assert not is_junk_fragment_label("Vitamin D")
+    assert not is_junk_fragment_label("tin can")
+    labels_can = [n.label.lower() for n in extract_nouns("the tin can talks to RateLimiter")]
+    assert "tin can" in labels_can
+    assert not is_junk_fragment_label("rate limiter is")

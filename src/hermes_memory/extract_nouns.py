@@ -62,7 +62,7 @@ PHRASE_STOPWORDS = frozenset({
     # Pronouns / auxiliaries / apostrophe-split leftovers (#79)
     "i", "me", "my", "we", "you", "he", "she", "they", "am",
     "don", "isn", "aren", "didn", "doesn", "wasn", "weren",
-    "won", "can", "shouldn", "wouldn", "couldn", "hasn", "haven", "hadn",
+    "won", "shouldn", "wouldn", "couldn", "hasn", "haven", "hadn",
     "t", "s", "d", "re", "ve", "ll", "m",
 })
 
@@ -101,7 +101,7 @@ WORD_RE = re.compile(r"\b[\w'.-]+\b")
 JUNK_FRAGMENT_TAIL_RE = re.compile(r"\s(t|s|d|re|ve|ll|m)$")
 JUNK_FRAGMENT_HEAD_RE = re.compile(r"^(t|s|d|re|ve|ll|m)\s")
 JUNK_FRAGMENT_AUX_RE = re.compile(
-    r"(?i)\b(i|am|is|isn|don|didn|doesn|wasn|weren|aren|can|won|"
+    r"(?i)^(i|am|is|isn|don|didn|doesn|wasn|weren|aren|won|"
     r"shouldn|wouldn|couldn|hasn|haven|hadn)\b"
 )
 
@@ -114,7 +114,8 @@ def is_junk_fragment_label(label: str) -> bool:
     if _is_identifier_shape(s):
         return False
     low = s.lower()
-    if JUNK_FRAGMENT_TAIL_RE.search(low):
+    # Lowercase-only: mixed-case names like "Model T" / "Vitamin D" stay.
+    if s == low and JUNK_FRAGMENT_TAIL_RE.search(low):
         return True
     # Leading contraction fragments are lowercase-only so git status
     # labels like "M src/..." are not treated as junk.
