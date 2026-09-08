@@ -925,6 +925,9 @@ function applySearch(res) {
   const seeds = res.seeds || [];
   if (!seeds.length) {
     applyCatalog(catalogPayload || {nodes: [], links: []});
+    searchActive = true;
+    lastSearch = res;
+    renderFunnel(res);
     raw.nodes.forEach(n => { n._dimmed = true; });
     rebuildScene();
     if (graphGroup) graphGroup.traverse(obj => {

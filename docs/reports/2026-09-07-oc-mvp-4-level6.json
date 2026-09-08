@@ -1,0 +1,100 @@
+{
+  "health_subset": {
+    "ok": true,
+    "bind": "127.0.0.1:7890",
+    "drain_status": {
+      "complete": 596,
+      "embed_null": 0,
+      "graph_degraded": 9,
+      "unset": 264
+    },
+    "unpassported_count": 266
+  },
+  "manifold": {
+    "turns": 869,
+    "nouns": 1902,
+    "mentions": 2093
+  },
+  "hop_hermes_memory": {
+    "id": "noun:330",
+    "noun_id": 330,
+    "label": "hermes-memory",
+    "type": null,
+    "embed_model": null,
+    "embed_dim": null,
+    "embed_reason": "Embedding version not recorded (pre-V10) \u2014 trusted as nomic-768 by policy, not directly confirmed.",
+    "neighbors": [
+      {
+        "noun_id": 329,
+        "label": "hermes prompt-size",
+        "type": null,
+        "magnitude": 0.9,
+        "provenance_turns": [
+          344
+        ],
+        "excerpts": [
+          {
+            "turn_id": 344,
+            "excerpt": "Checked \u2014 here's the read on that megathread and whether to ping the MOD:\n\n**What the thread actually is** ( Aug 30 `4f225435` v0.20.6 ):\n* Canonical correction",
+            "drain_status": "complete"
+          }
+        ]
+      },
+      {
+        "noun_id": 331,
+        "label": "127.0.0.1:5450",
+        "type": null,
+        "magnitude": 0.9,
+        "provenance_turns": [
+          344
+        ],
+        "excerpts": [
+          {
+            "turn_id": 344,
+            "excerpt": "Checked \u2014 here's the read on that megathread and whether to ping the MOD:\n\n**What the thread actually is** ( Aug 30 `4f225435` v0.20.6 ):\n* Canonical correction",
+            "drain_status": "complete"
+          }
+        ]
+      },
+      {
+        "noun_id": 300,
+        "label": "wip/recency-decay",
+        "type": null,
+        "magnitude": 0.85,
+        "provenance_turns": [
+          356
+        ],
+        "excerpts": [
+          {
+            "turn_id": 356,
+            "excerpt": "Pushed and opened \u2014 **PR #43** for #38 is live:\n\n`https://github.com/rubyrayjuntos/hermes-memory/pull/43`\n\n* Branch `wip/recency-decay` \u2192 `7ba2369` clean on `75",
+            "drain_status": "complete"
+          }
+        ]
+      },
+      {
+        "noun_id": 375,
+        "label": "PR",
+        "type": null,
+        "magnitude": 1.7,
+        "provenance_turns": [
+          356,
+          360
+        ],
+        "excerpts": [
+          {
+            "turn_id": 356,
+            "excerpt": "Pushed and opened \u2014 **PR #43** for #38 is live:\n\n`https://github.com/rubyrayjuntos/hermes-memory/pull/43`\n\n* Branch `wip/recency-decay` \u2192 `7ba2369` clean on `75",
+            "drain_status": "complete"
+          },
+          {
+            "turn_id": 360,
+            "excerpt": "Pushed \u2014 **PR #44** for #39 live: `https://github.com/rubyrayjuntos/hermes-memory/pull/44`\n\n* `wip/3d-inspector` `8268f99` on `3e2741f` \u2014 4 files `382+` (3d + i",
+            "drain_status": "complete"
+          }
+        ]
+      }
+    ],
+    "empty_reasons": []
+  }
+}
