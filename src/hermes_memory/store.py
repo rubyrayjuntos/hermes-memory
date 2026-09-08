@@ -621,7 +621,11 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                     alpha = min(0.4, max(0.05, conf))
                     old_tgt = _parse_pgvector(existing["e_tgt_vec"])
                     if len(old_tgt) != len(turn_vec):
-                        continue
+                        raise ValueError(
+                            "semantic_edge dim mismatch: stored "
+                            f"{len(old_tgt)} vs turn {len(turn_vec)} "
+                            f"(src_noun={src} tgt_noun={tgt})"
+                        )
                     ema = [(1.0 - alpha) * o + alpha * t for o, t in zip(old_tgt, turn_vec)]
                     prov = list(existing["provenance_turns"] or [])
                     if int(turn_id) not in prov:

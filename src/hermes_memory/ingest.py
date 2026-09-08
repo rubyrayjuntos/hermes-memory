@@ -515,15 +515,18 @@ class Ingestor:
                         """
                         INSERT INTO doc_chunks
                             (id, doc_hash, source, file_path, ordinal, content,
-                             embedding, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8::jsonb)
+                             embedding, metadata, embed_model, embed_dim)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8::jsonb, $9, $10)
                         ON CONFLICT (id) DO UPDATE SET
                             content = EXCLUDED.content,
                             embedding = EXCLUDED.embedding,
-                            metadata = EXCLUDED.metadata
+                            metadata = EXCLUDED.metadata,
+                            embed_model = EXCLUDED.embed_model,
+                            embed_dim = EXCLUDED.embed_dim
                         """,
                         cid, digest, codebase_s, rel, i, ch,
                         vec_to_literal(vec), json.dumps(meta_common),
+                        self.config.embed_model, int(self.config.embed_dim),
                     )
                     written_ids.append(cid)
                     self.stats.chunks += 1
@@ -552,21 +555,25 @@ class Ingestor:
                     """
                     UPDATE memory_entries
                        SET content = $1, embedding = $2::vector,
-                           metadata = $3::jsonb, updated_at = now()
+                           metadata = $3::jsonb, updated_at = now(),
+                           embed_model = $5, embed_dim = $6
                      WHERE id = $4
                     """,
                     body, vec_to_literal(vec0), json.dumps(meta_common), mem_id,
+                    self.config.embed_model, int(self.config.embed_dim),
                 )
             else:
                 mem_id = await conn.fetchval(
                     """
                     INSERT INTO memory_entries
-                        (agent_identity, target, content, embedding, metadata)
-                    VALUES ($1, 'memory', $2, $3::vector, $4::jsonb)
+                        (agent_identity, target, content, embedding, metadata,
+                         embed_model, embed_dim)
+                    VALUES ($1, 'memory', $2, $3::vector, $4::jsonb, $5, $6)
                     RETURNING id
                     """,
                     AGENT_IDENTITY, body, vec_to_literal(vec0),
                     json.dumps(meta_common),
+                    self.config.embed_model, int(self.config.embed_dim),
                 )
         except Exception:
             self.stats.errors += 1

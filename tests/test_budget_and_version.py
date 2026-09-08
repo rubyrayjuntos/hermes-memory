@@ -58,6 +58,9 @@ def test_insert_sql_names_embed_version_columns() -> None:
     assert "embed_model" in src and "embed_dim" in src
     upsert = inspect.getsource(Store.upsert_memory_entry)
     assert "embed_model" in upsert and "embed_dim" in upsert
+    from hermes_memory.ingest import Ingestor
+    ingest_src = inspect.getsource(Ingestor._index_file)
+    assert "embed_model" in ingest_src and "embed_dim" in ingest_src
 
 
 def test_missing_embed_columns_are_schema_failures() -> None:
