@@ -16,6 +16,7 @@ import asyncio
 import os
 import sys
 from collections import defaultdict
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import asyncpg
@@ -92,7 +93,12 @@ def copy_conversations(live_dsn: str, test_dsn: str) -> int:
     return total
 
 
-async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int]:
+async def replay(
+    target_dsn: str,
+    *,
+    stamp_drain: bool = False,
+    turn_ids: list[int] | None = None,
+) -> dict[str, int]:
     cfg = load_config()
     embedder = Embedder(cfg.embed_url, cfg.embed_model, cfg.embed_dim)
     pool = await asyncpg.create_pool(target_dsn, min_size=1, max_size=4)
@@ -103,13 +109,24 @@ async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int
     label_vecs: dict[str, list[float]] = {}
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, session_id, content, embedding::text AS embedding
-              FROM conversations
-             ORDER BY session_id, id
-            """
-        )
+        if turn_ids:
+            rows = await conn.fetch(
+                """
+                SELECT id, session_id, content, embedding::text AS embedding
+                  FROM conversations
+                 WHERE id = ANY($1::bigint[])
+                 ORDER BY session_id, id
+                """,
+                turn_ids,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT id, session_id, content, embedding::text AS embedding
+                  FROM conversations
+                 ORDER BY session_id, id
+                """
+            )
 
     existing: list[str] = []
     try:
@@ -278,9 +295,28 @@ def main() -> int:
         help="C–F backfill hermes_memory in place (no copy, no hermes_test). "
              "Stamps drain_status. Skips verify/bench synthetics.",
     )
+    ap.add_argument(
+        "--turn-ids",
+        default="",
+        help="Comma-separated conversation ids (with --live). Replays only those rows.",
+    )
+    ap.add_argument(
+        "--installed",
+        action="store_true",
+        help="With --live, use ~/.hermes/.env HYBRID_AGE_DSN (hermes_memory_installed).",
+    )
     args = ap.parse_args()
     _load_dotenv_files()
-    live = _resolve_dsn(os.environ.get("HYBRID_AGE_DSN", ""))
+    if args.installed:
+        env_path = Path.home() / ".hermes" / ".env"
+        live_raw = ""
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("HYBRID_AGE_DSN="):
+                live_raw = line.split("=", 1)[1].strip().strip("'").strip('"')
+                break
+        live = _resolve_dsn(live_raw)
+    else:
+        live = _resolve_dsn(os.environ.get("HYBRID_AGE_DSN", ""))
     if not live:
         print("missing DSN", file=sys.stderr)
         return 2
@@ -289,11 +325,21 @@ def main() -> int:
         if args.live:
             parsed = urlparse(live)
             db = (parsed.path or "/").rsplit("/", 1)[-1]
-            if db != "hermes_memory":
-                print("refusing --live (database is not hermes_memory)", file=sys.stderr)
+            if db not in ("hermes_memory", "hermes_memory_installed"):
+                print(
+                    "refusing --live (database is not hermes_memory "
+                    "or hermes_memory_installed)",
+                    file=sys.stderr,
+                )
                 return 2
             print("live_cf_backfill start", flush=True)
-            stats = asyncio.run(replay(live, stamp_drain=True))
+            ids: list[int] | None = None
+            raw_ids = (args.turn_ids or "").strip()
+            if raw_ids:
+                ids = [int(x) for x in raw_ids.split(",") if x.strip()]
+            stats = asyncio.run(
+                replay(live, stamp_drain=True, turn_ids=ids)
+            )
             print("live_cf_backfill", " ".join(f"{k}={v}" for k, v in sorted(stats.items())))
             return 0
         test = _test_dsn(live)

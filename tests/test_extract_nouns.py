@@ -67,3 +67,23 @@ def test_synthetics_non_session_mints_title_case():
     labels = [n.label for n in extract_nouns(text, synthetic_session=False)]
     assert "Atlas Vault Engine" in labels
     assert not any(l.lower().endswith("appear") for l in labels)
+
+
+def test_issue79_rejects_contraction_and_aux_fragments():
+    from hermes_memory.extract_nouns import is_junk_fragment_label
+
+    text = (
+        "i am thinking about this in terms of tokyo eye protein topology "
+        "and this isn't necessary and don't do that"
+    )
+    labels = [n.label for n in extract_nouns(text)]
+    low = {n.lower() for n in labels}
+    for banned in ("am thinking", "i am", "i am thinking", "isn t", "don t"):
+        assert banned not in low
+    assert "Tokyo Eye" in labels
+    assert is_junk_fragment_label("isn t")
+    assert is_junk_fragment_label("don t")
+    assert is_junk_fragment_label("ll keep")
+    assert not is_junk_fragment_label("Tokyo Eye")
+    assert not is_junk_fragment_label("as-is")
+    assert not is_junk_fragment_label("M src/hermes_memory/graph_api.py")
