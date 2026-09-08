@@ -25,7 +25,7 @@ def test_mentions_visible_by_default_and_imports_off():
 def test_fountain_is_garden_only_ship_surface():
     html = Path("docs/graph/fountain.html").read_text()
 
-    assert "co-occurrence (mention order)" in html
+    assert "co-occurrence in mention order" in html
     assert "Garden live — the mention manifold" in html
     assert "Session, Turn, and Noun" not in html
     assert "turn_id" in html
