@@ -30,6 +30,8 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 
 Vector finds nearby chunks; the graph is the walk. Fountain is optional grammar — recall must work with the pane closed.
 
+**Deferred:** similarity-inferred graph edges (real ~38× lift over chance, ~1% absolute precision) — not building; see the [wiki experiment](https://github.com/rubyrayjuntos/hermes-memory/wiki/Experiment-Similarity-Inferred-Edges).
+
 ## Quick Start
 
 This stack has moving parts (Docker, Ollama, a DB password, a Hermes plugin).
