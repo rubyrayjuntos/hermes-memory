@@ -16,6 +16,7 @@ import asyncio
 import os
 import sys
 from collections import defaultdict
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import asyncpg
@@ -24,7 +25,7 @@ import psycopg
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
 
-from hermes_memory.config import load_config  # noqa: E402
+from hermes_memory.config import dotenv_key_from_file, load_config  # noqa: E402
 from hermes_memory.embed import Embedder  # noqa: E402
 from hermes_memory.extract_nouns import extract_nouns  # noqa: E402
 from hermes_memory.graph_api import _load_dotenv_files, is_synthetic_session  # noqa: E402
@@ -92,7 +93,12 @@ def copy_conversations(live_dsn: str, test_dsn: str) -> int:
     return total
 
 
-async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int]:
+async def replay(
+    target_dsn: str,
+    *,
+    stamp_drain: bool = False,
+    turn_ids: list[int] | None = None,
+) -> dict[str, int]:
     cfg = load_config()
     embedder = Embedder(cfg.embed_url, cfg.embed_model, cfg.embed_dim)
     pool = await asyncpg.create_pool(target_dsn, min_size=1, max_size=4)
@@ -103,13 +109,32 @@ async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int
     label_vecs: dict[str, list[float]] = {}
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, session_id, content, embedding::text AS embedding
-              FROM conversations
-             ORDER BY session_id, id
-            """
-        )
+        if turn_ids is not None:
+            rows = await conn.fetch(
+                """
+                SELECT id, session_id, content, embedding::text AS embedding,
+                       (
+                         SELECT p.id FROM conversations p
+                          WHERE p.session_id = conversations.session_id
+                            AND p.id < conversations.id
+                          ORDER BY p.id DESC
+                          LIMIT 1
+                       ) AS prev_id
+                  FROM conversations
+                 WHERE id = ANY($1::bigint[])
+                 ORDER BY session_id, id
+                """,
+                turn_ids,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT id, session_id, content, embedding::text AS embedding,
+                       NULL::bigint AS prev_id
+                  FROM conversations
+                 ORDER BY session_id, id
+                """
+            )
 
     existing: list[str] = []
     try:
@@ -117,7 +142,7 @@ async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int
     except Exception:
         existing = []
 
-    pending: list[tuple[int, str, str, list[float], list]] = []
+    pending: list[tuple[int, str, str, list[float], list, int | None]] = []
     labels_needed: set[str] = set()
     for row in rows:
         stats["seen"] += 1
@@ -129,7 +154,7 @@ async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int
             continue
         if _is_noise(content):
             stats["noise"] += 1
-            pending.append((conv_id, session_id, content, [], []))
+            pending.append((conv_id, session_id, content, [], [], row["prev_id"]))
             continue
         vec = parse_embedding(row["embedding"])
         mentions = extract_nouns(
@@ -141,7 +166,7 @@ async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int
             if m.label not in existing:
                 existing.append(m.label)
             labels_needed.add(m.label)
-        pending.append((conv_id, session_id, content, vec, mentions))
+        pending.append((conv_id, session_id, content, vec, mentions, row["prev_id"]))
 
     missing_labels = sorted(lab for lab in labels_needed if lab not in label_vecs)
     batch = 64
@@ -165,20 +190,28 @@ async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int
         embedded = await embedder.embed_texts([c[2][:8000] for c in chunk])
         for (idx, _cid, _content), vec in zip(chunk, embedded):
             if vec:
-                conv_id, session_id, content, _old, mentions = pending[idx]
-                pending[idx] = (conv_id, session_id, content, vec, mentions)
+                conv_id, session_id, content, _old, mentions, pred = pending[idx]
+                pending[idx] = (conv_id, session_id, content, vec, mentions, pred)
                 stats["reembedded"] += 1
 
     prev: dict[str, int] = {}
-    for n, (conv_id, session_id, content, vec, mentions) in enumerate(pending, 1):
+    targeted = turn_ids is not None
+    for n, (conv_id, session_id, content, vec, mentions, sql_prev) in enumerate(
+        pending, 1
+    ):
+        if targeted:
+            pred = int(sql_prev) if sql_prev is not None else None
+        else:
+            pred = prev.get(session_id)
         try:
             vertex_id = await flower._link_turn_flower(
-                store, conv_id, session_id, content, prev.get(session_id),
+                store, conv_id, session_id, content, pred,
             )
         except Exception:
             vertex_id = None
             stats["flower_exc"] += 1
-        prev[session_id] = conv_id
+        if not targeted:
+            prev[session_id] = conv_id
         if vertex_id is None:
             stats["flower_fail"] += 1
         status = DRAIN_COMPLETE
@@ -262,6 +295,21 @@ async def replay(target_dsn: str, *, stamp_drain: bool = False) -> dict[str, int
     return dict(stats)
 
 
+LIVE_DBS = frozenset({"hermes_memory", "hermes_memory_installed"})
+
+
+def _parse_turn_ids(raw: str | None) -> list[int] | None:
+    """None means all rows. A present --turn-ids flag (even empty) is a list."""
+    if raw is None:
+        return None
+    out: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part:
+            out.append(int(part))
+    return out
+
+
 def _redact(msg: str, *secrets: str) -> str:
     out = msg
     for secret in secrets:
@@ -278,9 +326,26 @@ def main() -> int:
         help="C–F backfill hermes_memory in place (no copy, no hermes_test). "
              "Stamps drain_status. Skips verify/bench synthetics.",
     )
+    ap.add_argument(
+        "--turn-ids",
+        default=None,
+        help="Comma-separated conversation ids (with --live). Replays only those "
+             "rows. Empty list replays zero rows (does not mean all).",
+    )
+    ap.add_argument(
+        "--installed",
+        action="store_true",
+        help="With --live, use ~/.hermes/.env HYBRID_AGE_DSN (hermes_memory_installed).",
+    )
     args = ap.parse_args()
     _load_dotenv_files()
-    live = _resolve_dsn(os.environ.get("HYBRID_AGE_DSN", ""))
+    if args.installed:
+        live = _resolve_dsn(
+            dotenv_key_from_file(Path.home() / ".hermes" / ".env", "HYBRID_AGE_DSN")
+            or ""
+        )
+    else:
+        live = _resolve_dsn(os.environ.get("HYBRID_AGE_DSN", ""))
     if not live:
         print("missing DSN", file=sys.stderr)
         return 2
@@ -289,11 +354,18 @@ def main() -> int:
         if args.live:
             parsed = urlparse(live)
             db = (parsed.path or "/").rsplit("/", 1)[-1]
-            if db != "hermes_memory":
-                print("refusing --live (database is not hermes_memory)", file=sys.stderr)
+            if db not in LIVE_DBS:
+                print(
+                    "refusing --live (database is not hermes_memory "
+                    "or hermes_memory_installed)",
+                    file=sys.stderr,
+                )
                 return 2
             print("live_cf_backfill start", flush=True)
-            stats = asyncio.run(replay(live, stamp_drain=True))
+            ids = _parse_turn_ids(args.turn_ids)
+            stats = asyncio.run(
+                replay(live, stamp_drain=True, turn_ids=ids)
+            )
             print("live_cf_backfill", " ".join(f"{k}={v}" for k, v in sorted(stats.items())))
             return 0
         test = _test_dsn(live)

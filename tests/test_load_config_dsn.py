@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from hermes_memory.config import load_config, load_dotenv_files
+from hermes_memory.config import dotenv_key_from_file, load_config, load_dotenv_files
 
 
 def test_load_config_raises_when_dsn_unset(monkeypatch) -> None:
@@ -44,3 +44,17 @@ def test_load_dotenv_files_clone_wins_over_hermes_home(tmp_path, monkeypatch) ->
     import os
     assert "5450" in os.environ["HYBRID_AGE_DSN"]
     assert "hermes_memory_installed" not in os.environ["HYBRID_AGE_DSN"]
+
+
+def test_dotenv_key_from_file_export_and_whitespace(tmp_path) -> None:
+    path = tmp_path / ".env"
+    path.write_text(
+        "# comment\n"
+        "  export HYBRID_AGE_DSN=postgres://hermes:x@127.0.0.1:5452/hermes_memory_installed\n"
+        "OTHER=1\n",
+        encoding="utf-8",
+    )
+    val = dotenv_key_from_file(path, "HYBRID_AGE_DSN")
+    assert val is not None
+    assert val.endswith("/hermes_memory_installed")
+    assert dotenv_key_from_file(path, "MISSING") is None

@@ -59,6 +59,11 @@ PHRASE_STOPWORDS = frozenset({
     "appear", "appears", "appeared", "today", "tomorrow", "yesterday",
     "production", "release", "deployed", "remember", "uses", "use", "used",
     "storage", "layer", "turn", "user", "verify", "synthetic",
+    # Pronouns / auxiliaries / apostrophe-split leftovers (#79)
+    "i", "me", "my", "we", "you", "he", "she", "they", "am",
+    "don", "isn", "aren", "didn", "doesn", "wasn", "weren",
+    "won", "shouldn", "wouldn", "couldn", "hasn", "haven", "hadn",
+    "t", "s", "d", "re", "ve", "ll", "m",
 })
 
 TRAILING_GLUE = frozenset({
@@ -89,7 +94,36 @@ ACRONYM_RE = re.compile(r"\b[A-Z]{2,}\b")
 TITLE_MULTIWORD_RE = re.compile(
     r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b",
 )
-WORD_RE = re.compile(r"\b[\w.-]+\b")
+# Apostrophe kept so isn't/don't stay one token (not isn + t).
+WORD_RE = re.compile(r"\b[\w'.-]+\b")
+
+# Idempotent cleanup predicate (#79). Same shape as the pane heuristic.
+JUNK_FRAGMENT_TAIL_RE = re.compile(r"\s(t|s|d|re|ve|ll|m)$")
+JUNK_FRAGMENT_HEAD_RE = re.compile(r"^(t|s|d|re|ve|ll|m)\s")
+JUNK_FRAGMENT_AUX_RE = re.compile(
+    r"(?i)^(i|am|is|isn|don|didn|doesn|wasn|weren|aren|won|"
+    r"shouldn|wouldn|couldn|hasn|haven|hadn)\b"
+)
+
+
+def is_junk_fragment_label(label: str) -> bool:
+    """True for contraction leftovers and function-word-heavy lowercase phrases."""
+    s = (label or "").strip()
+    if not s:
+        return False
+    if _is_identifier_shape(s):
+        return False
+    low = s.lower()
+    # Lowercase-only: mixed-case names like "Model T" / "Vitamin D" stay.
+    if s == low and JUNK_FRAGMENT_TAIL_RE.search(low):
+        return True
+    # Leading contraction fragments are lowercase-only so git status
+    # labels like "M src/..." are not treated as junk.
+    if s == low and JUNK_FRAGMENT_HEAD_RE.search(low):
+        return True
+    if s == low and JUNK_FRAGMENT_AUX_RE.search(low):
+        return True
+    return False
 
 CONF_BACKTICK = 0.90
 CONF_ALIAS = 0.85
@@ -308,6 +342,8 @@ def extract_nouns(
             continue
         if _denylisted(surface):
             continue
+        if is_junk_fragment_label(surface):
+            continue
 
         words = surface.split()
         if len(words) == 1:
@@ -326,6 +362,8 @@ def extract_nouns(
 
         if not is_alias and kind == "multiword":
             label = _collapse_ws(surface)
+        if is_junk_fragment_label(label):
+            continue
 
         conf = _conf_for(kind, is_alias)
         if conf < CONF_FLOOR:

@@ -74,6 +74,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Checkout repository
+        if: ${{ steps.pr.outputs.number != '' }}
+        uses: actions/checkout@v4
+
       - name: Validate PR and checkout branch
         if: ${{ steps.pr.outputs.number != '' }}
         env:
