@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Hermes Librarian — Traversal Expansion (Option 3) Simulator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --lapis: #1A365D;
+      --lapis-light: #2B6CB0;
+      --turquoise: #238580;
+      --amber: #D69E2E;
+      --ruby: #E53E3E;
+      --magenta: #D53F8C;
+      --ghost: #E040B0;
+    }
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #0B1120;
+      color: #E2E8F0;
+    }
+    .cinzel { font-family: 'Cinzel', serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+    /* Pulse and highlight animations */
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 0.35; transform: scale(1); }
+      50% { opacity: 0.95; transform: scale(1.18); }
+    }
+    .glow-pulse { animation: pulseGlow 1.8s infinite ease-in-out; }
+    
+    @keyframes dashCycle {
+      to { stroke-dashoffset: -32; }
+    }
+    .anim-dash {
+      stroke-dasharray: 6, 6;
+      animation: dashCycle 1.2s linear infinite;
+    }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-slate-950 text-slate-100">
+
+  <header class="h-14 border-b border-slate-800/80 bg-slate-900/90 px-4 flex items-center justify-between z-30 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-teal-500 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-500/20">
+        <span class="cinzel text-sm">HL</span>
+      </div>
+      <div>
+        <h1 class="cinzel text-sm font-bold tracking-widest text-slate-100 flex items-center gap-2">
+          HERMES LIBRARIAN
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-pink-950/80 border border-pink-500/40 text-pink-400 font-sans tracking-normal font-semibold">
+            Traversal Expansion (Option 3)
+          </span>
+        </h1>
+        <p class="text-[11px] text-slate-400">Comparing Strict Co-occurrence Topology vs Virtual Semantic Leaps</p>
+      </div>
+    </div>
+
+    <!-- Mode Selector Tabs -->
+    <div class="flex items-center bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-xs">
+      <button id="tab-sim" onclick="switchView('sim')" class="px-3 py-1.5 rounded-lg font-medium transition-all duration-150 bg-indigo-600 text-white shadow-sm">
+        Interactive Simulator
+      </button>
+      <button id="tab-code" onclick="switchView('code')" class="px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200 transition-all duration-150">
+        DB Schema & Walker Code Guide
+      </button>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 text-xs mono bg-slate-950/60 px-2.5 py-1 rounded-lg border border-slate-800 text-slate-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="walker-status">READY: STANDBY</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1 flex overflow-hidden relative">
+    
+    <!-- VIEW 1: INTERACTIVE SIMULATION -->
+    <div id="view-sim" class="flex-1 flex overflow-hidden">
+      <!-- Left Graph & Topology Canvas Area -->
+      <div class="flex-1 flex flex-col relative bg-slate-950 overflow-hidden">
+        
+        <!-- Controls & Parameter Strip -->
+        <div class="p-3 bg-slate-900/60 border-b border-slate-800/80 backdrop-blur flex flex-wrap items-center justify-between gap-3 text-xs z-10 shrink-0">
+          <div class="flex items-center gap-2">
+            <label class="font-medium text-slate-300">Preset Scenario:</label>
+            <select id="query-scenario" onchange="handleScenarioChange()" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500 mono">
+              <option value="nightingale">Query: "Project Nightingale telemetry acoustics"</option>
+              <option value="atlas">Query: "Atlas gimbal stator failure"</option>
+              <option value="hybrid">Query: "Unified actuator sensor calibration"</option>
+            </select>
+          </div>
+
+          <!-- Traversal Engine Selector -->
+          <div class="flex items-center gap-2 bg-slate-950 px-3 py-1 rounded-lg border border-slate-800">
+            <span class="text-slate-400">Mode:</span>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name="traversal-mode" value="strict" onchange="setEngineMode('strict')" class="accent-indigo-500">
+              <span class="font-medium text-slate-300" title="Your current system: Graph walk strictly on recorded co-occurrence edges">Strict</span>
+            </label>
+            <span class="text-slate-600">|</span>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name="traversal-mode" value="expansion" onchange="setEngineMode('expansion')" class="accent-pink-500">
+              <span class="font-medium text-pink-400" title="Continuous Option 3: Vectors compete with co-occurrences on every hop">Unconstrained Expansion</span>
+            </label>
+            <span class="text-slate-600">|</span>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name="traversal-mode" value="gated" checked onchange="setEngineMode('gated')" class="accent-amber-500">
+              <span class="font-semibold text-amber-400 flex items-center gap-1" title="Recommended: Sparsity Fallback + Epistemic Notice. Dormant until structural walk hits dead end.">
+                Gated Fallback (Epistemic Notice)
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+              </span>
+            </label>
+          </div>
+
+          <!-- Step Stepper Action Bar -->
+          <div class="flex items-center gap-2">
+            <button id="btn-reset" onclick="resetSimulation()" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 mono text-xs transition">
+              Reset
+            </button>
+            <button id="btn-step" onclick="stepSimulation()" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold flex items-center gap-1.5 shadow-sm transition">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+              Next Step (<span id="step-counter">0/4</span>)
+            </button>
+            <button id="btn-auto" onclick="toggleAutoRun()" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition">
+              Auto Run
+            </button>
+          </div>
+        </div>
+
+        <!-- Graph Visualization Canvas (SVG + HTML Interactive Overlays) -->
+        <div class="flex-1 relative overflow-hidden flex items-center justify-center select-none" id="canvas-container">
+          <svg id="graph-svg" class="w-full h-full absolute inset-0 cursor-crosshair">
+            <defs>
+              <marker id="arrow-cooccur" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#2DD4BF" />
+              </marker>
+              <marker id="arrow-virtual" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#F43F5E" />
+              </marker>
+              <linearGradient id="grad-island-a" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#1e293b" stop-opacity="0.5"/>
+                <stop offset="100%" stop-color="#0f172a" stop-opacity="0.1"/>
+              </linearGradient>
+            </defs>
+
+            <!-- Background Island Regions -->
+            <g id="island-boundaries"></g>
+
+            <!-- Edge Layers -->
+            <g id="edges-cooccur"></g>
+            <g id="edges-virtual"></g>
+
+            <!-- Nodes Layer -->
+            <g id="nodes-layer"></g>
+
+            <!-- Active Beam Walker Head Marker -->
+            <g id="walker-cursor" style="display: none;">
+              <circle r="24" fill="none" stroke="#F43F5E" stroke-width="2" class="glow-pulse" />
+              <circle r="4" fill="#F43F5E" />
+            </g>
+          </svg>
+
+          <!-- Floating Legend & Annotations -->
+          <div class="absolute bottom-3 left-3 bg-slate-900/90 border border-slate-800 backdrop-blur p-3 rounded-xl shadow-xl text-xs space-y-2 pointer-events-auto max-w-xs">
+            <div class="font-semibold text-slate-300 cinzel tracking-wider text-[11px] border-b border-slate-800 pb-1 flex justify-between items-center">
+              <span>CANVAS LEGEND</span>
+              <span class="mono text-[10px] text-slate-500">TOPOLOGY</span>
+            </div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]">
+              <div class="flex items-center gap-2">
+                <span class="w-3 h-0.5 bg-teal-400"></span>
+                <span class="text-slate-300">Co-occurrence Edge</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-3 h-0.5 border-t border-dashed border-pink-500"></span>
+                <span class="text-pink-400 font-medium">Virtual k-NN Jump</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                <span class="text-slate-300">Seed Noun</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+                <span class="text-slate-400">Unreached Node</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-teal-400"></span>
+                <span class="text-teal-300">Structural Traversal</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-pink-500"></span>
+                <span class="text-pink-300">Cross-Island Jump</span>
+              </div>
+            </div>
+            <div class="pt-1.5 border-t border-slate-800/80 text-[10px] text-slate-400 italic">
+              Notice: Island A & Island B have <b>0 common turns</b>. Co-occurrence alone cannot bridge them.
+            </div>
+          </div>
+
+          <!-- Walk Progress Callout / Explanation overlay -->
+          <div id="step-callout" class="absolute top-4 left-4 bg-slate-900/95 border border-indigo-500/50 p-3.5 rounded-xl shadow-2xl max-w-md backdrop-blur transition-all duration-300 text-xs pointer-events-none">
+            <div class="flex items-center gap-2 font-semibold text-indigo-300 mb-1">
+              <span id="callout-badge" class="px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-500/40 text-[10px] mono">STEP 0</span>
+              <span id="callout-title" class="text-slate-100">Awaiting Query Initialization</span>
+            </div>
+            <p id="callout-desc" class="text-slate-300 leading-relaxed text-[11px]">
+              Click "Next Step" to begin query embedding search against turn chunks and extract initial graph seeds.
+            </p>
+          </div>
+        </div>
+
+        <div class="p-3 bg-slate-900/90 border-t border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs shrink-0">
+          <div class="flex items-center gap-6">
+            <!-- Vector Jump Threshold -->
+            <div class="flex items-center gap-2">
+              <label class="text-slate-400 font-medium" title="Minimum cosine similarity required to trigger a virtual edge leap">
+                Vector Jump Threshold (<span class="mono text-pink-400" id="val-sim-thr">0.78</span>):
+              </label>
+              <input id="slider-sim-thr" type="range" min="0.50" max="0.95" step="0.01" value="0.78" oninput="updateSliders()" class="w-24 accent-pink-500">
+            </div>
+
+            <!-- Virtual Edge Decay Penalty -->
+            <div class="flex items-center gap-2">
+              <label class="text-slate-400 font-medium" title="Penalty factor applied to beam score when leaping across virtual vector edges to prevent hallucinated drift">
+                Jump Penalty α (<span class="mono text-amber-400" id="val-penalty">0.82</span>):
+              </label>
+              <input id="slider-penalty" type="range" min="0.40" max="1.00" step="0.02" value="0.82" oninput="updateSliders()" class="w-24 accent-amber-500">
+            </div>
+
+            <!-- Max Hop Limit -->
+            <div class="flex items-center gap-2">
+              <label class="text-slate-400 font-medium">Max Hops:</label>
+              <span class="mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800 text-slate-300">2 Hops</span>
+            </div>
+          </div>
+
+          <div class="text-[11px] text-slate-400 mono">
+            Beam Score: <span class="text-teal-400 font-semibold">S = w × c × (α if virtual)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="w-96 border-l border-slate-800 bg-slate-900/90 flex flex-col h-full overflow-hidden shrink-0">
+        
+        <!-- Tabbed Inspector Headers -->
+        <div class="flex border-b border-slate-800 text-xs font-semibold cinzel">
+          <button id="inspect-tab-walk" onclick="switchInspectorTab('walk')" class="flex-1 py-3 px-2 border-b-2 border-indigo-500 text-indigo-300 bg-slate-800/40 text-center">
+            Traversal Telemetry
+          </button>
+          <button id="inspect-tab-provenance" onclick="switchInspectorTab('provenance')" class="flex-1 py-3 px-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 text-center">
+            Context & Audit
+          </button>
+        </div>
+
+        <!-- Traversal Telemetry Tab Body -->
+        <div id="inspector-walk" class="flex-1 p-3 overflow-y-auto space-y-4 text-xs">
+          
+          <!-- Beam State Overview Card -->
+          <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-2">
+            <div class="flex justify-between items-center text-slate-400 text-[11px] cinzel">
+              <span>BEAM QUEUE STATUS</span>
+              <span id="metric-phase" class="mono text-indigo-400 font-bold">INIT</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center pt-1">
+              <div class="bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                <div class="text-[10px] text-slate-400 uppercase tracking-wider">Nodes Hit</div>
+                <div id="stat-nodes-hit" class="text-base font-bold text-slate-100 mono">0</div>
+              </div>
+              <div class="bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                <div class="text-[10px] text-slate-400 uppercase tracking-wider">Co-occur</div>
+                <div id="stat-cooccur-edges" class="text-base font-bold text-teal-400 mono">0</div>
+              </div>
+              <div class="bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                <div class="text-[10px] text-slate-400 uppercase tracking-wider">Virtual Leaps</div>
+                <div id="stat-virtual-leaps" class="text-base font-bold text-pink-400 mono">0</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step Detail Card -->
+          <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-2">
+            <div class="text-slate-300 font-semibold cinzel text-[11px] flex items-center justify-between">
+              <span>CURRENT CANDIDATE SCORING</span>
+              <span id="scoring-tag" class="text-[10px] mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">WAITING</span>
+            </div>
+            
+            <div id="scoring-breakdown" class="space-y-2 text-[11px] mono text-slate-300">
+              <div class="text-slate-500 italic font-sans">No edge currently undergoing beam scoring. Click "Next Step" to advance walker.</div>
+            </div>
+          </div>
+
+          <!-- Walk Path Sequence Ledger -->
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between text-slate-400 text-[11px] cinzel">
+              <span>TRAVERSAL LEDGER</span>
+              <span class="mono text-[10px] text-slate-500">CHRONOLOGICAL</span>
+            </div>
+            <div id="traversal-ledger" class="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+              <div class="p-2 rounded-lg bg-slate-950/40 border border-slate-800 text-slate-500 text-[11px] italic">
+                Walk has not started.
+              </div>
+            </div>
+          </div>
+
+          <!-- Node Inspector Click Target -->
+          <div id="node-inspector-box" class="bg-slate-950/90 p-3 rounded-xl border border-slate-800 space-y-2">
+            <div class="text-slate-400 text-[11px] cinzel flex justify-between items-center">
+              <span>INSPECTED ENTITY</span>
+              <span id="inspect-entity-type" class="mono text-amber-400 text-[10px]">SELECT A NODE</span>
+            </div>
+            <div id="inspect-entity-content" class="text-[11px] text-slate-300 space-y-1">
+              <div class="text-slate-500 italic">Click on any node in the graph above to inspect its provenance, embeddings, and connections.</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Provenance & Context Preview Tab Body -->
+        <div id="inspector-provenance" class="flex-1 p-3 overflow-y-auto space-y-4 text-xs hidden">
+          <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-2">
+            <div class="text-slate-300 font-semibold cinzel text-[11px] flex items-center justify-between">
+              <span>FINAL RETRIEVED CONTEXT</span>
+              <span class="mono text-[10px] text-emerald-400">LLM INJECTION READY</span>
+            </div>
+            <p class="text-[11px] text-slate-400">
+              Notice how the <b class="text-amber-300">Gated Fallback</b> preserves epistemic purity by explicitly isolating inferred associative jumps from factual co-occurrences.
+            </p>
+            <div id="injection-preview" class="p-2.5 rounded-lg bg-slate-900 border border-slate-800 font-mono text-[10.5px] leading-relaxed text-indigo-200 whitespace-pre-wrap max-h-72 overflow-y-auto">
+[RETRIEVAL PENDING]
+Execute the walk to see how candidate context is framed for the generation prompt.
+            </div>
+          </div>
+
+          <!-- Audit Safety Guardrails Card -->
+          <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-2 text-[11px]">
+            <div class="font-semibold cinzel text-amber-400 text-[11px]">EPISTEMIC FALLBACK DISCIPLINE</div>
+            <ul class="space-y-1.5 text-slate-300 list-disc list-inside">
+              <li><b class="text-teal-300">Default Priority:</b> 100% factual co-occurrence graph walks as long as structural edges exceed sparsity threshold.</li>
+              <li><b class="text-amber-300">Gated Trigger Only:</b> Vector k-NN executes <i>only</i> when structural reach is empty or exhausted (`len(edges) == 0`).</li>
+              <li><b class="text-rose-300">Epistemic Notice:</b> Inferred connections never masquerade as turns; tagged with explicit uncertainty directives for the model.</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div id="view-code" class="flex-1 hidden overflow-y-auto bg-slate-950 p-8">
+      <div class="max-w-4xl mx-auto space-y-8 text-slate-200">
+        
+        <div>
+          <div class="inline-block px-2.5 py-0.5 rounded-full bg-pink-950 border border-pink-500/40 text-pink-400 font-mono text-xs font-semibold mb-2">
+            ARCHITECTURAL SPECIFICATION
+          </div>
+          <h2 class="cinzel text-2xl font-bold text-slate-100 mb-2">
+            Enabling Traversal Expansion (Option 3) in Hermes DB
+          </h2>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            In your existing system, vectors act only as <b>entry-point routers</b> (retrieving initial turns) and <b>edge trust scorers</b> (the query vs stored edge vector alignment). 
+            To enable Option 3, vectors become <b>traversal bridges</b>: when your graph walk hits an isolated cluster, the walker queries vector space dynamically to jump the gap.
+          </p>
+        </div>
+
+        <!-- 3 Pillars Breakdown -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div class="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+            <div class="text-teal-400 font-bold mono text-sm">1. Schema Prerequisite</div>
+            <div class="font-semibold text-slate-200">Individual Noun Embeddings</div>
+            <p class="text-slate-400 leading-relaxed">
+              Currently, whole-turn embeddings and edge vectors exist. Traversal expansion requires an indexed vector column on the <code class="text-indigo-300">nouns</code> table itself with an HNSW cosine index.
+            </p>
+          </div>
+
+          <div class="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+            <div class="text-amber-400 font-bold mono text-sm">2. Walker Modification</div>
+            <div class="font-semibold text-slate-200">Hybrid Expansion Step</div>
+            <p class="text-slate-400 leading-relaxed">
+              When <code class="text-indigo-300">get_neighbors(node)</code> returns no strong co-occurrence paths or remaining budget permits, issue a scoped k-NN query over <code class="text-indigo-300">nouns.embedding</code>.
+            </p>
+          </div>
+
+          <div class="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+            <div class="text-pink-400 font-bold mono text-sm">3. Provenance & Scoring</div>
+            <div class="font-semibold text-slate-200">Jump Penalty & Virtual Flag</div>
+            <p class="text-slate-400 leading-relaxed">
+              Tag dynamic edges with <code class="text-indigo-300">virtual=true</code>, apply a jump penalty factor (e.g. 0.85×) to <code class="text-indigo-300">beam_score</code>, and limit jumps to 1 per path.
+            </p>
+          </div>
+        </div>
+
+        <!-- Code Block 1: SQL Schema -->
+        <div class="space-y-2">
+          <div class="flex justify-between items-center text-xs">
+            <span class="font-semibold text-slate-300 mono">1. Database Migration: Noun Index for Fast Traversal Jumps</span>
+            <span class="text-slate-500 mono text-[11px]">PostgreSQL + pgvector</span>
+          </div>
+          <pre class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl text-xs mono text-teal-300 overflow-x-auto leading-relaxed">
+<span class="text-slate-500">-- Ensure the noun entity table has a dedicated vector embedding</span>
+ALTER TABLE semantic_noun 
+ADD COLUMN IF NOT EXISTS embedding vector(768);
+
+<span class="text-slate-500">-- Populate embeddings for extracted nouns during write/sync (or via batch background job)</span>
+<span class="text-slate-500">-- Create HNSW index for ultra-low-latency query-time k-NN traversal jumps</span>
+CREATE INDEX IF NOT EXISTS idx_semantic_noun_embedding_hnsw 
+ON semantic_noun 
+USING hnsw (embedding vector_cosine_ops) 
+WITH (m = 16, ef_construction = 64);
+          </pre>
+        </div>
+
+        <!-- Code Block 2: Python Walker modification -->
+        <div class="space-y-2">
+          <div class="flex justify-between items-center text-xs">
+            <span class="font-semibold text-slate-300 mono">2. Backend Walker: Sparsity-Gated Fallback Engine</span>
+            <span class="text-slate-500 mono text-[11px]">Python / Hermes Retriever Engine</span>
+          </div>
+          <pre class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl text-xs mono text-indigo-300 overflow-x-auto leading-relaxed">
+<span class="text-pink-400">def</span> <span class="text-yellow-300">traverse_with_sparsity_fallback</span>(current_node, query_vec, visited, min_structural_degree=1):
+    candidates = []
+    
+    <span class="text-slate-500"># STEP 1: Always execute verified structural co-occurrence walk first</span>
+    cooccur_edges = db.query(
+        <span class="text-emerald-300">"""
+        SELECT target_noun, magnitude, provenance, e_src_vec, e_tgt_vec 
+        FROM semantic_edge 
+        WHERE source_noun = :src
+        """</span>, 
+        src=current_node.id
+    )
+    valid_structural = [e <span class="text-pink-400">for</span> e <span class="text-pink-400">in</span> cooccur_edges <span class="text-pink-400">if</span> e.target_noun <span class="text-pink-400">not in</span> visited]
+    
+    <span class="text-pink-400">for</span> e <span class="text-pink-400">in</span> valid_structural:
+        c = cosine_similarity(query_vec, e.e_src_vec) * cosine_similarity(query_vec, e.e_tgt_vec)
+        score = (e.magnitude / 8.0) * c
+        candidates.append(Candidate(node=e.target_noun, score=score, is_virtual=<span class="text-amber-400">False</span>, provenance=e.provenance))
+
+    <span class="text-slate-500"># STEP 2: SPARSITY GATE — ONLY fire vector search if the graph path is exhausted or empty</span>
+    <span class="text-pink-400">if</span> len(candidates) < min_structural_degree <span class="text-pink-400">and</span> <span class="text-pink-400">not</span> current_node.has_taken_fallback:
+        <span class="text-slate-500"># Issue scoped k-NN query over semantic_noun embeddings as a fallback bridge</span>
+        knn_nouns = db.query(
+            <span class="text-emerald-300">"""
+            SELECT id, 1 - (embedding <=> :node_vec) AS sim
+            FROM semantic_noun
+            WHERE id != :src AND id NOT IN :visited
+              AND 1 - (embedding <=> :node_vec) >= 0.78
+            ORDER BY embedding <=> :node_vec ASC
+            LIMIT 2
+            """</span>,
+            node_vec=current_node.embedding,
+            src=current_node.id,
+            visited=tuple(visited)
+        )
+        <span class="text-pink-400">for</span> neighbor <span class="text-pink-400">in</span> knn_nouns:
+            candidates.append(Candidate(
+                node=neighbor.id,
+                score=neighbor.sim * 0.70, <span class="text-slate-500"># Lower priority than verified facts</span>
+                is_virtual=<span class="text-pink-400">True</span>,
+                epistemic_notice=<span class="text-amber-300">"UNCONFIRMED_SIMILARITY_FALLBACK"</span>
+            ))
+
+    <span class="text-pink-400">return</span> candidates
+          </pre>
+        </div>
+
+        <!-- Code Block 3: Prompt Injection Formatter -->
+        <div class="space-y-2">
+          <div class="flex justify-between items-center text-xs">
+            <span class="font-semibold text-slate-300 mono">3. Prompt Formatter: The Epistemic Notice Pattern</span>
+            <span class="text-slate-500 mono text-[11px]">Prompt Constructor</span>
+          </div>
+          <pre class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl text-xs mono text-amber-300 overflow-x-auto leading-relaxed">
+<span class="text-pink-400">def</span> <span class="text-yellow-300">format_hermes_context</span>(traversed_nodes, fallback_bridges):
+    output = [<span class="text-emerald-300">"## HERMES RETRIEVED MEMORY GRAPH"</span>]
+    
+    <span class="text-slate-500"># Section 1: Ground Truth Co-occurrences</span>
+    output.append(<span class="text-emerald-300">"### VERIFIED CONVERSATION CO-OCCURRENCES"</span>)
+    <span class="text-pink-400">for</span> n <span class="text-pink-400">in</span> [x <span class="text-pink-400">for</span> x <span class="text-pink-400">in</span> traversed_nodes <span class="text-pink-400">if not</span> x.is_virtual]:
+        output.append(<span class="text-emerald-300">f"- [Turn #{n.turn_id}] {n.src} mentions {n.tgt} (magnitude {n.magnitude:.1f})"</span>)
+        
+    <span class="text-slate-500"># Section 2: Epistemic Notice Banner (Only present if sparsity fallback fired)</span>
+    <span class="text-pink-400">if</span> fallback_bridges:
+        output.append(<span class="text-emerald-300">"\n### [EPISTEMIC NOTICE: ASSOCIATIVE SIMILARITY LEAP]"</span>)
+        output.append(
+            <span class="text-emerald-300">"Notice: The following connection was formed via vector embedding proximity due to sparse graph data. "</span>
+            <span class="text-emerald-300">"No conversation in the database mentions these entities together. Treat this thematic bridge with epistemic reserve:"</span>
+        )
+        <span class="text-pink-400">for</span> b <span class="text-pink-400">in</span> fallback_bridges:
+            output.append(<span class="text-emerald-300">f"- [UNCONFIRMED SIMILARITY] {b.src} ~~~> {b.tgt} (Cosine similarity {b.sim:.2f})"</span>)
+            
+    <span class="text-pink-400">return</span> <span class="text-emerald-300">"\n"</span>.join(output)
+          </pre>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // --- Graph Topology Datasets ---
+    // Island A: Acoustics & Sensor Telemetry (Turns 1001-1004)
+    // Island B: Guidance, Actuators & Mechanical (Turns 2040-2042)
+    // Between Island A and Island B: 0 co-occurrence edges!
+    const NODES = [
+      // Island A Nodes
+      { id: 'nightingale', name: 'Project Nightingale', island: 'A', x: 260, y: 170, degree: 4, type: 'seed_candidate', desc: 'Acoustic telemetry project investigating low-frequency valve resonance.' },
+      { id: 'solenoid', name: 'Mira Solenoid', island: 'A', x: 400, y: 140, degree: 3, type: 'noun', desc: 'High-speed pulsed electromagnetic valve solenoid used in telemetry test.' },
+      { id: 'kilnbrook', name: 'Kilnbrook Valve', island: 'A', x: 440, y: 260, degree: 2, type: 'noun', desc: 'Cryogenic fluid valve manifold tested in Nightingale run 04.' },
+      { id: 'sensor_c5', name: 'Acoustic Sensor C5', island: 'A', x: 280, y: 310, degree: 2, type: 'noun', desc: 'Piezoelectric transducer mounted adjacent to solenoid coil.' },
+
+      // Island B Nodes
+      { id: 'atlas', name: 'Project Atlas', island: 'B', x: 740, y: 360, degree: 4, type: 'seed_candidate', desc: 'Precision flight gimbal control system for launch vehicle upper stage.' },
+      { id: 'gimbal', name: 'Gimbal Avionics', island: 'B', x: 620, y: 440, degree: 3, type: 'noun', desc: 'Closed-loop DSP controller steering the gimbal actuator coils.' },
+      { id: 'stator', name: 'Stator Ring', island: 'B', x: 860, y: 460, degree: 2, type: 'noun', desc: 'Electromagnetic stator assembly susceptible to thermal harmonic drift.' },
+      { id: 'actuator', name: 'Titan Actuator', island: 'B', x: 780, y: 230, degree: 3, type: 'noun', desc: 'Brushless torque actuator driving rotational gimbal orientation.' }
+    ];
+
+    // Verified Co-occurrence Edges (Derived strictly at write time from same turn co-mentions)
+    const COOCCUR_EDGES = [
+      // Island A co-occurrences (Turn 1001 & 1002)
+      { id: 'e1', source: 'nightingale', target: 'solenoid', weight: 5.2, turn: 1001, rel: 'mentions' },
+      { id: 'e2', source: 'solenoid', target: 'kilnbrook', weight: 4.6, turn: 1001, rel: 'mentions' },
+      { id: 'e3', source: 'nightingale', target: 'sensor_c5', weight: 3.8, turn: 1002, rel: 'mentions' },
+      { id: 'e4', source: 'solenoid', target: 'sensor_c5', weight: 2.9, turn: 1002, rel: 'mentions' },
+
+      // Island B co-occurrences (Turn 2040 & 2041)
+      { id: 'e5', source: 'atlas', target: 'gimbal', weight: 6.1, turn: 2040, rel: 'mentions' },
+      { id: 'e6', source: 'atlas', target: 'stator', weight: 4.9, turn: 2041, rel: 'mentions' },
+      { id: 'e7', source: 'atlas', target: 'actuator', weight: 5.4, turn: 2040, rel: 'mentions' },
+      { id: 'e8', source: 'gimbal', target: 'stator', weight: 3.2, turn: 2041, rel: 'mentions' }
+    ];
+
+    // Virtual Semantic Proximity (Cosine similarity between node vectors)
+    // Note: Atlas <-> Nightingale have 0.84 cosine similarity, and Titan Actuator <-> Mira Solenoid have 0.81 cosine similarity!
+    const VIRTUAL_NEIGHBORS = [
+      { source: 'solenoid', target: 'actuator', cosine: 0.81, label: 'electromagnetic coil actuators' },
+      { source: 'nightingale', target: 'atlas', cosine: 0.84, label: 'spacecraft telemetry projects' },
+      { id: 'v3', source: 'kilnbrook', target: 'stator', cosine: 0.72, label: 'mechanical assemblies' }
+    ];
+
+    // Simulation Execution State
+    let state = {
+      mode: 'gated', // 'strict' | 'expansion' | 'gated'
+      scenario: 'nightingale',
+      currentStep: 0,
+      maxSteps: 4,
+      autoRunInterval: null,
+      selectedNode: null,
+      threshold: 0.78,
+      jumpPenalty: 0.82,
+      activeSeeds: [],
+      visitedNodes: new Set(),
+      activeEdges: [],
+      virtualJumpEdges: [],
+      stepLog: [],
+      candidateScoring: null
+    };
+
+    // Scenarios Setup
+    const SCENARIOS = {
+      nightingale: {
+        query: 'Project Nightingale telemetry acoustics',
+        seeds: ['nightingale'],
+        steps: [
+          {
+            step: 1,
+            badge: 'STEP 1: ANN SEEDING',
+            title: 'Query ANN Entry Point Selection',
+            desc: 'The query is embedded. ANN over turn chunks identifies Turn 1001 as the top hit (similarity 0.91). Seed noun "Project Nightingale" is extracted and placed in the beam queue.',
+            expandNodes: ['nightingale'],
+            edgesToAdd: [],
+            virtualToAdd: [],
+            scoring: {
+              target: 'Project Nightingale (Seed)',
+              type: 'Vector ANN Seed Entry',
+              calc: 'cos(query, turn_1001) = 0.91',
+              finalScore: 0.91
+            }
+          },
+          {
+            step: 2,
+            badge: 'STEP 2: CO-OCCURRENCE WALK',
+            title: 'Hop 1 Structural Expansion (Turn 1001/1002)',
+            desc: 'Walker traverses verified write-time edges from Nightingale to Mira Solenoid (w=5.2) and Sensor C5 (w=3.8). Both reside safely within Island A.',
+            expandNodes: ['solenoid', 'sensor_c5'],
+            edgesToAdd: ['e1', 'e3'],
+            virtualToAdd: [],
+            scoring: {
+              target: 'Mira Solenoid (via e1)',
+              type: 'Structural Co-occurrence',
+              calc: '(magnitude 5.2 / 8) × align 0.88 = 0.57',
+              finalScore: 0.57
+            }
+          },
+          {
+            step: 3,
+            badge: 'STEP 3: TRAVERSAL DECISION',
+            title: 'Option 3 Check: Bridge to Island B?',
+            desc_strict: '[STRICT MODE]: Path dead-ends at Island A. Solenoid has no further high-weight edges. Graph traversal stops.',
+            desc_expansion: '[OPTION 3 EXPANSION]: Walker queries noun embeddings for Solenoid. Finds "Titan Actuator" in vector space (sim = 0.81 >= 0.78 thr). A virtual semantic bridge is leaped!',
+            expandNodes: ['actuator'],
+            edgesToAdd: ['e2'], // Solenoid -> Kilnbrook
+            virtualToAdd: [{ source: 'solenoid', target: 'actuator', cosine: 0.81 }],
+            scoring_strict: {
+              target: 'Kilnbrook Valve (Structural)',
+              type: 'Structural Co-occurrence',
+              calc: '(magnitude 4.6 / 8) × align 0.74 = 0.42',
+              finalScore: 0.42
+            },
+            scoring_expansion: {
+              target: 'Titan Actuator (Virtual Leap)',
+              type: 'Option 3 Vector Bridge',
+              calc: 'sim 0.81 × align 0.84 × penalty 0.82 = 0.56',
+              finalScore: 0.56
+            }
+          },
+          {
+            step: 4,
+            badge: 'STEP 4: DOWNSTREAM EXPANSION',
+            title: 'Resuming Structural Walk in New Island',
+            desc_strict: 'Completed. Context limited to Island A (Nightingale, Solenoid, Kilnbrook). Any related work on Project Atlas remained completely invisible.',
+            desc_expansion: 'From Titan Actuator, the walker resumes normal structural traversal inside Island B, discovering Project Atlas and Gimbal Avionics without ever hallucinating historical co-presence!',
+            expandNodes: ['atlas', 'gimbal'],
+            edgesToAdd: ['e7'],
+            virtualToAdd: [],
+            scoring: {
+              target: 'Project Atlas (via Titan Actuator)',
+              type: 'Downstream Structural Edge',
+              calc: '(magnitude 5.4 / 8) × align 0.85 = 0.57',
+              finalScore: 0.57
+            }
+          }
+        ]
+      },
+      atlas: {
+        query: 'Atlas gimbal stator failure',
+        seeds: ['atlas'],
+        steps: [
+          {
+            step: 1,
+            badge: 'STEP 1: ANN SEEDING',
+            title: 'Query ANN Entry Point Selection',
+            desc: 'ANN retrieves Turn 2040. "Project Atlas" is extracted as initial seed node.',
+            expandNodes: ['atlas'],
+            edgesToAdd: [],
+            virtualToAdd: [],
+            scoring: { target: 'Project Atlas', type: 'ANN Seed', calc: 'cos(query, turn_2040) = 0.89', finalScore: 0.89 }
+          },
+          {
+            step: 2,
+            badge: 'STEP 2: CO-OCCURRENCE WALK',
+            title: 'Hop 1 Structural Expansion (Island B)',
+            desc: 'Walker visits Gimbal Avionics and Stator Ring via recorded mention edges.',
+            expandNodes: ['gimbal', 'stator'],
+            edgesToAdd: ['e5', 'e6'],
+            virtualToAdd: [],
+            scoring: { target: 'Gimbal Avionics', type: 'Structural', calc: '(6.1 / 8) × 0.86 = 0.65', finalScore: 0.65 }
+          },
+          {
+            step: 3,
+            badge: 'STEP 3: TRAVERSAL EXPANSION',
+            title: 'Vector Leap Across Projects',
+            desc_strict: '[STRICT MODE]: Traversal halts inside Island B.',
+            desc_expansion: '[OPTION 3 EXPANSION]: Vector proximity between Atlas and Project Nightingale (0.84 sim) creates a cross-project thematic bridge.',
+            expandNodes: ['nightingale'],
+            edgesToAdd: ['e8'],
+            virtualToAdd: [{ source: 'atlas', target: 'nightingale', cosine: 0.84 }],
+            scoring_strict: { target: 'Titan Actuator', type: 'Structural', calc: '(5.4 / 8) × 0.60 = 0.40', finalScore: 0.40 },
+            scoring_expansion: { target: 'Project Nightingale (Virtual)', type: 'Option 3 Vector Bridge', calc: '0.84 × 0.82 (penalty) = 0.69', finalScore: 0.69 }
+          },
+          {
+            step: 4,
+            badge: 'STEP 4: FINAL CONTEXT ASSEMBLY',
+            title: 'Dual-Cluster Synthesis',
+            desc_strict: 'Only Island B retrieved.',
+            desc_expansion: 'Walker connects the telemetry findings of Nightingale to the mechanical stator issues in Atlas.',
+            expandNodes: ['solenoid'],
+            edgesToAdd: ['e1'],
+            virtualToAdd: [],
+            scoring: { target: 'Mira Solenoid', type: 'Structural', calc: '(5.2 / 8) × 0.80 = 0.52', finalScore: 0.52 }
+          }
+        ]
+      },
+      hybrid: {
+        query: 'Unified actuator sensor calibration',
+        seeds: ['solenoid'],
+        steps: [
+          {
+            step: 1,
+            badge: 'STEP 1: ANN SEEDING',
+            title: 'Entry at Mira Solenoid',
+            desc: 'Query focuses directly on electromagnetic solenoid actuator components.',
+            expandNodes: ['solenoid'],
+            edgesToAdd: [],
+            virtualToAdd: [],
+            scoring: { target: 'Mira Solenoid', type: 'ANN Seed', calc: 'cos(query, turn_1001) = 0.87', finalScore: 0.87 }
+          },
+          {
+            step: 2,
+            badge: 'STEP 2: CO-OCCURRENCE WALK',
+            title: 'Exploring Local Sensors',
+            desc: 'Co-occurrence discovers Acoustic Sensor C5 and Nightingale within Turn 1002.',
+            expandNodes: ['sensor_c5', 'nightingale'],
+            edgesToAdd: ['e1', 'e4'],
+            virtualToAdd: [],
+            scoring: { target: 'Sensor C5', type: 'Structural', calc: '(2.9 / 8) × 0.89 = 0.32', finalScore: 0.32 }
+          },
+          {
+            step: 3,
+            badge: 'STEP 3: CROSS-DOMAIN BRIDGE',
+            title: 'Solenoid to Titan Actuator Vector Jump',
+            desc_strict: 'Remains pinned to acoustic telemetry island.',
+            desc_expansion: 'High semantic alignment between electromagnetic actuators triggers virtual bridge.',
+            expandNodes: ['actuator'],
+            edgesToAdd: [],
+            virtualToAdd: [{ source: 'solenoid', target: 'actuator', cosine: 0.81 }],
+            scoring_strict: { target: 'Kilnbrook', type: 'Structural', calc: '(4.6 / 8) × 0.62 = 0.35', finalScore: 0.35 },
+            scoring_expansion: { target: 'Titan Actuator', type: 'Option 3 Vector Bridge', calc: '0.81 × 0.82 (penalty) = 0.66', finalScore: 0.66 }
+          },
+          {
+            step: 4,
+            badge: 'STEP 4: COMPLETE CONVERGENCE',
+            title: 'Unified Cross-Cluster Graph',
+            desc_strict: 'Island B ignored.',
+            desc_expansion: 'Both flight control actuators and telemetry solenoids united for synthesis.',
+            expandNodes: ['gimbal'],
+            edgesToAdd: ['e7'],
+            virtualToAdd: [],
+            scoring: { target: 'Gimbal Avionics', type: 'Structural', calc: '(6.1 / 8) × 0.82 = 0.62', finalScore: 0.62 }
+          }
+        ]
+      }
+    };
+
+    function renderBaseGraph() {
+      const svg = document.getElementById('graph-svg');
+      const islandG = document.getElementById('island-boundaries');
+      const cooccurG = document.getElementById('edges-cooccur');
+      const virtualG = document.getElementById('edges-virtual');
+      const nodesG = document.getElementById('nodes-layer');
+
+      // Clear existing
+      islandG.innerHTML = '';
+      cooccurG.innerHTML = '';
+      virtualG.innerHTML = '';
+      nodesG.innerHTML = '';
+
+      // 1. Draw Island Boundaries
+      islandG.innerHTML = `
+        <!-- Island A Boundary -->
+        <rect x="180" y="70" width="360" height="310" rx="24" fill="url(#grad-island-a)" stroke="#1e293b" stroke-width="1.5" stroke-dasharray="4,4"/>
+        <text x="200" y="105" fill="#475569" font-size="12" font-weight="700" class="cinzel tracking-widest">ISLAND A: ACOUSTICS & SENSORS</text>
+        <text x="200" y="122" fill="#334155" font-size="10" class="mono">Historical Turns 1001-1004</text>
+
+        <!-- Island B Boundary -->
+        <rect x="560" y="160" width="370" height="370" rx="24" fill="url(#grad-island-a)" stroke="#1e293b" stroke-width="1.5" stroke-dasharray="4,4"/>
+        <text x="580" y="195" fill="#475569" font-size="12" font-weight="700" class="cinzel tracking-widest">ISLAND B: GUIDANCE & AVIONICS</text>
+        <text x="580" y="212" fill="#334155" font-size="10" class="mono">Historical Turns 2040-2042</text>
+      `;
+
+      // 2. Draw Co-occurrence Edges
+      COOCCUR_EDGES.forEach(e => {
+        const src = NODES.find(n => n.id === e.source);
+        const tgt = NODES.find(n => n.id === e.target);
+        if (!src || !tgt) return;
+
+        const isVisited = state.activeEdges.includes(e.id);
+        const strokeColor = isVisited ? '#2DD4BF' : '#1e293b';
+        const strokeWidth = isVisited ? 2.5 : 1.5;
+        const opacity = isVisited ? 1.0 : 0.35;
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.innerHTML = `
+          <line id="line-${e.id}" x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" 
+                stroke="${strokeColor}" stroke-width="${strokeWidth}" opacity="${opacity}" 
+                marker-end="${isVisited ? 'url(#arrow-cooccur)' : ''}" />
+          ${isVisited ? `
+            <circle cx="${(src.x+tgt.x)/2}" cy="${(src.y+tgt.y)/2}" r="11" fill="#0f172a" stroke="#2DD4BF" stroke-width="1.5"/>
+            <text x="${(src.x+tgt.x)/2}" y="${(src.y+tgt.y)/2 + 3.5}" fill="#5EEAD4" font-size="9" text-anchor="middle" class="mono font-bold">${e.weight}</text>
+          ` : ''}
+        `;
+        cooccurG.appendChild(g);
+      });
+
+      // 3. Draw Virtual Bridges (if active)
+      state.virtualJumpEdges.forEach((v, idx) => {
+        const src = NODES.find(n => n.id === v.source);
+        const tgt = NODES.find(n => n.id === v.target);
+        if (!src || !tgt) return;
+
+        // Quadratic curve bridging between islands
+        const mx = (src.x + tgt.x) / 2;
+        const my = (src.y + tgt.y) / 2 - 50; // arched trajectory
+
+        const pathD = `M ${src.x} ${src.y} Q ${mx} ${my} ${tgt.x} ${tgt.y}`;
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.innerHTML = `
+          <path d="${pathD}" fill="none" stroke="#F43F5E" stroke-width="2.5" class="anim-dash" opacity="0.9" />
+          <!-- Virtual Leap Badge -->
+          <rect x="${mx - 55}" y="${my - 14}" width="110" height="22" rx="6" fill="#881337" stroke="#F43F5E" stroke-width="1.2"/>
+          <text x="${mx}" y="${my + 1}" fill="#FFE4E6" font-size="10" font-weight="bold" text-anchor="middle" class="mono">
+            VIRTUAL kNN ${v.cosine}
+          </text>
+        `;
+        virtualG.appendChild(g);
+      });
+
+      // 4. Draw Nodes
+      NODES.forEach(n => {
+        const isVisited = state.visitedNodes.has(n.id);
+        const isSeed = state.activeSeeds.includes(n.id);
+        const isSelected = state.selectedNode === n.id;
+
+        let fillColor = '#1e293b';
+        let strokeColor = '#334155';
+        let strokeWidth = 2;
+        let radius = 14;
+
+        if (isSeed) {
+          fillColor = '#D97706';
+          strokeColor = '#FDE68A';
+          radius = 18;
+        } else if (isVisited) {
+          fillColor = n.island === 'A' ? '#0F766E' : '#9D174D';
+          strokeColor = n.island === 'A' ? '#2DD4BF' : '#F43F5E';
+          radius = 16;
+        }
+
+        if (isSelected) {
+          strokeColor = '#38BDF8';
+          strokeWidth = 3.5;
+        }
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('class', 'cursor-pointer transition-transform duration-200');
+        g.setAttribute('onclick', `selectNode('${n.id}')`);
+        g.innerHTML = `
+          ${isVisited ? `<circle cx="${n.x}" cy="${n.y}" r="${radius + 7}" fill="none" stroke="${strokeColor}" stroke-width="1" opacity="0.4" class="glow-pulse"/>` : ''}
+          <circle cx="${n.x}" cy="${n.y}" r="${radius}" fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}"/>
+          <text x="${n.x}" y="${n.y + radius + 14}" fill="${isVisited ? '#F8FAFC' : '#64748B'}" font-size="11" font-weight="${isVisited ? '600' : '400'}" text-anchor="middle" class="tracking-tight">
+            ${n.name}
+          </text>
+          <text x="${n.x}" y="${n.y + 4}" fill="#ffffff" font-size="9" text-anchor="middle" class="mono font-bold pointer-events-none">
+            ${n.degree}
+          </text>
+        `;
+        nodesG.appendChild(g);
+      });
+
+      // Position active walker cursor
+      const cursor = document.getElementById('walker-cursor');
+      if (state.visitedNodes.size > 0) {
+        const lastNodeId = Array.from(state.visitedNodes).pop();
+        const lastNode = NODES.find(n => n.id === lastNodeId);
+        if (lastNode && cursor) {
+          cursor.style.display = 'block';
+          cursor.setAttribute('transform', `translate(${lastNode.x}, ${lastNode.y})`);
+        }
+      } else if (cursor) {
+        cursor.style.display = 'none';
+      }
+    }
+
+    function stepSimulation() {
+      if (state.currentStep >= state.maxSteps) return;
+      state.currentStep++;
+
+      const scenario = SCENARIOS[state.scenario];
+      const stepDef = scenario.steps[state.currentStep - 1];
+
+      // Add nodes
+      if (stepDef.expandNodes) {
+        stepDef.expandNodes.forEach(nid => {
+          state.visitedNodes.add(nid);
+          if (state.currentStep === 1) state.activeSeeds.push(nid);
+        });
+      }
+
+      // Add structural edges
+      if (stepDef.edgesToAdd) {
+        stepDef.edgesToAdd.forEach(eid => {
+          if (!state.activeEdges.includes(eid)) state.activeEdges.push(eid);
+        });
+      }
+
+      // Add virtual edges (only if allowed by mode and conditions)
+      if (stepDef.virtualToAdd) {
+        stepDef.virtualToAdd.forEach(v => {
+          if (v.cosine >= state.threshold) {
+            if (state.mode === 'expansion') {
+              state.virtualJumpEdges.push(v);
+            } else if (state.mode === 'gated' && state.currentStep === 3) {
+              // In Gated mode, it only fires when Island A is verified to be dead-ended
+              state.virtualJumpEdges.push(v);
+            }
+          }
+        });
+      }
+
+      // Candidate scoring info
+      let scoringData = stepDef.scoring;
+      if (state.mode === 'strict' && stepDef.scoring_strict) {
+        scoringData = stepDef.scoring_strict;
+      } else if (state.mode === 'expansion' && stepDef.scoring_expansion) {
+        scoringData = stepDef.scoring_expansion;
+      } else if (state.mode === 'gated') {
+        if (state.currentStep === 3) {
+          scoringData = {
+            target: 'Titan Actuator (Epistemic Fallback)',
+            type: 'Sparsity Fallback Leap',
+            calc: 'sim 0.81 (Triggered: Island A exhausted) · Flagged Unconfirmed',
+            finalScore: 0.52
+          };
+        } else {
+          scoringData = stepDef.scoring_strict || stepDef.scoring;
+        }
+      }
+      state.candidateScoring = scoringData;
+
+      // Log entry description selection
+      let logText = stepDef.desc;
+      if (state.mode === 'strict') {
+        logText = stepDef.desc_strict || stepDef.desc;
+      } else if (state.mode === 'expansion') {
+        logText = stepDef.desc_expansion || stepDef.desc;
+      } else if (state.mode === 'gated') {
+        if (state.currentStep === 2) {
+          logText = '[GATED FALLBACK]: Structural edges active (Solenoid, Sensor C5). Fallback remains DORMANT (0 vector compute overhead).';
+        } else if (state.currentStep === 3) {
+          logText = '[SPARSITY TRIGGER]: Local co-occurrences exhausted. Sparsity gate fires: single scoped k-NN jump to Titan Actuator with Epistemic Notice attached.';
+        } else if (state.currentStep === 4) {
+          logText = '[RESUMED STRUCTURAL]: In Island B, the walker resumes verified graph edges (Atlas, Gimbal) while preserving the epistemic disclaimer.';
+        }
+      }
+
+      state.stepLog.push({
+        step: state.currentStep,
+        title: stepDef.title,
+        desc: logText,
+        score: scoringData.finalScore
+      });
+
+      updateUI();
+      renderBaseGraph();
+    }
+
+    function resetSimulation() {
+      if (state.autoRunInterval) {
+        clearInterval(state.autoRunInterval);
+        state.autoRunInterval = null;
+        document.getElementById('btn-auto').textContent = 'Auto Run';
+        document.getElementById('btn-auto').classList.remove('bg-rose-700');
+      }
+
+      state.currentStep = 0;
+      state.activeSeeds = [];
+      state.visitedNodes.clear();
+      state.activeEdges = [];
+      state.virtualJumpEdges = [];
+      state.stepLog = [];
+      state.candidateScoring = null;
+
+      updateUI();
+      renderBaseGraph();
+    }
+
+    function toggleAutoRun() {
+      if (state.autoRunInterval) {
+        clearInterval(state.autoRunInterval);
+        state.autoRunInterval = null;
+        document.getElementById('btn-auto').textContent = 'Auto Run';
+        document.getElementById('btn-auto').classList.remove('bg-rose-700');
+      } else {
+        document.getElementById('btn-auto').textContent = 'Pause';
+        document.getElementById('btn-auto').classList.add('bg-rose-700');
+        if (state.currentStep >= state.maxSteps) resetSimulation();
+        state.autoRunInterval = setInterval(() => {
+          if (state.currentStep < state.maxSteps) {
+            stepSimulation();
+          } else {
+            clearInterval(state.autoRunInterval);
+            state.autoRunInterval = null;
+            document.getElementById('btn-auto').textContent = 'Auto Run';
+            document.getElementById('btn-auto').classList.remove('bg-rose-700');
+          }
+        }, 1800);
+      }
+    }
+
+    function setEngineMode(mode) {
+      state.mode = mode;
+      resetSimulation();
+    }
+
+    function handleScenarioChange() {
+      state.scenario = document.getElementById('query-scenario').value;
+      resetSimulation();
+    }
+
+    function updateSliders() {
+      const thr = parseFloat(document.getElementById('slider-sim-thr').value);
+      const pen = parseFloat(document.getElementById('slider-penalty').value);
+      state.threshold = thr;
+      state.jumpPenalty = pen;
+      document.getElementById('val-sim-thr').textContent = thr.toFixed(2);
+      document.getElementById('val-penalty').textContent = pen.toFixed(2);
+      renderBaseGraph();
+    }
+
+    function updateUI() {
+      // 1. Status Bar & Buttons
+      document.getElementById('step-counter').textContent = `${state.currentStep}/${state.maxSteps}`;
+      const statusEl = document.getElementById('walker-status');
+      if (state.currentStep === 0) {
+        statusEl.textContent = 'STANDBY: AWAITING QUERY';
+        statusEl.className = 'text-slate-400';
+      } else if (state.currentStep === state.maxSteps) {
+        statusEl.textContent = 'WALK COMPLETED';
+        statusEl.className = 'text-emerald-400 font-bold';
+      } else {
+        statusEl.textContent = `WALKING (HOP ${state.currentStep})`;
+        statusEl.className = 'text-indigo-400 font-bold';
+      }
+
+      // 2. Step Callout Overlay Box
+      const scenario = SCENARIOS[state.scenario];
+      const calloutTitle = document.getElementById('callout-title');
+      const calloutBadge = document.getElementById('callout-badge');
+      const calloutDesc = document.getElementById('callout-desc');
+
+      if (state.currentStep === 0) {
+        calloutBadge.textContent = 'STEP 0';
+        calloutTitle.textContent = `Query: "${scenario.query}"`;
+        calloutDesc.textContent = `Ready to traverse memory. Click "Next Step" to observe how the ${state.mode === 'strict' ? 'Strict Co-occurrence Engine' : 'Option 3 Traversal Expansion Engine'} behaves.`;
+      } else {
+        const curDef = scenario.steps[state.currentStep - 1];
+        calloutBadge.textContent = curDef.badge;
+        calloutTitle.textContent = curDef.title;
+        calloutDesc.textContent = (state.mode === 'strict' && curDef.desc_strict) ? curDef.desc_strict : (curDef.desc_expansion || curDef.desc);
+      }
+
+      // 3. Stats Summary in Inspector
+      document.getElementById('stat-nodes-hit').textContent = state.visitedNodes.size;
+      document.getElementById('stat-cooccur-edges').textContent = state.activeEdges.length;
+      document.getElementById('stat-virtual-leaps').textContent = state.virtualJumpEdges.length;
+      document.getElementById('metric-phase').textContent = state.currentStep === 0 ? 'INIT' : `HOP_${state.currentStep}`;
+
+      // 4. Candidate Scoring Card
+      const scoringBox = document.getElementById('scoring-breakdown');
+      const scoringTag = document.getElementById('scoring-tag');
+      if (state.candidateScoring) {
+        scoringTag.textContent = state.candidateScoring.type;
+        scoringTag.className = state.candidateScoring.type.includes('Option 3') 
+          ? 'text-[10px] mono px-1.5 py-0.5 rounded bg-pink-950 text-pink-300 border border-pink-700/50' 
+          : 'text-[10px] mono px-1.5 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-700/50';
+
+        scoringBox.innerHTML = `
+          <div class="flex justify-between items-center pb-1 border-b border-slate-800">
+            <span class="text-slate-400">Target Node:</span>
+            <span class="text-slate-100 font-semibold">${state.candidateScoring.target}</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-slate-400">Formula Breakdown:</span>
+            <span class="text-amber-300">${state.candidateScoring.calc}</span>
+          </div>
+          <div class="flex justify-between items-center pt-1 font-bold">
+            <span class="text-slate-300">Beam Score Result:</span>
+            <span class="text-emerald-400 text-sm">${state.candidateScoring.finalScore.toFixed(3)}</span>
+          </div>
+        `;
+      } else {
+        scoringTag.textContent = 'WAITING';
+        scoringBox.innerHTML = `<div class="text-slate-500 italic font-sans">Click "Next Step" to evaluate beam candidates.</div>`;
+      }
+
+      // 5. Traversal Ledger List
+      const ledgerBox = document.getElementById('traversal-ledger');
+      if (state.stepLog.length === 0) {
+        ledgerBox.innerHTML = `<div class="p-2 rounded-lg bg-slate-950/40 border border-slate-800 text-slate-500 text-[11px] italic">Walk has not started.</div>`;
+      } else {
+        ledgerBox.innerHTML = state.stepLog.map(item => `
+          <div class="p-2 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
+            <div class="flex justify-between items-center text-[10px]">
+              <span class="font-bold text-indigo-400 mono">STEP ${item.step}</span>
+              <span class="mono px-1 rounded bg-slate-800 text-emerald-400 font-bold">score ${item.score.toFixed(2)}</span>
+            </div>
+            <div class="font-semibold text-slate-200">${item.title}</div>
+            <div class="text-slate-400 text-[10.5px] leading-tight">${item.desc}</div>
+          </div>
+        `).join('');
+      }
+
+      // 6. Final LLM Context Injection Preview
+      const injectBox = document.getElementById('injection-preview');
+      if (state.visitedNodes.size === 0) {
+        injectBox.textContent = `[RETRIEVAL PENDING]\nExecute steps to see context assembled for the LLM prompt.`;
+      } else {
+        let text = `## HERMES MEMORY RETRIEVAL (QUERY: "${scenario.query}")\n\n`;
+        
+        // Co-occurrence facts
+        text += `[VERIFIED TURN CO-OCCURRENCES]\n`;
+        const visitedArr = Array.from(state.visitedNodes);
+        state.activeEdges.forEach(eid => {
+          const e = COOCCUR_EDGES.find(x => x.id === eid);
+          const s = NODES.find(n => n.id === e.source);
+          const t = NODES.find(n => n.id === e.target);
+          text += `• (Turn #${e.turn}) "${s.name}" mentions "${t.name}" [w=${e.weight}]\n`;
+        });
+
+        // Virtual bridges or Epistemic Notices
+        if (state.mode === 'gated' && state.virtualJumpEdges.length > 0) {
+          text += `\n[EPISTEMIC NOTICE: UNVERIFIED SIMILARITY FALLBACK]\n`;
+          text += `⚠ NOTE: The structural walk hit a dead end. The following thematic bridge was inferred via vector proximity and has NO historical conversation backing. Do not present as a co-mentioned fact:\n`;
+          state.virtualJumpEdges.forEach(v => {
+            const s = NODES.find(n => n.id === v.source);
+            const t = NODES.find(n => n.id === v.target);
+            text += `  • "${s.name}" ~~~> "${t.name}" (Vector Cosine = ${v.cosine})\n`;
+          });
+        } else if (state.mode === 'expansion' && state.virtualJumpEdges.length > 0) {
+          text += `\n[ASSOCIATIVE VECTOR BRIDGES (OPTION 3)]\n`;
+          state.virtualJumpEdges.forEach(v => {
+            const s = NODES.find(n => n.id === v.source);
+            const t = NODES.find(n => n.id === v.target);
+            text += `• "${s.name}" ~~~> "${t.name}" (Vector Sim=${v.cosine})\n`;
+          });
+        } else if (state.mode === 'strict') {
+          text += `\n[CROSS-ISLAND STATUS]\n• Isolated islands unreachable under strict co-occurrence rule.\n`;
+        }
+
+        // Extracted Noun Definitions
+        text += `\n[RETRIEVED ENTITIES]\n`;
+        visitedArr.forEach(nid => {
+          const n = NODES.find(x => x.id === nid);
+          text += `• ${n.name} (${n.island === 'A' ? 'Acoustics' : 'Guidance'}): ${n.desc}\n`;
+        });
+
+        injectBox.textContent = text;
+      }
+    }
+
+    // Node Click Inspector Handler
+    function selectNode(nodeId) {
+      state.selectedNode = nodeId;
+      const n = NODES.find(x => x.id === nodeId);
+      const titleEl = document.getElementById('inspect-entity-type');
+      const contentEl = document.getElementById('inspect-entity-content');
+
+      titleEl.textContent = `${n.island === 'A' ? 'ISLAND A' : 'ISLAND B'} • DEGREE ${n.degree}`;
+      
+      const cooccurPartners = COOCCUR_EDGES
+        .filter(e => e.source === n.id || e.target === n.id)
+        .map(e => {
+          const partnerId = e.source === n.id ? e.target : e.source;
+          const p = NODES.find(x => x.id === partnerId);
+          return `${p.name} (Turn ${e.turn}, w=${e.weight})`;
+        });
+
+      const knnNeighbors = VIRTUAL_NEIGHBORS
+        .filter(v => v.source === n.id || v.target === n.id)
+        .map(v => {
+          const partnerId = v.source === n.id ? v.target : v.source;
+          const p = NODES.find(x => x.id === partnerId);
+          return `${p.name} (sim=${v.cosine} - "${v.label}")`;
+        });
+
+      contentEl.innerHTML = `
+        <div class="font-bold text-slate-100 text-sm mb-1">${n.name}</div>
+        <p class="text-slate-400 mb-2 leading-relaxed">${n.desc}</p>
+        
+        <div class="space-y-1.5 pt-1 border-t border-slate-800">
+          <div class="text-[10px] uppercase font-bold text-teal-400">Co-occurrence Edges (Verified Turns):</div>
+          <div class="space-y-0.5 text-slate-300 mono text-[10px]">
+            ${cooccurPartners.length ? cooccurPartners.map(cp => `<div>• ${cp}</div>`).join('') : '<div class="text-slate-500 italic">None recorded.</div>'}
+          </div>
+        </div>
+
+        <div class="space-y-1.5 pt-1 border-t border-slate-800">
+          <div class="text-[10px] uppercase font-bold text-pink-400">Nearest Neighbors in Vector Space:</div>
+          <div class="space-y-0.5 text-slate-300 mono text-[10px]">
+            ${knnNeighbors.length ? knnNeighbors.map(kn => `<div>• ${kn}</div>`).join('') : '<div class="text-slate-500 italic">No neighbors above 0.70 threshold.</div>'}
+          </div>
+        </div>
+      `;
+
+      renderBaseGraph();
+    }
+
+    // Top View Switcher (Interactive Simulator vs Code Guide)
+    function switchView(v) {
+      const simView = document.getElementById('view-sim');
+      const codeView = document.getElementById('view-code');
+      const tabSim = document.getElementById('tab-sim');
+      const tabCode = document.getElementById('tab-code');
+
+      if (v === 'sim') {
+        simView.classList.remove('hidden');
+        codeView.classList.add('hidden');
+        tabSim.className = 'px-3 py-1.5 rounded-lg font-medium bg-indigo-600 text-white shadow-sm';
+        tabCode.className = 'px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200';
+      } else {
+        simView.classList.add('hidden');
+        codeView.classList.remove('hidden');
+        tabCode.className = 'px-3 py-1.5 rounded-lg font-medium bg-indigo-600 text-white shadow-sm';
+        tabSim.className = 'px-3 py-1.5 rounded-lg font-medium text-slate-400 hover:text-slate-200';
+      }
+    }
+
+    // Inspector Tab Switcher
+    function switchInspectorTab(t) {
+      const walkTab = document.getElementById('inspector-walk');
+      const provTab = document.getElementById('inspector-provenance');
+      const btnWalk = document.getElementById('inspect-tab-walk');
+      const btnProv = document.getElementById('inspect-tab-provenance');
+
+      if (t === 'walk') {
+        walkTab.classList.remove('hidden');
+        provTab.classList.add('hidden');
+        btnWalk.className = 'flex-1 py-3 px-2 border-b-2 border-indigo-500 text-indigo-300 bg-slate-800/40 text-center';
+        btnProv.className = 'flex-1 py-3 px-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 text-center';
+      } else {
+        walkTab.classList.add('hidden');
+        provTab.classList.remove('hidden');
+        btnProv.className = 'flex-1 py-3 px-2 border-b-2 border-indigo-500 text-indigo-300 bg-slate-800/40 text-center';
+        btnWalk.className = 'flex-1 py-3 px-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 text-center';
+      }
+    }
+
+    // Initialize Simulation on Load
+    window.onload = () => {
+      renderBaseGraph();
+      updateUI();
+      selectNode('nightingale');
+    };
+  </script>
+</body>
+</html>

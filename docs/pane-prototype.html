@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<!--
+  hermes-memory pane — shape prototype
+  Created: 2026-09-07 · Last modified: 2026-09-07
+  Illustrative only — fake data, fake fingerprints, no live DB connection.
+  Companion to docs/specs/PANE_INTERACTION_SPEC.md §5 (dual-space model).
+  Purpose: demonstrate the AGREED interaction shape (hover/click/search/
+  edge-alignment) and the honest current relationship between vector
+  embeddings and graph structure — not a build target to copy verbatim.
+  If PANE_INTERACTION_SPEC.md's decisions change, check this file for drift
+  before treating it as still-accurate reference.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>hermes-memory pane — shape prototype</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#12161f; --panel2:#171c28; --border:#262d3d;
+    --text:#e7e9ee; --text-dim:#8b93a7; --accent:#6ea8ff;
+    --seed:#f2b84b; --expand:#3fd1a5; --dim:#3a4152; --bad:#e0616b;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:var(--bg);
+    color:var(--text);font-family:-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;}
+  #scene{position:absolute;inset:0;}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 8px 24px rgba(0,0,0,.35);}
+  #topbar{position:absolute;top:16px;left:16px;right:16px;display:flex;gap:10px;
+    align-items:center;padding:10px 12px;z-index:5;}
+  #topbar input{flex:1;background:var(--panel2);border:1px solid var(--border);
+    color:var(--text);border-radius:6px;padding:8px 10px;font-size:14px;outline:none;}
+  #topbar input::placeholder{color:var(--text-dim);}
+  #topbar button{background:var(--accent);color:#04162e;border:none;border-radius:6px;
+    padding:8px 14px;font-size:13px;font-weight:500;cursor:pointer;}
+  #topbar button:hover{opacity:.9;}
+  #topbar .hint{font-size:12px;color:var(--text-dim);white-space:nowrap;}
+  #funnel{position:absolute;top:66px;left:16px;right:16px;padding:8px 14px;
+    font-size:12px;color:var(--text-dim);display:none;z-index:5;}
+  #funnel b{color:var(--expand);}
+  #legend{position:absolute;bottom:16px;left:16px;padding:10px 14px;font-size:12px;
+    color:var(--text-dim);z-index:5;display:flex;gap:14px;align-items:center;}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;}
+  #tooltip{position:absolute;pointer-events:none;background:var(--panel2);
+    border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:12px;
+    display:none;z-index:10;max-width:220px;}
+  #tooltip .t-label{font-weight:500;color:var(--text);}
+  #tooltip .t-sub{color:var(--text-dim);margin-top:2px;}
+  #detail{position:absolute;top:16px;right:16px;bottom:16px;width:300px;
+    padding:16px;overflow-y:auto;display:none;z-index:6;font-size:13px;}
+  #detail h3{margin:0 0 2px;font-size:15px;font-weight:500;}
+  #detail .type{color:var(--text-dim);font-size:12px;margin-bottom:12px;}
+  #detail .section-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--text-dim);margin:14px 0 6px;}
+  #detail .neighbor{display:flex;justify-content:space-between;padding:5px 0;
+    border-bottom:1px solid var(--border);}
+  #detail .neighbor .mag{color:var(--text-dim);font-size:12px;}
+  #detail .excerpt{background:var(--panel2);border-radius:6px;padding:8px 10px;
+    margin-bottom:8px;font-size:12.5px;color:var(--text-dim);font-style:italic;}
+  #detail .notice{background:rgba(224,97,107,0.12);border:1px solid rgba(224,97,107,0.35);
+    color:#f0a3aa;border-radius:6px;padding:8px 10px;font-size:12.5px;}
+  #detail .provenance-note{background:rgba(242,184,75,0.10);border:1px solid rgba(242,184,75,0.3);
+    color:#f2c97a;border-radius:6px;padding:6px 10px;font-size:12px;margin-top:6px;}
+  #detail .fingerprint{display:flex;align-items:flex-end;gap:1px;height:34px;margin-top:6px;}
+  #detail .fingerprint div{flex:1;background:var(--accent);border-radius:1px 1px 0 0;}
+  #detail .fp-label{font-size:11px;color:var(--text-dim);margin-top:4px;}
+  #detail .close{position:absolute;top:10px;right:12px;cursor:pointer;color:var(--text-dim);
+    font-size:16px;background:none;border:none;}
+  #detail .close:hover{color:var(--text);}
+  #explainer{position:absolute;bottom:16px;right:16px;width:280px;padding:10px 14px;
+    font-size:11.5px;line-height:1.5;color:var(--text-dim);z-index:5;}
+  #explainer b{color:var(--text);font-size:12px;}
+  .compare{display:flex;gap:8px;margin-top:6px;}
+  .compare .col{flex:1;}
+  .compare .fp-mini{display:flex;align-items:flex-end;gap:1px;height:24px;}
+  .compare .fp-mini div{flex:1;border-radius:1px 1px 0 0;}
+  .compare .col.q .fp-mini div{background:var(--seed);}
+  .compare .col.e .fp-mini div{background:var(--accent);}
+  .align-bar{height:6px;background:var(--panel2);border-radius:3px;margin-top:8px;overflow:hidden;}
+  .align-bar div{height:100%;background:var(--expand);}
+</style>
+</head>
+<body>
+
+<div id="scene"></div>
+
+<div id="topbar" class="panel">
+  <input id="searchbox" type="text" placeholder="Search — try &quot;Nightingale&quot; or &quot;hermes-memory&quot;">
+  <button id="searchbtn">Search</button>
+  <span class="hint">drag to rotate · scroll to zoom · click a node</span>
+</div>
+
+<div id="funnel" class="panel"></div>
+
+<div id="legend" class="panel">
+  <span><span class="dot" style="background:var(--seed)"></span>seed match</span>
+  <span><span class="dot" style="background:var(--expand)"></span>1–2 hop expansion</span>
+  <span><span class="dot" style="background:var(--dim)"></span>not in this result</span>
+  <span><span class="dot" style="background:var(--bad)"></span>degraded / incomplete</span>
+  <span><span class="dot" style="background:#7f8fb3"></span>turn (ANN space)</span>
+</div>
+<div id="explainer" class="panel">
+  <b>Two separate vector jobs</b><br>
+  1) Query → turn embeddings (cubes below) picks entry points.<br>
+  2) Query → each edge's own stored vectors scores trust while walking.<br>
+  Vectors never create the lines between nouns — co-occurrence does.
+</div>
+
+<div id="tooltip" class="panel"></div>
+
+<div id="detail" class="panel">
+  <button class="close" id="detail-close">✕</button>
+  <div id="detail-body"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ---------- Illustrative data (not real DB rows) ----------
+const NODES = [
+  {id:'nightingale', label:'Project Nightingale', type:'Project', embed_model:'nomic-embed-text', embed_dim:768},
+  {id:'solenoid', label:'Mira Solenoid', type:'Person', embed_model:'nomic-embed-text', embed_dim:768},
+  {id:'kilnbrook', label:'Kilnbrook Labs', type:'Organization', embed_model:'nomic-embed-text', embed_dim:768},
+  {id:'atlas', label:'Atlas Vault Engine', type:'Technology', embed_model:'nomic-embed-text', embed_dim:768},
+  {id:'hermes-memory', label:'hermes-memory', type:'Repo', embed_model:'nomic-embed-text', embed_dim:768},
+  {id:'recap', label:'RECAP', type:'Concept', embed_model:null, embed_dim:null},
+  {id:'docs-graph', label:'docs graph', type:'Concept', embed_model:'nomic-embed-text', embed_dim:768},
+  {id:'hybrid-age', label:'hybrid-age', type:'Concept', embed_model:'nomic-embed-text', embed_dim:768},
+  {id:'stray', label:'stray mention', type:'Concept', embed_model:'nomic-embed-text', embed_dim:768, isolated:true},
+  {id:'partial', label:'partial extract', type:'Concept', embed_model:'nomic-embed-text', embed_dim:768, degraded:true},
+];
+const EDGES = [
+  {src:'nightingale', tgt:'solenoid', magnitude:5.2, provenance:['turn 1001'],
+   excerpt:'"Project Nightingale is built by Mira Solenoid at Kilnbrook Labs..."'},
+  {src:'solenoid', tgt:'kilnbrook', magnitude:4.8, provenance:['turn 1001'],
+   excerpt:'"...Mira Solenoid at Kilnbrook Labs, and Nightingale uses the Atlas Vault Engine."'},
+  {src:'kilnbrook', tgt:'atlas', magnitude:4.1, provenance:['turn 1002'],
+   excerpt:'"...Kilnbrook Labs, and Nightingale uses the Atlas Vault Engine."'},
+  {src:'hermes-memory', tgt:'recap', magnitude:4.15, provenance:['turn 900'],
+   excerpt:'"Written to RECAP-2026-09-02-hermes-memory.md..."'},
+  {src:'hermes-memory', tgt:'docs-graph', magnitude:4.25, provenance:['turn 901'],
+   excerpt:'"hermes-memory — see docs graph for the architecture."'},
+  {src:'hermes-memory', tgt:'hybrid-age', magnitude:2.55, provenance:['turn 902'],
+   excerpt:'"the hybrid-age memory provider plugin"'},
+  {src:'partial', tgt:'hermes-memory', magnitude:1.2, provenance:['turn 903'],
+   excerpt:'(source turn had a flower MERGE failure — partial extraction only)'},
+];
+// note: nightingale <-> atlas is NOT a direct edge. Adjacent-pairs-only
+// extraction (issue #72) means non-adjacent mentions in one turn don't link.
+
+// TURNS: a separate embedding space (conversations.embedding). ANN search
+// runs here, NOT on the noun graph. A "hit" turn feeds its extracted nouns
+// in as seeds — dotted lines below show that hand-off, they are not graph edges.
+const TURNS = [
+  {id:'t1001', text:'"Project Nightingale is built by Mira Solenoid at Kilnbrook Labs..."', extracted:['nightingale','solenoid','kilnbrook']},
+  {id:'t1002', text:'"...Kilnbrook Labs, and Nightingale uses the Atlas Vault Engine."', extracted:['kilnbrook','atlas']},
+  {id:'t900', text:'"Written to RECAP-2026-09-02-hermes-memory.md..."', extracted:['hermes-memory','recap']},
+  {id:'t901', text:'"hermes-memory — see docs graph for the architecture."', extracted:['hermes-memory','docs-graph']},
+  {id:'t902', text:'"the hybrid-age memory provider plugin"', extracted:['hermes-memory','hybrid-age']},
+];
+TURNS.forEach((t,i)=>{ t.fp = fakeFingerprint(i*53+7); });
+let lastQueryFingerprint = null, lastQueryText = '';
+
+function fakeFingerprint(seed){
+  let s = seed; const out = [];
+  for(let i=0;i<28;i++){ s = (s*9301+49297)%233280; out.push(s/233280); }
+  return out;
+}
+NODES.forEach((n,i)=>{ n.fp = fakeFingerprint(i*37+11); n.degree = 0; });
+EDGES.forEach(e=>{
+  NODES.find(n=>n.id===e.src).degree++;
+  NODES.find(n=>n.id===e.tgt).degree++;
+});
+
+// ---------- Simple static force layout (settled once, not live) ----------
+const pos = {};
+NODES.forEach(n=>{ pos[n.id] = new THREE.Vector3(
+  (Math.random()-0.5)*10, (Math.random()-0.5)*10, (Math.random()-0.5)*10); });
+for(let iter=0; iter<220; iter++){
+  const force = {};
+  NODES.forEach(n=>force[n.id] = new THREE.Vector3());
+  for(let i=0;i<NODES.length;i++){
+    for(let j=i+1;j<NODES.length;j++){
+      const a = NODES[i].id, b = NODES[j].id;
+      const d = pos[a].clone().sub(pos[b]);
+      const dist = Math.max(d.length(), 0.6);
+      const rep = d.normalize().multiplyScalar(3.2/(dist*dist));
+      force[a].add(rep); force[b].sub(rep);
+    }
+  }
+  EDGES.forEach(e=>{
+    const d = pos[e.tgt].clone().sub(pos[e.src]);
+    const dist = d.length() || 0.01;
+    const ideal = 5.5 - Math.min(e.magnitude, 5)*0.55;
+    const pull = d.normalize().multiplyScalar((dist-ideal)*0.06);
+    force[e.src].add(pull); force[e.tgt].sub(pull);
+  });
+  NODES.forEach(n=>pos[n.id].add(force[n.id]));
+}
+
+// ---------- Three.js scene ----------
+const container = document.getElementById('scene');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 200);
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:false});
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x0b0e14);
+container.appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const pl = new THREE.PointLight(0xffffff, 0.9); pl.position.set(10,12,14); scene.add(pl);
+
+let radius = 16, theta = 0.6, phi = 1.1;
+function updateCamera(){
+  camera.position.set(
+    radius*Math.sin(phi)*Math.cos(theta),
+    radius*Math.cos(phi),
+    radius*Math.sin(phi)*Math.sin(theta)
+  );
+  camera.lookAt(0,0,0);
+}
+updateCamera();
+
+const COLOR_DIM = 0x3a4152, COLOR_SEED = 0xf2b84b, COLOR_EXPAND = 0x3fd1a5, COLOR_BAD = 0xe0616b;
+const meshes = {};
+NODES.forEach(n=>{
+  const size = 0.32 + Math.min(n.degree,6)*0.055;
+  const geo = new THREE.SphereGeometry(size, 20, 20);
+  const mat = new THREE.MeshStandardMaterial({
+    color: n.degraded ? COLOR_BAD : (n.isolated ? 0x556074 : 0x5b6478),
+    emissive: 0x000000, roughness:0.5, metalness:0.15
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(pos[n.id]);
+  mesh.userData = n;
+  scene.add(mesh);
+  meshes[n.id] = mesh;
+});
+const edgeLines = [];
+EDGES.forEach(e=>{
+  const pts = [pos[e.src], pos[e.tgt]];
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({color:0x333c4f, transparent:true, opacity:0.55,
+    linewidth: 1});
+  const line = new THREE.Line(geo, mat);
+  line.userData = e;
+  scene.add(line);
+  edgeLines.push(line);
+});
+
+// Turn cubes: a visually separate space, offset well below the noun graph,
+// laid out on their own line — not part of the noun force simulation.
+const turnMeshes = {};
+const turnConnectors = [];
+TURNS.forEach((t,i)=>{
+  const geo = new THREE.BoxGeometry(0.5,0.5,0.5);
+  const mat = new THREE.MeshStandardMaterial({color:0x556a8f, roughness:0.6});
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set((i - (TURNS.length-1)/2)*2.4, -7.5, 0);
+  mesh.userData = t;
+  scene.add(mesh);
+  turnMeshes[t.id] = mesh;
+  t.extracted.forEach(nid=>{
+    const pts = [mesh.position, pos[nid]];
+    const geo2 = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat2 = new THREE.LineDashedMaterial({color:0x556a8f, dashSize:0.15, gapSize:0.12, transparent:true, opacity:0});
+    const line2 = new THREE.Line(geo2, mat2);
+    line2.computeLineDistances();
+    line2.userData = {turn:t.id, noun:nid};
+    scene.add(line2);
+    turnConnectors.push(line2);
+  });
+});
+
+// ---------- Orbit-by-drag, no addon needed ----------
+let dragging = false, lastX=0, lastY=0;
+renderer.domElement.addEventListener('mousedown', e=>{dragging=true; lastX=e.clientX; lastY=e.clientY;});
+window.addEventListener('mouseup', ()=>dragging=false);
+window.addEventListener('mousemove', e=>{
+  if(dragging){
+    theta += (e.clientX-lastX)*0.006;
+    phi = Math.min(Math.max(phi - (e.clientY-lastY)*0.006, 0.25), Math.PI-0.25);
+    lastX=e.clientX; lastY=e.clientY; updateCamera();
+  }
+  handleHover(e);
+});
+renderer.domElement.addEventListener('wheel', e=>{
+  radius = Math.min(Math.max(radius + e.deltaY*0.01, 6), 40); updateCamera();
+}, {passive:true});
+
+// ---------- Picking ----------
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const tooltip = document.getElementById('tooltip');
+function pick(e){
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX-rect.left)/rect.width)*2-1;
+  mouse.y = -((e.clientY-rect.top)/rect.height)*2+1;
+  raycaster.setFromCamera(mouse, camera);
+  raycaster.params.Line = {threshold: 0.25};
+  const nodeHits = raycaster.intersectObjects(Object.values(meshes));
+  if(nodeHits.length) return {kind:'node', obj:nodeHits[0].object};
+  const turnHits = raycaster.intersectObjects(Object.values(turnMeshes));
+  if(turnHits.length) return {kind:'turn', obj:turnHits[0].object};
+  const edgeHits = raycaster.intersectObjects(edgeLines);
+  if(edgeHits.length) return {kind:'edge', obj:edgeHits[0].object};
+  return null;
+}
+function handleHover(e){
+  if(dragging){ tooltip.style.display='none'; return; }
+  const hit = pick(e);
+  tooltip.style.left = (e.clientX+14)+'px';
+  tooltip.style.top = (e.clientY+10)+'px';
+  if(hit && hit.kind==='node'){
+    const n = hit.obj.userData;
+    tooltip.innerHTML = `<div class="t-label">${n.label}</div><div class="t-sub">${n.type} · degree ${n.degree}</div>`;
+    tooltip.style.display = 'block';
+  } else if(hit && hit.kind==='turn'){
+    tooltip.innerHTML = `<div class="t-label">turn ${hit.obj.userData.id}</div><div class="t-sub">ANN space — click for text + fingerprint</div>`;
+    tooltip.style.display = 'block';
+  } else if(hit && hit.kind==='edge'){
+    tooltip.innerHTML = `<div class="t-label">edge</div><div class="t-sub">click for vector alignment</div>`;
+    tooltip.style.display = 'block';
+  } else {
+    tooltip.style.display = 'none';
+  }
+}
+renderer.domElement.addEventListener('click', e=>{
+  const hit = pick(e);
+  if(!hit) return;
+  if(hit.kind==='node') openDetail(hit.obj.userData);
+  else if(hit.kind==='turn') openTurnDetail(hit.obj.userData);
+  else if(hit.kind==='edge') openEdgeDetail(hit.obj.userData);
+});
+
+// ---------- Detail panel (click behavior) ----------
+const detail = document.getElementById('detail');
+const detailBody = document.getElementById('detail-body');
+document.getElementById('detail-close').onclick = ()=>{ detail.style.display='none'; };
+
+function fingerprintHTML(fp){
+  if(!fp) return '';
+  const bars = fp.map(v=>`<div style="height:${Math.round(v*100)}%"></div>`).join('');
+  return `<div class="fingerprint">${bars}</div><div class="fp-label">illustrative embedding fingerprint — not real vector values</div>`;
+}
+
+function openDetail(n){
+  const neighbors = EDGES.filter(e=>e.src===n.id||e.tgt===n.id);
+  let html = `<h3>${n.label}</h3><div class="type">${n.type}</div>`;
+
+  if(n.embed_model){
+    html += `<div class="section-label">Embedding</div>
+      <div>${n.embed_model} · ${n.embed_dim}d</div>${fingerprintHTML(n.fp)}`;
+  } else {
+    html += `<div class="section-label">Embedding</div>
+      <div class="provenance-note">Embedding version not recorded (pre-V10) — trusted as nomic-768 by policy, not directly confirmed.</div>`;
+  }
+
+  html += `<div class="section-label">1-hop neighbors</div>`;
+  if(n.degraded){
+    html += `<div class="notice">Extraction failed for this turn (graph_degraded) — this connection may be incomplete.</div>`;
+  } else if(n.isolated || neighbors.length===0){
+    html += `<div class="notice">No connections yet — mentioned once, not yet linked to anything else.</div>`;
+  } else {
+    neighbors.forEach(e=>{
+      const otherId = e.src===n.id ? e.tgt : e.src;
+      const other = NODES.find(x=>x.id===otherId);
+      html += `<div class="neighbor"><span>${other.label}</span><span class="mag">w=${e.magnitude.toFixed(2)}</span></div>`;
+    });
+    html += `<div class="section-label">Readable context</div>`;
+    neighbors.forEach(e=>{ html += `<div class="excerpt">${e.excerpt}</div>`; });
+  }
+
+  detailBody.innerHTML = html;
+  detail.style.display = 'block';
+}
+
+function openTurnDetail(t){
+  detailBody.innerHTML = `<h3>turn ${t.id}</h3><div class="type">conversations.embedding — ANN space, not the noun graph</div>
+    <div class="section-label">Text</div><div class="excerpt">${t.text}</div>
+    <div class="section-label">Turn embedding</div>${fingerprintHTML(t.fp)}
+    <div class="section-label">Extracted into</div>
+    ${t.extracted.map(id=>`<div class="neighbor"><span>${NODES.find(n=>n.id===id).label}</span></div>`).join('')}`;
+  detail.style.display = 'block';
+}
+function alignmentScore(fpA, fpB){
+  let dot=0,a=0,b=0;
+  for(let i=0;i<Math.min(fpA.length,fpB.length);i++){ dot+=fpA[i]*fpB[i]; a+=fpA[i]*fpA[i]; b+=fpB[i]*fpB[i]; }
+  return dot/(Math.sqrt(a)*Math.sqrt(b)+1e-6);
+}
+function openEdgeDetail(e){
+  const src = NODES.find(n=>n.id===e.src), tgt = NODES.find(n=>n.id===e.tgt);
+  let compareHTML;
+  if(lastQueryFingerprint){
+    const score = alignmentScore(lastQueryFingerprint, src.fp);
+    compareHTML = `<div class="section-label">Query vs. this edge's stored vector</div>
+      <div class="compare">
+        <div class="col q"><div class="fp-mini">${lastQueryFingerprint.map(v=>`<div style="height:${Math.round(v*100)}%"></div>`).join('')}</div>query "${lastQueryText}"</div>
+        <div class="col e"><div class="fp-mini">${src.fp.map(v=>`<div style="height:${Math.round(v*100)}%"></div>`).join('')}</div>edge e_src_vec</div>
+      </div>
+      <div class="align-bar"><div style="width:${Math.round(Math.max(score,0)*100)}%"></div></div>
+      <div class="t-sub" style="margin-top:4px">illustrative alignment ≈ ${score.toFixed(2)} — this is what beam_score's src_align/tgt_align represent, computed per edge, per query</div>`;
+  } else {
+    compareHTML = `<div class="notice">Run a search first — alignment only exists relative to a query.</div>`;
+  }
+  detailBody.innerHTML = `<h3>${src.label} → ${tgt.label}</h3><div class="type">semantic_edge · verb_type=mentions</div>
+    <div class="section-label">Structural (fixed at write time)</div>
+    <div class="neighbor"><span>magnitude</span><span class="mag">${e.magnitude.toFixed(2)}</span></div>
+    <div class="neighbor"><span>provenance</span><span class="mag">${e.provenance.join(', ')}</span></div>
+    ${compareHTML}`;
+  detail.style.display = 'block';
+}
+
+// ---------- Search: highlight seed / expand / dim, show funnel ----------
+const funnel = document.getElementById('funnel');
+function resetHighlight(){
+  Object.values(meshes).forEach(m=>{
+    m.material.color.set(m.userData.degraded?COLOR_BAD:(m.userData.isolated?0x556074:0x5b6478));
+    m.material.emissive.set(0x000000);
+  });
+  edgeLines.forEach(l=>{ l.material.color.set(0x333c4f); l.material.opacity=0.55; });
+  Object.values(turnMeshes).forEach(m=>m.material.color.set(0x556a8f));
+  turnConnectors.forEach(l=>l.material.opacity=0);
+}
+function runSearch(q){
+  resetHighlight();
+  if(!q.trim()){ funnel.style.display='none'; return; }
+  const ql = q.toLowerCase();
+  lastQueryFingerprint = fakeFingerprint(Array.from(q).reduce((a,c)=>a+c.charCodeAt(0),0));
+  lastQueryText = q;
+  const seeds = NODES.filter(n=>n.label.toLowerCase().includes(ql));
+  const hitTurns = TURNS.filter(t=>t.extracted.some(id=>seeds.find(s=>s.id===id)));
+  hitTurns.forEach(t=>{
+    turnMeshes[t.id].material.color.set(COLOR_SEED);
+    turnConnectors.filter(c=>c.userData.turn===t.id).forEach(c=>c.material.opacity=0.7);
+  });
+  if(seeds.length===0){
+    funnel.style.display='block';
+    funnel.innerHTML = `No ANN candidates matched "<b>${q}</b>" above similarity 0.55.`;
+    return;
+  }
+  const seedIds = new Set(seeds.map(s=>s.id));
+  const expandIds = new Set();
+  EDGES.forEach(e=>{
+    if(seedIds.has(e.src) && !seedIds.has(e.tgt)) expandIds.add(e.tgt);
+    if(seedIds.has(e.tgt) && !seedIds.has(e.src)) expandIds.add(e.src);
+  });
+  seedIds.forEach(id=>{
+    meshes[id].material.color.set(COLOR_SEED);
+    meshes[id].material.emissive.set(0x3a2a06);
+  });
+  expandIds.forEach(id=>{
+    meshes[id].material.color.set(COLOR_EXPAND);
+    meshes[id].material.emissive.set(0x063a2c);
+  });
+  edgeLines.forEach(l=>{
+    const e = l.userData;
+    const involved = (seedIds.has(e.src)||expandIds.has(e.src)) && (seedIds.has(e.tgt)||expandIds.has(e.tgt));
+    if(involved){ l.material.color.set(COLOR_EXPAND); l.material.opacity = 0.9; }
+  });
+  const ann = TURNS.length + 3;
+  funnel.style.display = 'block';
+  funnel.innerHTML = `ANN over turn embeddings: <b>${ann}</b> candidates &nbsp;→&nbsp; above similarity 0.55: <b>${hitTurns.length}</b> turn(s)
+    &nbsp;→&nbsp; extracted seed nouns: <b>${seedIds.size}</b>
+    &nbsp;→&nbsp; graph expand: <b>+${expandIds.size}</b> via edges
+    &nbsp;→&nbsp; kept after beam/budget: <b>${seedIds.size + expandIds.size}</b>`;
+  if(seeds[0]) openDetail(seeds[0]);
+}
+document.getElementById('searchbtn').onclick = ()=>runSearch(document.getElementById('searchbox').value);
+document.getElementById('searchbox').addEventListener('keydown', e=>{ if(e.key==='Enter') runSearch(e.target.value); });
+
+// ---------- Render loop ----------
+function animate(){ requestAnimationFrame(animate); renderer.render(scene, camera); }
+animate();
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

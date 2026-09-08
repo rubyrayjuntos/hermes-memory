@@ -154,6 +154,11 @@ hardening). This is not a production multi-tenant service.
 **Where “done” is defined:** [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
 **What evidence “done” needs:** [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md)
 (user-facing = level 6 + artifact).
+**Verified-wrong claims (do not restate):** [`docs/CORRECTIONS.md`](docs/CORRECTIONS.md).
+**Pane interaction (binding):** [`docs/PANE_INTERACTION_SPEC.md`](docs/PANE_INTERACTION_SPEC.md)
+— open [`docs/pane-prototype.html`](docs/pane-prototype.html) and
+[`docs/hermes_librarian_traversal_expansion_simulator.html`](docs/hermes_librarian_traversal_expansion_simulator.html)
+locally (they do not render on github.com).
 (Delivery vs Retrieval Quality, plus derived Observability & Control). The
 table below is an inventory of what exists on `main`, not a release gate.
 
