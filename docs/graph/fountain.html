@@ -574,8 +574,8 @@ function rebuildScene() {
     const detail = n.label === 'Noun' ? 1 : 0;
     const geo = new THREE.IcosahedronGeometry(radius, detail);
     // §6.1 Orphan dimming (degree 0 → 30% opacity) + §6.4 Search focus+fade (untouched → 15%) + §6.5 Degraded pulse marker
-    const deg = Number(n.val || degreeById.get(sid(n.id)) || 0);
-    const orphan = isOrphanNode(n, deg);
+    const degWithFallback = Number(n.val || degreeById.get(sid(n.id)) || 0);
+    const orphan = isOrphanNode(n, degWithFallback);
     const matKind = kind;
     let baseMat = materialFor(matKind, n._searchSeed);
     // Orphan dim
