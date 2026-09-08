@@ -9,11 +9,12 @@ the running pane does something different from this document, the pane is
 wrong (or this document is stale and needs a dated edit — never both treated
 as simultaneously true).
 
-**Companion artifact:** `docs/specs/pane-shape-prototype.html` — an
-illustrative three.js prototype demonstrating hover, click, search
-highlighting, and the vector/graph relationship in §5, using fake data. Open
-it locally in a browser (it doesn't render on github.com). It settled the
-mental model this spec depends on; check it for drift if this spec changes.
+**Companion artifacts (not the live pane):**
+[`docs/pane-prototype.html`](pane-prototype.html) and
+[`docs/hermes_librarian_traversal_expansion_simulator.html`](hermes_librarian_traversal_expansion_simulator.html)
+— local HTML that settled hover/click/search and the §5 vector/graph split.
+They do not render on github.com. The live inspector is
+[`docs/graph/fountain.html`](graph/fountain.html) on `:7890`.
 
 **Governing rule, inherited from `OC-MVP-1`/`OC-MVP-2`:** every value shown
 anywhere in the pane traces to one real field. No local recomputation of a

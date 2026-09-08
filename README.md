@@ -75,6 +75,10 @@ the `v0.1.0` tag): it copies
 (`127.0.0.1:5450/hermes_memory`) unless you pass `--reuse-dsn`. Then it
 sets `memory.provider=hybrid-age` and serves the inspector on
 `http://127.0.0.1:7890`.
+
+**Topology (do not mix):** clone / Documents work is `:5450` / `hermes_memory`.
+The install pin is `:5452` / `hermes_memory_installed`. Missing `HYBRID_AGE_DSN`
+after dotenv load **raises** — there is no silent fallback to `:5450`.
 Optional: `docker compose --profile pooled up -d` also starts PgBouncer on
 `127.0.0.1:6432`.
 
@@ -107,6 +111,15 @@ Index a codebase (re-run is a no-op when content is unchanged):
 ```bash
 hermes-memory-ingest path/to/repo
 ```
+
+## Documentation
+
+| Path | Job |
+|------|-----|
+| [docs/README.md](docs/README.md) | In-repo map (what is binding vs scratch) |
+| [Wiki](https://github.com/rubyrayjuntos/hermes-memory/wiki) | Short how-tos; links back to the repo |
+| [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md) | **Only** Open/Met table |
+| [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) | Evidence levels; pane needs level 6 |
 
 ## Architecture
 
@@ -155,12 +168,16 @@ hardening). This is not a production multi-tenant service.
 **What evidence “done” needs:** [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md)
 (user-facing = level 6 + artifact).
 **Verified-wrong claims (do not restate):** [`docs/CORRECTIONS.md`](docs/CORRECTIONS.md).
-**Pane interaction (binding):** [`docs/PANE_INTERACTION_SPEC.md`](docs/PANE_INTERACTION_SPEC.md)
-— open [`docs/pane-prototype.html`](docs/pane-prototype.html) and
-[`docs/hermes_librarian_traversal_expansion_simulator.html`](docs/hermes_librarian_traversal_expansion_simulator.html)
-locally (they do not render on github.com).
-(Delivery vs Retrieval Quality, plus derived Observability & Control). The
-table below is an inventory of what exists on `main`, not a release gate.
+**Pane interaction (binding):** [`docs/PANE_INTERACTION_SPEC.md`](docs/PANE_INTERACTION_SPEC.md).
+Live UI: [`docs/graph/fountain.html`](docs/graph/fountain.html) on `:7890`.
+HTML prototypes ([`docs/pane-prototype.html`](docs/pane-prototype.html),
+[`docs/hermes_librarian_traversal_expansion_simulator.html`](docs/hermes_librarian_traversal_expansion_simulator.html))
+are **not** the live pane (they do not render on github.com).
+**How to walk the docs:** [`docs/README.md`](docs/README.md) ·
+[Wiki](https://github.com/rubyrayjuntos/hermes-memory/wiki).
+
+The table below is an inventory of what exists on `main`, **not** a release gate.
+Open/Met lives only in [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
 
 | Capability | On `main` |
 |------------|:---------:|

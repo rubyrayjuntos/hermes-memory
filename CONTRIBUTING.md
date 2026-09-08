@@ -23,17 +23,17 @@ pip install -e '.[dev]'
 
 ## Branch flow
 
-Work is tracked on the kanban board in
-[`docs/plans/board.md`](docs/plans/board.md); card specs and acceptance criteria
-live in [`docs/plans/v0.1.md`](docs/plans/v0.1.md) §5, with frozen interface
-contracts in §3–4.
+Work is claimed on **GitHub issues** (and Project board if used).
+[`docs/plans/board.md`](docs/plans/board.md) is **sprint scratch**, not the
+release gate. Binding Open/Met: [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
+Pane / user-facing PRs need a [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md)
+level-6 artifact, not a sentence.
 
-- One `wip/<card-id>` branch per card; merge to `main` only at **Verified**;
-  delete the branch the same day it merges.
-- Columns: `Backlog → Claimed → In Review → Verified → Done`.
-- Two-stage review (spec compliance → code quality) before a card is Verified.
-- Interface contracts (`v0.1.md` §3/§4) are frozen — propose changes to the
-  controller rather than drifting them.
+- Maintainers: short-lived `wip/<task>` deleted after merge, or work on `main`
+  when the owner asks for trunk-only.
+- Name the criteria row in the PR (`closes D-MVP-5`, `OC-MVP-4 still Open`).
+- Interface sketches in [`docs/plans/v0.1.md`](docs/plans/v0.1.md) §3 are
+  historical; live contracts are the code + `HERMES_MEMORY_SPEC.md` §2–4.
 
 ## Running Tests
 
@@ -77,7 +77,7 @@ Schema changes follow [plan §3.3](docs/plans/v0.1.md):
 | `sql/migrations/V*.sql` | Live schema (idempotent); provider/ingest/pane apply then `require_schema_head` |
 | `sql/init/*.sql` | First-boot compose only (extensions, base schema, indexes) |
 | `legacy/scripts/graph_*.py` | v0.2-scope extraction prototypes — not shipped |
-| `docs/` | Architecture deep dive, AGE quirks, plans |
+| `docs/` | Map in [`docs/README.md`](docs/README.md). Spec, pane interaction, CORRECTIONS, AGE quirks. `plans/` is scratch; `reports/` is evidence. `architecture.md` is retired. |
 
 ## Keeping your local in sync (trunk-based — please read before you start)
 

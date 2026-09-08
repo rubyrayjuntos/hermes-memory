@@ -7,11 +7,10 @@ Status of each release row lives only in [`RELEASE_CRITERIA.md`](../../RELEASE_C
 `queue_prefetch`, which is not in the tree). The destination PDF and
 `HERMES_MEMORY_OVERALL_SPEC.md` are retired as standalone files.
 
-**Last verified against:** `origin/main` @ `9428da0` (child of `d7fbb5f`, child of
-`f154df5`, child of `597a29e`, child of `c6e05f2`).
+**Last verified against:** `origin/main` @ `58e2662` (narrative).
+Open/Met cells: [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) only.
 If code and this spec disagree, the code is right and this document is stale —
-fix the document, not the belief. Do not treat a row as Met from prose here;
-open [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md).
+fix the document, not the belief.
 
 ---
 
@@ -225,7 +224,7 @@ their status into a single score.**
 |-------|----------|---------|-----------------|
 | **Delivery** | Did the write happen, survive restart, stay marked? | `D-MVP-1..4` | `D-PROD-1..4` |
 | **Retrieval Quality** | Did the right memory come back? | `RQ-MVP-1/2`: mechanism smoke only | `RQ-PROD-*`: live-shaped golden set stays ungated |
-| **Observability & Control** | Can a human see those facts, then later act? | `OC-MVP-1/2`: pane reads source fields (honesty). `OC-MVP-3`: a human can read the session from the live graph (meaning). | `OC-PROD-1/2`: auth + confirmed mutations; `501` until then |
+| **Observability & Control** | Can a human see those facts, then later act? | `OC-MVP-1/2` honesty; `OC-MVP-3` meaning; `OC-MVP-4` hover/click/funnel | `OC-PROD-1/2`: auth + confirmed mutations; `501` until then |
 
 **Binding MVP decision:** Delivery-trustworthy on loopback. Live-shaped/human-judged recall
 quality does **not** block MVP. A second scoring formula in-tree **does**. Unauthenticated
@@ -233,12 +232,10 @@ pane control is out of MVP. A pane view that disagrees with `drain_status` / `LE
 `beam_score` blocks `OC-MVP-1`. A wired-but-illegible live graph blocks `OC-MVP-3`.
 
 **Live Open/Met cells:** [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) only.
-Re-verified against `9428da0` for this document: Delivery MVP and RQ MVP mechanism rows
-still match code (L1 remains accepted-loss, not a durable mark). `OC-MVP-1/2` landed in
-`9428da0` (Fountain `/api/health`, no mixer fallback, JoinedStr guard) and stay **not Met**
-until that SHA’s CI run is opened and green. Epistemic notice, bi-temporal columns, and
-pre-compress V2 are **not** release rows and are **not** on main — they do not pull any
-§5/RC cell toward Met.
+Do not copy them here. `OC-MVP-1`/`OC-MVP-2` are honesty (Met there).
+`OC-MVP-3` and `OC-MVP-4` stay Open there until a level-6 pane pass.
+Epistemic notice, bi-temporal columns, and pre-compress V2 are **not**
+release rows and are **not** on main.
 
 ---
 
@@ -294,11 +291,13 @@ same `embed_model`/`embed_dim` versioning already built for nomic (§2).
 
 ## 8. Verification Backlog
 
-- `OC-MVP-1/2` on `9428da0`: implemented in tree; **not Met** until that SHA’s `origin/main`
-  CI run is opened and green. Not a hedge on whether the code exists.
+- `OC-MVP-1/2`: honesty — **Met** in `RELEASE_CRITERIA.md` (do not re-open from this list).
 - `OC-MVP-3`: written bar in `RELEASE_CRITERIA.md` only. **Open.** Honesty rows do not
   close it. Needs a level-6 human artifact against the Given/when/then, not a non-null
   graph JSON.
+- `OC-MVP-4`: interaction spec §§1–3. Code landed on `main`; **Open** until a new
+  level-6 pass and [#80](https://github.com/rubyrayjuntos/hermes-memory/issues/80)
+  (click panel is still a `#hook` dump).
 - Epistemic notice, bi-temporal invalidation, and Pre-Compress Checkpoint API V2 are
   **not on `origin/main`**. They are §6 proposals. There is nothing left to “confirm merge.”
 - Run the Gromov δ-hyperbolicity measurement (§7) — not executed; script not in this repo.

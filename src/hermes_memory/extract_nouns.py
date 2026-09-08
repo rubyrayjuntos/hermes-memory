@@ -1,4 +1,4 @@
-"""Mention-order noun extractor for conversation ingest (spec §6)."""
+"""Mention-order noun extractor for conversation ingest (spec NOW §2; not §6)."""
 from __future__ import annotations
 
 import re
