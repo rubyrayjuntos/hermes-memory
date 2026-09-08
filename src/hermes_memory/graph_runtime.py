@@ -8,10 +8,9 @@ import math
 import os
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .config import HybridAgeConfig
+from .config import HybridAgeConfig, _load_dotenv_files
 from .graph_view import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -63,30 +62,6 @@ class _LoopThread:
                 self.loop.close()
             except Exception:
                 logger.debug("loop close failed", exc_info=True)
-
-
-def _load_dotenv_files() -> None:
-    """Pull HYBRID_AGE_* from Hermes env files if missing from the process env.
-
-    Never logs values.
-    """
-    homes = (
-        Path.home() / ".hermes" / ".env",
-        Path.home() / ".hermes" / "profiles" / "librarian" / ".env",
-    )
-    for path in homes:
-        try:
-            text = path.read_text()
-        except OSError:
-            continue
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            k, v = stripped.split("=", 1)
-            k, v = k.strip(), v.strip().strip('"').strip("'")
-            if k.startswith("HYBRID_AGE_") or k == "HERMES_PG_PASSWORD":
-                os.environ.setdefault(k, v)
 
 
 class Runtime:

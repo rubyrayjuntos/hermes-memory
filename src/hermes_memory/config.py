@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 DEFAULT_DSN_ENV = "HYBRID_AGE_DSN"
@@ -68,8 +69,67 @@ def _load_yaml_block(config_path: Optional[str] = None) -> Dict[str, Any]:
     return dict(block) if isinstance(block, dict) else {}
 
 
+def _is_hermes_memory_pyproject(path: Path) -> bool:
+    try:
+        head = path.read_text(encoding="utf-8")[:4000]
+    except OSError:
+        return False
+    return 'name = "hermes-memory"' in head or "name = 'hermes-memory'" in head
+
+
+def dotenv_paths() -> list[Path]:
+    """Clone ``.env`` first (Documents :5450), then ``~/.hermes/.env`` (install :5452).
+
+    ``setdefault`` later, so the first file that defines a key wins. Process
+    env already set always wins. Never logs values.
+    """
+    paths: list[Path] = []
+    here = Path.cwd()
+    for parent in [here, *here.parents]:
+        pyproject = parent / "pyproject.toml"
+        env = parent / ".env"
+        if pyproject.is_file() and env.is_file() and _is_hermes_memory_pyproject(pyproject):
+            paths.append(env)
+            break
+    for extra in (
+        Path.home() / ".hermes" / ".env",
+        Path.home() / ".hermes" / "profiles" / "librarian" / ".env",
+    ):
+        if extra not in paths:
+            paths.append(extra)
+    return paths
+
+
+def load_dotenv_files() -> None:
+    """Pull HYBRID_AGE_* / HERMES_PG_PASSWORD from dotenv files if missing."""
+    for path in dotenv_paths():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("export "):
+                stripped = stripped[7:].strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            if key.startswith("HYBRID_AGE_") or key == "HERMES_PG_PASSWORD":
+                os.environ.setdefault(key, value)
+
+
+# Back-compat alias used by graph_runtime / graph_api / replay script.
+_load_dotenv_files = load_dotenv_files
+
+
 def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
-    """Resolve configuration: yaml > env > defaults."""
+    """Resolve configuration: yaml names env keys; secrets come from env after dotenv.
+
+    Missing ``HYBRID_AGE_DSN`` (or yaml-named ``dsn_env``) after dotenv is an
+    error. There is no silent fallback to ``_DEFAULT_DSN`` (:5450).
+    """
+    load_dotenv_files()
     raw = _load_yaml_block(config_path)
     cfg = HybridAgeConfig(_raw=raw)
 
@@ -84,10 +144,16 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
     cfg.dsn_env = str(pick("dsn_env", "", cfg.dsn_env))
     cfg.embed_url_env = str(pick("embed_url_env", "", cfg.embed_url_env))
 
-    # Endpoint/secret values come ONLY from the env vars the yaml names.
-    cfg.dsn = os.environ.get(cfg.dsn_env) or (
+    explicit_dsn = os.environ.get(cfg.dsn_env) or (
         raw.get("dsn") if isinstance(raw.get("dsn"), str) else None
-    ) or cfg.dsn
+    )
+    if not explicit_dsn:
+        raise RuntimeError(
+            f"missing {cfg.dsn_env}: set it in the process environment, the clone "
+            ".env (Documents :5450/hermes_memory), or ~/.hermes/.env after install. "
+            "Refusing silent fallback to :5450/hermes_memory."
+        )
+    cfg.dsn = explicit_dsn
     cfg.embed_url = os.environ.get(cfg.embed_url_env) or (
         raw.get("embed_url") if isinstance(raw.get("embed_url"), str) else None
     ) or cfg.embed_url
