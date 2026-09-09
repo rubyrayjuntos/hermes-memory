@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from hermes_memory.install_cli import (
     INSTALLED_CONTAINER,
@@ -12,11 +15,16 @@ from hermes_memory.install_cli import (
     copy_plugin_tree,
     default_release_ref,
     export_pin,
+    find_source_repo,
     is_dev_clone_dsn,
+    is_git_repo,
     read_version_stamp,
+    resolve_and_export_pin,
     resolve_pin,
     write_installed_compose,
     write_version_stamp,
+    _flatten_github_tarball,
+    _github_ref_name,
 )
 
 
@@ -82,9 +90,60 @@ def test_default_release_ref_prefers_origin_main_not_v010(tmp_path: Path) -> Non
     assert sha == head
 
 
-def test_live_checkout_default_ref_is_never_v010() -> None:
-    assert default_release_ref(REPO_ROOT) != "v0.1.0"
+def test_default_release_ref_without_git_is_main(tmp_path: Path) -> None:
+    assert default_release_ref(tmp_path) == "main"
+    assert default_release_ref(None) == "main"
 
+
+def test_github_ref_name_strips_origin_prefix() -> None:
+    assert _github_ref_name("origin/main") == "main"
+    assert _github_ref_name("main") == "main"
+    assert _github_ref_name("v0.2.0") == "v0.2.0"
+
+
+def test_flatten_github_tarball_hoists_single_top_dir(tmp_path: Path) -> None:
+    top = tmp_path / "rubyrayjuntos-hermes-memory-abc1234"
+    (top / "src" / "hermes_memory").mkdir(parents=True)
+    (top / "src" / "hermes_memory" / "walk.py").write_text("ok\n", encoding="utf-8")
+    _flatten_github_tarball(tmp_path)
+    assert (tmp_path / "src" / "hermes_memory" / "walk.py").is_file()
+    assert not top.exists()
+
+
+def test_resolve_and_export_pin_head_without_checkout_exits() -> None:
+    with pytest.raises(SystemExit) as exc:
+        resolve_and_export_pin(None, "HEAD", Path("/tmp/unused"))
+    assert "--ref HEAD needs a git checkout" in str(exc.value)
+
+
+def test_resolve_and_export_pin_uses_github_when_no_repo(tmp_path: Path) -> None:
+    dest = tmp_path / "export"
+
+    def fake_resolve(ref: str) -> tuple[str, str]:
+        assert ref == "main"
+        return "main", "a" * 40
+
+    def fake_export(sha: str, dest_path: Path) -> None:
+        assert sha == "a" * 40
+        dest_path.mkdir(parents=True, exist_ok=True)
+        pkg = dest_path / "src" / "hermes_memory"
+        pkg.mkdir(parents=True)
+        (pkg / "walk.py").write_text("ok\n", encoding="utf-8")
+
+    with patch("hermes_memory.install_cli.resolve_pin_github", side_effect=fake_resolve), patch(
+        "hermes_memory.install_cli.export_pin_github", side_effect=fake_export
+    ):
+        ref, sha = resolve_and_export_pin(None, "main", dest)
+    assert ref == "main"
+    assert sha == "a" * 40
+    assert (dest / "src" / "hermes_memory" / "walk.py").is_file()
+
+
+def test_live_checkout_default_ref_is_never_v010() -> None:
+    repo = find_source_repo() or REPO_ROOT
+    assert default_release_ref(repo) != "v0.1.0"
+    if is_git_repo(REPO_ROOT):
+        assert default_release_ref(REPO_ROOT) != "HEAD" or not is_git_repo(REPO_ROOT)
 
 
 def test_installed_compose_has_no_first_boot_init(tmp_path: Path) -> None:
@@ -101,6 +160,8 @@ def test_installed_compose_has_no_first_boot_init(tmp_path: Path) -> None:
 
 
 def test_resolve_and_export_pin_is_this_repo_head(tmp_path: Path) -> None:
+    if not is_git_repo(REPO_ROOT):
+        pytest.skip("not running from a hermes-memory git checkout")
     ref, sha = resolve_pin(REPO_ROOT, "HEAD")
     assert ref == "HEAD"
     assert len(sha) == 40

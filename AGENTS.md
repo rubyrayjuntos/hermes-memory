@@ -16,7 +16,7 @@ Key files an agent should read for context:
 - `sql/migrations/` — idempotent schema (AGE graph `hermes_knowledge`, `memory_entries`, `memory_chunk_nodes`)
 - `src/hermes_memory/` — provider code (store, graph, embed)
 - `scripts/` — librarian CLI, extractors, watchdogs. `hermes-memory-backfill-about` writes leftover AGE Concept/ABOUT only (the old name `hermes-memory-backfill` exits 2). Live C–F (flower, nouns, passports, mentions, `drain_status`) is `python scripts/replay_conversation_manifold.py --live` against `hermes_memory`. Do not use the ABOUT script for manifold backfill.
-- `hermes-memory-install` pins `origin/main` by default (`git archive`; never implicit `v0.1.0`), stamps `~/.hermes/plugins/hybrid-age/.hermes-memory-version`, and owns `hermes_memory_installed` on `:5452`. It must not symlink the plugin at a clone, `pip install -e` the working tree, or default to `:5450`/`hermes_memory`.
+- `hermes-memory-install` pins GitHub `main` when there is no checkout (tarball; never implicit `v0.1.0` or `HEAD`), or `origin/main` via `git archive` from a clone. It stamps `~/.hermes/plugins/hybrid-age/.hermes-memory-version`, and owns `hermes_memory_installed` on `:5452`. It must not symlink the plugin at a clone, `pip install -e` the working tree, default to `:5450`/`hermes_memory`, or `cp .env.example` into `$HOME`.
 - `docs/` — detailed design docs
 
 **Out of scope** (triage these as off-topic): general Hermes Agent core, non-memory features, frontend/UI.

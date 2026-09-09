@@ -53,27 +53,38 @@ Skip any step whose check already passes. Say the skip.
 `USER.md` still load. `session_search` is history. Obsidian is notes.
 `hermes backup` does not dump this database. Loopback only. Not a host.
 
-② **Docker.** Needed so Postgres 17 + Apache AGE + pgvector listen on
-`127.0.0.1:5450`. Check `docker compose version`. If missing, point at Docker
-Desktop / engine docs and wait. Completion: compose command exists.
+② **Docker.** Needed so Postgres 17 + Apache AGE + pgvector can listen.
+Runtime install uses `127.0.0.1:5452` / `hermes_memory_installed`. The
+clone/dev compose is `:5450` / `hermes_memory` — do not mix. Check
+`docker compose version`. If missing, point at Docker Desktop / engine
+docs and wait. Completion: compose command exists.
 
 ③ **Ollama + `nomic-embed-text`.** Local 768-dim embeddings; recall stays on
 the machine. `ollama list` should show `nomic-embed-text`. If not:
 `terminal(command="ollama pull nomic-embed-text", timeout=600)`. Completion:
 the model is listed.
 
-④ **Clone + `.env`.** If they are not already in the hermes-memory repo:
-`git clone https://github.com/rubyrayjuntos/hermes-memory.git` then `cd`.
-`cp .env.example .env`. They set `HERMES_PG_PASSWORD` and the same password in
-`HYBRID_AGE_DSN` (replace `***`) **in their editor**. Never echo the password.
-Completion: they say the file is saved.
+④ **Do not clone for runtime.** A leftover `$HOME/hermes-memory` plus
+`cp .env.example .env` is the **dev** topology (`:5450`, `change-me`).
+Skip this step unless they are hacking on the provider. If they are,
+clone into `~/Documents/hermes-memory` (not `$HOME`) and keep that
+`.env` out of Hermes. Completion: they are either not cloning, or they
+said the Documents `.env` is saved.
 
-⑤ **Install.** From the repo: `pip install -e '.[dev]'` then
-`hermes-memory-install` in **their** terminal (it prompts for the DSN password).
-That starts compose, wires `memory.provider=hybrid-age`, copies this skill,
-starts viz on `127.0.0.1:7890`. Completion: install prints verify PASS or they
-run `hermes-memory-verify` (CI synthetic — not their memory). If verify fails,
-stay on this step; do not invent recall.
+⑤ **Install.** In **their** terminal, not as a silent favor:
+
+```bash
+pip install --upgrade "hermes-memory @ git+https://github.com/rubyrayjuntos/hermes-memory.git"
+hermes-memory-install --yes
+```
+
+`--yes` is only for a first pin. If verify later says password
+authentication failed, an old Docker volume still has the first-init
+password — re-run **without** `--yes`, or they wipe
+`docker compose -p hermes-memory-installed down -v` (destroys data).
+Never `pip install -e` as the runtime path. Completion: install prints
+verify PASS or they run `hermes-memory-verify` (CI synthetic — not their
+memory). If verify fails, stay on this step; do not invent recall.
 
 ⑥ **New session if needed.** Provider + skill load at session start. If install
 just ran, tell them to **start a new session** and load this skill again, then

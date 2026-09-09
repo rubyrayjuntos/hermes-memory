@@ -216,6 +216,29 @@ async def run_verify(dsn: Optional[str] = None,
 
         # cleanup synthetic SQL rows + leftover AGE Turn vertices from this
         # run and any prior verify-c5 sessions (graph was surviving DELETE).
+        # V12 claims/uptakes reference conversations(id) ON DELETE RESTRICT.
+        try:
+            await conn.execute(
+                "UPDATE claims SET superseded_by = NULL "
+                "WHERE span_id IN ("
+                "  SELECT id FROM conversations WHERE session_id LIKE $1)",
+                "verify-c5%",
+            )
+            await conn.execute(
+                "DELETE FROM claims WHERE span_id IN ("
+                "  SELECT id FROM conversations WHERE session_id LIKE $1)",
+                "verify-c5%",
+            )
+            await conn.execute(
+                "DELETE FROM uptakes WHERE prior_span_id IN ("
+                "  SELECT id FROM conversations WHERE session_id LIKE $1)"
+                " OR next_span_id IN ("
+                "  SELECT id FROM conversations WHERE session_id LIKE $1)",
+                "verify-c5%",
+            )
+        except Exception as exc:
+            if "does not exist" not in str(exc):
+                raise
         await conn.execute(
             "DELETE FROM conversations WHERE session_id LIKE $1",
             "verify-c5%",

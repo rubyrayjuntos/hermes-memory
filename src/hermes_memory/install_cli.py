@@ -3,7 +3,8 @@
 
 Installs a *pinned git tree*, not the working clone:
 
-- Plugin files come from ``git archive <ref>`` (committed snapshot).
+- Plugin files come from ``git archive <ref>`` when a checkout exists,
+  otherwise from the GitHub tarball of ``rubyrayjuntos/hermes-memory``.
 - ``pip install`` is non-editable from that archive (not ``pip install -e .``).
 - ``~/.hermes/plugins/hybrid-age/.hermes-memory-version`` records the SHA.
 - Default database is ``hermes_memory_installed`` on ``127.0.0.1:5452``,
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import io
+import json
 import os
 import re
 import secrets
@@ -24,11 +26,14 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_HOME = Path.home() / ".hermes"
+GITHUB_REPO = "rubyrayjuntos/hermes-memory"
 
 PLUGIN_DIRS = (
     HERMES_HOME / "plugins" / "hybrid-age",
@@ -47,12 +52,48 @@ DEV_PORT = 5450
 DEV_DB = "hermes_memory"
 
 
-def default_release_ref(repo: Path) -> str:
+def is_git_repo(path: Path) -> bool:
+    check = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+    )
+    return check.returncode == 0 and check.stdout.strip() == "true"
+
+
+def _is_hermes_memory_root(path: Path) -> bool:
+    pyproject = path / "pyproject.toml"
+    try:
+        head = pyproject.read_text(encoding="utf-8")[:4000]
+    except OSError:
+        return False
+    return 'name = "hermes-memory"' in head or "name = 'hermes-memory'" in head
+
+
+def find_source_repo() -> Path | None:
+    """A hermes-memory git checkout, or None (then pin from GitHub).
+
+    Walks cwd, then ``REPO_ROOT``. A pip-installed copy lives under
+    site-packages — that is not a checkout and must not be treated as one.
+    """
+    here = Path.cwd()
+    for parent in [here, *here.parents]:
+        if _is_hermes_memory_root(parent) and is_git_repo(parent):
+            return parent
+    if _is_hermes_memory_root(REPO_ROOT) and is_git_repo(REPO_ROOT):
+        return REPO_ROOT
+    return None
+
+
+def default_release_ref(repo: Path | None) -> str:
     """GitHub-tracking ref, not a working tree and not the stale v0.1.0 tag.
 
     Prefer ``origin/main`` so an install follows what GitHub has, not local
     dirty files. ``v0.1.0`` predates ``beam_score`` and must never be implicit.
+    With no checkout, pin GitHub ``main`` — never ``HEAD``.
     """
+    if repo is None or not is_git_repo(repo):
+        return "main"
     for candidate in ("origin/main", "main"):
         check = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--verify", f"{candidate}^{{commit}}"],
@@ -78,6 +119,40 @@ def resolve_pin(repo: Path, ref: str) -> tuple[str, str]:
     return ref, result.stdout.strip()
 
 
+def _github_ref_name(ref: str) -> str:
+    if ref.startswith("origin/"):
+        return ref[len("origin/") :]
+    return ref
+
+
+def resolve_pin_github(ref: str) -> tuple[str, str]:
+    """Resolve ``ref`` to a full SHA via the GitHub commits API."""
+    name = _github_ref_name(ref)
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{name}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "hermes-memory-install",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("HERMES_GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+        raise SystemExit(
+            f"install: cannot resolve --ref {ref!r} from GitHub ({GITHUB_REPO}): {exc}\n"
+            "Need network, or run from a git clone:\n"
+            "  cd ~/Documents/hermes-memory && "
+            "PYTHONPATH=src python -m hermes_memory.install_cli"
+        ) from exc
+    sha = data.get("sha") if isinstance(data, dict) else None
+    if not sha or not isinstance(sha, str):
+        raise SystemExit(f"install: GitHub commit payload for {ref!r} had no sha")
+    return ref, sha
+
+
 def export_pin(repo: Path, sha: str, dest: Path) -> None:
     """Extract the committed tree at ``sha`` into ``dest`` via git archive."""
     dest.mkdir(parents=True, exist_ok=True)
@@ -94,6 +169,65 @@ def export_pin(repo: Path, sha: str, dest: Path) -> None:
             tar.extractall(dest, filter="data")
         except TypeError:
             tar.extractall(dest)
+
+
+def _flatten_github_tarball(dest: Path) -> None:
+    """GitHub tarballs unpack to one top-level directory; hoist its contents."""
+    if (dest / "src").is_dir():
+        return
+    children = [p for p in dest.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    if len(children) != 1:
+        return
+    top = children[0]
+    for item in top.iterdir():
+        shutil.move(str(item), dest / item.name)
+    top.rmdir()
+
+
+def export_pin_github(sha: str, dest: Path) -> None:
+    """Download the GitHub tarball for ``sha`` into ``dest``."""
+    dest.mkdir(parents=True, exist_ok=True)
+    url = f"https://codeload.github.com/{GITHUB_REPO}/tar.gz/{sha}"
+    headers = {"User-Agent": "hermes-memory-install"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("HERMES_GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = resp.read()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        raise SystemExit(
+            f"install: failed to download GitHub tarball {sha[:12]}: {exc}"
+        ) from exc
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        try:
+            tar.extractall(dest, filter="data")
+        except TypeError:
+            tar.extractall(dest)
+    _flatten_github_tarball(dest)
+    if not (dest / "src" / "hermes_memory").is_dir():
+        raise SystemExit(
+            f"install: GitHub tarball {sha[:12]} did not contain src/hermes_memory"
+        )
+
+
+def resolve_and_export_pin(
+    repo: Path | None, ref: str, dest: Path
+) -> tuple[str, str]:
+    """Pin from a local checkout when present, otherwise from GitHub."""
+    if ref == "HEAD" and repo is None:
+        raise SystemExit(
+            "install: --ref HEAD needs a git checkout. Omit --ref to pin GitHub main, "
+            "or run from the clone: PYTHONPATH=src python -m hermes_memory.install_cli"
+        )
+    if repo is not None:
+        ref, sha = resolve_pin(repo, ref)
+        export_pin(repo, sha, dest)
+        return ref, sha
+    ref, sha = resolve_pin_github(ref)
+    export_pin_github(sha, dest)
+    return ref, sha
 
 
 def write_version_stamp(plugin_dir: Path, *, sha: str, ref: str) -> Path:
@@ -334,7 +468,8 @@ def main(argv: list[str] | None = None) -> int:
         "--ref",
         default=None,
         help="Git ref to install (tag, branch, or SHA). Default: origin/main "
-        "(GitHub), never v0.1.0. Use --ref HEAD for the local commit.",
+        "when a checkout exists, otherwise GitHub main. Never v0.1.0. "
+        "Use --ref HEAD only from a git clone.",
     )
     parser.add_argument(
         "--reuse-dsn",
@@ -344,9 +479,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yes", action="store_true", help="Assume yes to all prompts")
     args = parser.parse_args(argv)
 
-    ref = args.ref or default_release_ref(REPO_ROOT)
-    ref, sha = resolve_pin(REPO_ROOT, ref)
-    print(f"install: pin ref={ref} sha={sha}")
+    repo = find_source_repo()
+    ref = args.ref or default_release_ref(repo)
+    print(f"install: source={'checkout ' + str(repo) if repo else 'GitHub ' + GITHUB_REPO}")
 
     dsn = args.dsn
     if dsn and is_dev_clone_dsn(dsn) and not args.reuse_dsn:
@@ -413,8 +548,9 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory(prefix="hermes-memory-pin-") as tmp:
         export = Path(tmp)
-        print(f"[1/7] Exporting pinned tree {sha[:12]}…")
-        export_pin(REPO_ROOT, sha, export)
+        print(f"[1/7] Exporting pin ref={ref}…")
+        ref, sha = resolve_and_export_pin(repo, ref, export)
+        print(f"    pin ref={ref} sha={sha}")
         src_pkg = export / "src" / "hermes_memory"
         skill_src = export / "skills" / "librarian-setup"
 
@@ -570,6 +706,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Installation complete! pin={sha[:12]} dsn={_redact_dsn(dsn)} verify=PASS")
         else:
             print("Installation finished with verify: FAIL")
+            if "password authentication failed" in (result.stdout + result.stderr):
+                print(
+                    "    Auth failed: an existing Docker volume keeps the password from "
+                    "first init. Re-run without --yes to reuse ~/.hermes/.env, or "
+                    f"`docker compose -p {INSTALLED_COMPOSE_PROJECT} down -v` to wipe "
+                    "the installed DB (destroys data).",
+                    file=sys.stderr,
+                )
         print("    skipped hermes-memory-backfill-about (ABOUT/Concept only; not C–F).")
         return 0 if result.returncode == 0 else 1
 
