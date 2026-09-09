@@ -14,7 +14,7 @@ Postgres and the viz API bind **loopback only** (`127.0.0.1`).
 
 Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 
-- **Stack:** `apache/age:release_PG17_1.6.0` + pgvector on `127.0.0.1:5450`
+- **Stack:** installed pin on `127.0.0.1:5452` / `hermes_memory_installed`; clone/dev compose on `127.0.0.1:5450` / `hermes_memory`
 - **Embeddings (default):** local Ollama, `nomic-embed-text` (768-dim). Do not mix embedding models on an existing database.
 
 ### Offers / does not offer
@@ -26,7 +26,7 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 | Prefetch injects quoted spans in a fenced `<memory>` block (`<grounded>` = user/doc speech, `<unconfirmed>` = model speech pending uptake; Fountain pane is retriever debug, not the prompt) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
 | Turn extract → ordered Nouns + `mentions`; ingest for code | Automatic Obsidian vault recall |
 | `hermes-memory-install` / `verify` / `upgrade` / `uninstall` | Coverage under `hermes backup` (export Postgres yourself) |
-| Loopback only (`127.0.0.1:5450` and `:7890`) | Drop-in for every gateway/wrapper without the CLI |
+| Loopback only (`127.0.0.1:5452` installed, `:5450` clone, `:7890` viz) | Drop-in for every gateway/wrapper without the CLI |
 
 Vector finds nearby chunks; the graph is the walk. Fountain is optional grammar — recall must work with the pane closed.
 
@@ -40,41 +40,62 @@ each layer (`MEMORY.md`, sessions, this provider) and you run it. Load skill
 `librarian-setup`. You handle the secret bits, then **you** seed three facts
 in chat. Those turns are the first real graph.
 
-Map the skill will walk (clone first if you are not in the repo):
+### Use it (no clone)
+
+Do **not** `git clone` into `$HOME/hermes-memory` and do **not**
+`cp .env.example .env`. `.env.example` is the **dev** template
+(`:5450` / `hermes_memory` / `change-me`). The installer writes
+`~/.hermes/.env` for the installed pin (`:5452` / `hermes_memory_installed`).
 
 ```bash
-# 1. Clone
-git clone https://github.com/rubyrayjuntos/hermes-memory.git
-cd hermes-memory
-
-# 2. Local embeddings (required for recall — default URL is 127.0.0.1:11434/v1)
+# 1. Local embeddings (required for recall)
 ollama pull nomic-embed-text
 
-# 3. Database password — docker compose will not start without HERMES_PG_PASSWORD
-cp .env.example .env
-# Edit .env: set HERMES_PG_PASSWORD and put the same password in HYBRID_AGE_DSN
-# (replace the *** placeholder).
+# 2. Install the package from GitHub (not PyPI; a leftover conda/site
+#    0.1.0 will "already satisfied" and still lack the GitHub pin)
+pip install --upgrade "hermes-memory @ git+https://github.com/rubyrayjuntos/hermes-memory.git"
 
-# 4. Install the package, wire the Hermes plugin, start Postgres, start the viz API
-pip install -e '.[dev]'
-hermes-memory-install
+# 3. Pin GitHub main → ~/.hermes/plugins/hybrid-age, start Postgres on :5452
+hermes-memory-install --yes
 
-# 5. Confirm the pipeline (exit 0 = PASS). This uses a CI synthetic; it is not your memory.
+# 4. Confirm the pipeline (exit 0 = PASS). CI synthetic — not your memory.
 hermes-memory-verify
-
-# 6. New Hermes session — load skill librarian-setup and *you* seed three facts in chat
 ```
 
-`hermes-memory-install` installs a **pinned git tree** (`--ref`, default
-`origin/main` via `git archive` — GitHub, not the dirty working clone or
-the `v0.1.0` tag): it copies
-`src/hermes_memory` into `~/.hermes/plugins/hybrid-age`, writes
-`.hermes-memory-version` (SHA + ref), `pip install`s that archive
+`--yes` generates a password **only when** `HYBRID_AGE_DSN` is missing.
+If `hermes-memory-postgres-installed` already exists, re-run **without**
+`--yes` so the existing `~/.hermes/.env` is reused — a new password will
+not match an old Docker volume. Wipe (destroys data):
+`docker compose -p hermes-memory-installed down -v`.
+
+`hermes-memory-install` pins a **git tree** (`--ref`, default GitHub
+`main`; `origin/main` when you run from a checkout — never the `v0.1.0`
+tag): it copies `src/hermes_memory` into `~/.hermes/plugins/hybrid-age`,
+writes `.hermes-memory-version` (SHA + ref), `pip install`s that archive
 (non-editable), and starts compose project `hermes-memory-installed` on
 `127.0.0.1:5452` / `hermes_memory_installed`. It refuses the dev stack
 (`127.0.0.1:5450/hermes_memory`) unless you pass `--reuse-dsn`. Then it
 sets `memory.provider=hybrid-age` and serves the inspector on
 `http://127.0.0.1:7890`.
+
+From a pip-installed copy there is no local `.git`. The installer then
+downloads the GitHub tarball. `--ref HEAD` still needs a checkout.
+
+### Hack on it (developer clone)
+
+Keep the working tree out of `$HOME/hermes-memory` — that path was the
+README side-effect of cloning from `~`. Prefer Documents:
+
+```bash
+git clone https://github.com/rubyrayjuntos/hermes-memory.git ~/Documents/hermes-memory
+cd ~/Documents/hermes-memory
+cp .env.example .env          # :5450 / hermes_memory — this directory only
+# Edit HERMES_PG_PASSWORD and the same password in HYBRID_AGE_DSN (replace ***).
+pip install -e '.[dev]'
+docker compose up -d          # dev stack on :5450
+# To install the pin from this checkout (uses git archive, not GitHub):
+PYTHONPATH=src python -m hermes_memory.install_cli
+```
 
 **Topology (do not mix):** clone / Documents work is `:5450` / `hermes_memory`.
 The install pin is `:5452` / `hermes_memory_installed`. Missing `HYBRID_AGE_DSN`
@@ -243,7 +264,7 @@ in committed yaml — they resolve from the env vars named by `dsn_env`/`embed_u
 | Variable | Required | Meaning |
 |----------|----------|---------|
 | `HERMES_PG_PASSWORD` | yes (compose) | Postgres password; compose refuses to start without it |
-| `HYBRID_AGE_DSN` | yes (provider) | e.g. `postgres://hermes:<pw>@localhost:5450/hermes_memory` |
+| `HYBRID_AGE_DSN` | yes (provider) | e.g. `postgres://hermes:<pw>@127.0.0.1:5452/hermes_memory_installed` (install) or `:5450/hermes_memory` (clone) |
 | `HYBRID_AGE_EMBED_URL` | no | Embeddings endpoint (default `http://localhost:11434/v1`) |
 | `HYBRID_AGE_EMBED_MODEL` | no | Overrides `embed_model` when yaml doesn't set it |
 | `HYBRID_AGE_GRAPH` | no | Overrides `graph` when yaml doesn't set it |
@@ -294,7 +315,7 @@ until re-tested.
 
 | Command | What it does |
 |---|---|
-| `hermes-memory-install` | Pin a git ref into `~/.hermes/plugins/hybrid-age` (copy + `.hermes-memory-version`), non-editable pip, installed DB on `:5452` / `hermes_memory_installed`, viz API `:7890`, verify. Does not attach to the `:5450` dev stack. |
+| `hermes-memory-install` | Pin a git ref into `~/.hermes/plugins/hybrid-age` (GitHub tarball when there is no checkout; `git archive` from a clone), non-editable pip, installed DB on `:5452` / `hermes_memory_installed`, viz API `:7890`, verify. Does not attach to the `:5450` dev stack. Does not copy `.env.example` into `$HOME`. |
 | `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
 | `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
 | `hermes-memory-uninstall` | Stop viz API, disable hybrid‑age, drop hermes_memory DB (unless `--keep-db`), remove plugin dirs, fall back to built‑in MEMORY.md/USER.md. |
