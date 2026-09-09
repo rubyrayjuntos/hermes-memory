@@ -697,10 +697,225 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             )
         return [dict(r) for r in rows]
 
+    async def conversations_neighbors(self, ids: Sequence[int]) -> dict[int, dict]:
+        """Prev/next span in the same session per turn id. Empty input → no round trip.
+
+        Ordering is (ts, id) within session — the same sequence the span fixture
+        uses. Returns {turn_id: {"prev": row|None, "next": row|None}} where each
+        row carries turn_id/content/role/ts. Pure SELECT, no writes.
+        """
+        wanted: list[int] = []
+        seen: set[int] = set()
+        for raw in ids or []:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n in seen:
+                continue
+            seen.add(n)
+            wanted.append(n)
+        if not wanted:
+            return {}
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH ordered AS (
+                  SELECT id, session_id, content, ts, role,
+                         LAG(id) OVER w AS prev_id,
+                         LEAD(id) OVER w AS next_id
+                    FROM conversations
+                   WHERE session_id IN (
+                         SELECT DISTINCT session_id FROM conversations
+                          WHERE id = ANY($1::bigint[])
+                         )
+                  WINDOW w AS (PARTITION BY session_id ORDER BY ts, id)
+                )
+                SELECT o.id AS turn_id, o.role AS self_role,
+                       p.id AS prev_id, p.role AS prev_role,
+                       p.content AS prev_content, p.ts AS prev_ts,
+                       n.id AS next_id, n.role AS next_role,
+                       n.content AS next_content, n.ts AS next_ts
+                  FROM ordered o
+                  LEFT JOIN conversations p ON p.id = o.prev_id
+                  LEFT JOIN conversations n ON n.id = o.next_id
+                 WHERE o.id = ANY($1::bigint[])
+                """,
+                wanted,
+            )
+        out: dict[int, dict] = {}
+        for r in rows:
+            d = dict(r)
+            tid = int(d["turn_id"])
+            prev = None
+            if d.get("prev_id") is not None:
+                prev = {
+                    "turn_id": int(d["prev_id"]),
+                    "role": d.get("prev_role"),
+                    "content": d.get("prev_content"),
+                    "ts": str(d.get("prev_ts")),
+                }
+            nxt = None
+            if d.get("next_id") is not None:
+                nxt = {
+                    "turn_id": int(d["next_id"]),
+                    "role": d.get("next_role"),
+                    "content": d.get("next_content"),
+                    "ts": str(d.get("next_ts")),
+                }
+            out[tid] = {"prev": prev, "next": nxt, "self_role": d.get("self_role")}
+        return out
+
     async def fetch_noun_labels(self) -> list[str]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT label FROM noun")
         return [r["label"] for r in rows]
+
+    # -- Reception: aliases, uptake, claims, retraction -----------------------
+    # Write path for the provenance-first contract. conversations rows are the
+    # spans; these methods only add overlay rows. All no-op safe pre-migration
+    # only in the sense that callers guard every call (tables come from V12).
+
+    async def previous_turn(
+        self, session_id: str, conv_id: int, *, role: str = "assistant"
+    ) -> dict | None:
+        """Latest in-session turn before conv_id with the given role (time order)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, content FROM conversations
+                 WHERE session_id = $1 AND role = $2
+                   AND (ts, id) < (SELECT ts, id FROM conversations WHERE id = $3)
+                 ORDER BY ts DESC, id DESC LIMIT 1
+                """,
+                session_id, role, int(conv_id),
+            )
+        return dict(row) if row is not None else None
+
+    async def insert_alias(self, surface_norm: str, canon_id: str, source: str) -> bool:
+        """Explicit-equation alias only. True if a new live mapping won."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO aliases (surface_norm, canon_id, source)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (surface_norm) WHERE valid = 'live' DO NOTHING
+                RETURNING alias_id
+                """,
+                surface_norm, canon_id, source,
+            )
+        return row is not None
+
+    async def insert_claims(self, span_id: int, claims: Sequence[dict]) -> list[int]:
+        """Insert user-span claims; inherit span uptake if already classified."""
+        if not claims:
+            return []
+        async with self.pool.acquire() as conn:
+            uptake = await conn.fetchval(
+                "SELECT value FROM uptakes WHERE prior_span_id = $1 LIMIT 1",
+                int(span_id),
+            )
+            ids: list[int] = []
+            for c in claims:
+                cid = await conn.fetchval(
+                    """
+                    INSERT INTO claims
+                        (span_id, subject, verb, object, polarity, act, uptake)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING claim_id
+                    """,
+                    int(span_id), c["subject"], c["verb"], c["object"],
+                    c.get("polarity", "positive"), c.get("act", "assert"),
+                    uptake or "unknown",
+                )
+                ids.append(int(cid))
+        return ids
+
+    async def write_uptake(
+        self, prior_span_id: int, next_span_id: int, value: str
+    ) -> None:
+        """Write reception once; copy onto the prior span's claims (no downgrade).
+
+        A later pass may only upgrade unknown → repaired, never the reverse
+        without a new user span.
+        """
+        async with self.pool.acquire() as conn:
+            inserted = await conn.fetchrow(
+                """
+                INSERT INTO uptakes (prior_span_id, next_span_id, value)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (prior_span_id, next_span_id) DO NOTHING
+                RETURNING uptake_id
+                """,
+                int(prior_span_id), int(next_span_id), value,
+            )
+            if inserted is None and value == "repaired":
+                await conn.execute(
+                    """UPDATE uptakes SET value = 'repaired'
+                        WHERE prior_span_id = $1 AND next_span_id = $2
+                          AND value = 'unknown'""",
+                    int(prior_span_id), int(next_span_id),
+                )
+            row = await conn.fetchrow(
+                """SELECT value FROM uptakes
+                    WHERE prior_span_id = $1 AND next_span_id = $2""",
+                int(prior_span_id), int(next_span_id),
+            )
+            if row is not None:
+                await conn.execute(
+                    """UPDATE claims SET uptake = $1
+                        WHERE span_id = $2 AND uptake = 'unknown'""",
+                    row["value"], int(prior_span_id),
+                )
+
+    async def retract_on_repair(
+        self, prior_span_id: int, next_span_id: int,
+        next_text: str, new_claims: Sequence[dict],
+    ) -> int:
+        """Retract live claims contradicted by a repaired user turn. Returns count.
+
+        Polarity-opposite match on normalized (subject, verb, object), excluding
+        the repairing span itself. Deictic repairs with no new assertion retract
+        the prior span's live claims with a NULL superseder. Never deletes.
+        """
+        from .reception import is_deictic_repair
+
+        retracted = 0
+        async with self.pool.acquire() as conn:
+            if new_claims:
+                for c in new_claims:
+                    if c.get("act") != "assert" or not c.get("claim_id"):
+                        continue
+                    res = await conn.execute(
+                        """
+                        UPDATE claims SET valid = 'retracted', superseded_by = $6
+                         WHERE valid = 'live' AND span_id <> $4
+                           AND lower(verb) = lower($2)
+                           AND regexp_replace(lower(subject), '[^a-z0-9 ]', '', 'g') =
+                               regexp_replace(lower($1), '[^a-z0-9 ]', '', 'g')
+                           AND regexp_replace(lower(object), '[^a-z0-9 ]', '', 'g') =
+                               regexp_replace(lower($3), '[^a-z0-9 ]', '', 'g')
+                           AND polarity <> $5
+                        """,
+                        c["subject"], c["verb"], c["object"],
+                        int(next_span_id), c.get("polarity", "positive"),
+                        int(c["claim_id"]),
+                    )
+                    try:
+                        retracted += int(str(res).split()[-1])
+                    except (ValueError, IndexError):
+                        pass
+            elif is_deictic_repair(next_text):
+                res = await conn.execute(
+                    """UPDATE claims SET valid = 'retracted'
+                        WHERE span_id = $1 AND valid = 'live'""",
+                    int(prior_span_id),
+                )
+                try:
+                    retracted += int(str(res).split()[-1])
+                except (ValueError, IndexError):
+                    pass
+        return retracted
 
     async def ensure_flower_labels(self) -> None:
         """Session / Turn / NEXT / IN_SESSION only. No Concept or ABOUT."""

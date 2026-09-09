@@ -121,7 +121,8 @@ async def test_prefetch_omits_debug_dsl_from_prompt() -> None:
     block = await provider._aprefetch("postgres")
 
     assert "Postgres catalog" in block
-    assert "<PAST_CONTEXT>" in block
+    assert "<memory>" in block
+    assert 'speaker="doc"' in block
     assert "persisted 7 turns · 5 nouns · 3 mentions" not in block
     assert "ABOUT" not in block
     assert "[SEED V" not in block
@@ -185,6 +186,19 @@ async def test_prefetch_injects_provenance_turn_body_not_cypher() -> None:
                 "ts": "2026-09-02T17:00:00+00:00",
             }]
 
+        async def conversations_neighbors(self, ids):
+            assert [int(i) for i in ids] == [41]
+            return {41: {
+                "prev": None,
+                "next": {
+                    "turn_id": 99,
+                    "role": "user",
+                    "content": "You wrote RECAP-2026-09-02-hermes-memory.md as a handoff.",
+                    "ts": "2026-09-02T17:00:00+00:00",
+                },
+                "self_role": "assistant",
+            }}
+
     class Embedder:
         async def embed_text(self, _text):
             return [1.0, 0.0]
@@ -202,10 +216,12 @@ async def test_prefetch_injects_provenance_turn_body_not_cypher() -> None:
 
     assert "seed turn about hybrid memory" in block
     assert "You wrote RECAP-2026-09-02-hermes-memory.md as a handoff." in block
-    assert "<PAST_CONTEXT>" in block
+    assert "<memory>" in block
+    assert 'neighbor="true"' in block
     assert "-mentions->" not in block
     assert "w=5.80" not in block
     assert "[SEED V" not in block
+    assert "previously linked" not in block
 
 
 def test_initialize_failed_ainit_leaves_uninitialized() -> None:

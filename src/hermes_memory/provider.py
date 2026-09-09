@@ -41,6 +41,7 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
 )
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config
 from .embed import Embedder, vec_to_literal
+from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
 from .session_kind import classify_session_kind
 from .store import Store, clamp_hnsw_ef_search
@@ -433,6 +434,54 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 item["_ledger_failed"] = True
                 logger.warning("memory write failed", exc_info=True)
 
+    async def _reception_stage(
+        self, store: ReceptionStore, conv_id: int, session_id: str, role: str, content: str
+    ) -> None:
+        """Alias-on-write, user-span claims, uptake, and repair retraction.
+
+        Never raises (caller guards too). Assistant spans yield no claims and
+        no aliases: model speech stays unconfirmed until uptake says otherwise.
+        """
+        from .reception import (
+            classify_repair,
+            extract_alias_equations,
+            extract_assertions,
+        )
+
+        if role != "user" or not (content or "").strip():
+            return
+        for surface, canon in extract_alias_equations(content):
+            try:
+                await store.insert_alias(surface, canon, "user_span")
+            except Exception:
+                logger.warning("alias write failed", exc_info=True)
+        new_claims: list[dict] = []
+        try:
+            parsed = extract_assertions(content)
+            if parsed:
+                ids = await store.insert_claims(conv_id, parsed)
+                for claim, cid in zip(parsed, ids):
+                    claim["claim_id"] = cid
+                new_claims = parsed
+        except Exception:
+            logger.warning("claim insert failed", exc_info=True)
+        try:
+            prior = await store.previous_turn(session_id, conv_id, role="assistant")
+        except Exception:
+            logger.warning("previous turn lookup failed", exc_info=True)
+            return
+        if prior is None:
+            return
+        verdict = classify_repair(str(prior.get("content") or ""), content)
+        try:
+            await store.write_uptake(int(prior["id"]), conv_id, verdict)
+            if verdict == "repaired":
+                await store.retract_on_repair(
+                    int(prior["id"]), conv_id, content, new_claims
+                )
+        except Exception:
+            logger.warning("uptake/retract failed", exc_info=True)
+
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
         from .extract_nouns import extract_nouns
@@ -503,6 +552,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
             int(conv_id),
             Kind.EMBED_NULL.value if vec is None else DRAIN_COMPLETE,
         )
+
+        # Reception stage (spans/claims/uptake): never raises, never blocks drain.
+        try:
+            await self._reception_stage(
+                store, int(conv_id), session_id, item.get("role") or "user", content
+            )
+        except Exception:
+            logger.warning("reception stage failed", exc_info=True)
 
         vertex_id = None
         try:
@@ -733,7 +790,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("prefetch timeout query=%r", query[:80])
             return ""
 
-        from .provider_helpers import format_injection
+        from .provider_helpers import format_injection, format_span_injection
 
         seed_turn_ids: set[int] = set()
         for s in kept_seeds:
@@ -804,6 +861,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 turn_id = int(raw_id)
             seed_payload.append({
                 "score": s["similarity"],
+                "src": s.get("src"),
+                "id": s.get("id"),
                 "content": (s.get("content") or "").strip(),
                 "paths": attached[:3],
                 "session_id": s.get("session_id"),
@@ -817,7 +876,46 @@ class HybridAgeMemoryProvider(MemoryProvider):
         seed_payload.sort(key=lambda x: x["score"], reverse=True)
         selected = self._budget_seeds(seed_payload)
         self._last_recall_count = len(selected)
-        block = format_injection(selected)
+        # Provenance-first packing: speaker + ±1 neighbor per hit, two bins.
+        # Neighbors are packed context (never embedded); uptake stays unknown
+        # until the classifier runs. Revert to format_injection(selected) below
+        # to restore seed+path rendering.
+        from collections.abc import Awaitable, Callable
+
+        neighbor_fetcher: Callable[[list], Awaitable[dict]] | None = getattr(
+            self.store, "conversations_neighbors", None
+        )
+        neighbor_map: dict = {}
+        if selected and callable(neighbor_fetcher):
+            try:
+                hit_turn_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
+                neighbor_map = await neighbor_fetcher(hit_turn_ids)
+            except Exception:
+                logger.exception("neighbor fetch failed")
+                neighbor_map = {}
+        for s in selected:
+            if s.get("src") in ("doc_chunk", "memory_entry"):
+                s["role"] = "doc"
+                continue
+            nb = neighbor_map.get(s.get("turn_id")) or {}
+            if nb.get("self_role"):
+                s["role"] = nb["self_role"]
+            for key in ("prev", "next"):
+                row = nb.get(key) or {}
+                body = str(row.get("content") or "")
+                if not body.strip() or SECRET_RE.search(body):
+                    continue
+                s[key] = {
+                    "turn_id": row.get("turn_id"),
+                    "role": row.get("role"),
+                    "content": body,
+                    "ts": row.get("ts"),
+                }
+        from .tokens import injection_token_cap
+
+        block = format_span_injection(
+            selected, token_budget=injection_token_cap(self.config.max_tokens)
+        )
         if not (block or "").strip():
             logger.info("prefetch empty recall")
         graph_n = sum(len(s.get("paths") or []) for s in selected)

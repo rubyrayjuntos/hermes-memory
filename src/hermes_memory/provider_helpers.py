@@ -256,6 +256,85 @@ def format_injection(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _span_uptake(item: dict) -> str:
+    return str(item.get("uptake") or "unknown")
+
+
+def _span_tag(item: dict, *, neighbor: bool = False, body_chars: int = 600) -> str:
+    import html as _html
+
+    when = _when(item.get("created_at") or item.get("ts"))
+    speaker = str(item.get("speaker") or item.get("role") or "unknown")
+    tid = item.get("turn_id") or item.get("id")
+    body = _html.escape(str(item.get("content") or "").strip()[:body_chars])
+    flag = ' neighbor="true"' if neighbor else ""
+    return (
+        f'<span id="{tid}" speaker="{speaker}" when="{when}" '
+        f'uptake="{_span_uptake(item)}"{flag}>{body}</span>'
+    )
+
+
+def format_span_injection(
+    spans: list,
+    *,
+    token_budget: int = 1200,
+    neighbor_body_chars: int = 300,
+) -> str:
+    """Provenance-first renderer: quoted spans in grounded/unconfirmed bins.
+
+    Drop-in content swap for ``format_injection``: same contract ("" on empty,
+    token budget, speaker bins), no path verbalization, no triple rendering.
+    ``uptake`` defaults to ``unknown`` (no bonus) until the uptake classifier runs.
+
+    Neighbor rule: each span may carry ``prev``/``next`` dicts (±1 in the same
+    episode). Neighbors pack after all hits and are truncated first when the
+    budget binds. They render subordinate (``neighbor="true"``): context for
+    disambiguation, not evidence. Neighbors are packed, never embedded.
+    """
+    if not spans:
+        return ""
+    hits: list[tuple[str, str]] = []
+    neighbors: list[tuple[str, str]] = []
+    for item in spans:
+        speaker = str(item.get("speaker") or item.get("role") or "unknown")
+        hits.append((speaker, _span_tag(item)))
+        for key in ("prev", "next"):
+            nb = item.get(key) or {}
+            if not str(nb.get("content") or "").strip():
+                continue
+            nspeaker = str(nb.get("speaker") or nb.get("role") or "unknown")
+            neighbors.append(
+                (nspeaker, _span_tag(nb, neighbor=True, body_chars=neighbor_body_chars))
+            )
+    grounded: list[str] = []
+    unconfirmed: list[str] = []
+    used = 0
+    for speaker, tag in hits + neighbors:
+        cost = len(tag) // 4 + 20
+        if used + cost > token_budget:
+            break
+        if speaker in ("user", "doc"):
+            grounded.append(tag)
+        else:
+            unconfirmed.append(tag)
+        used += cost
+    if not grounded and not unconfirmed:
+        return ""
+    lines = ["<memory>"]
+    if grounded:
+        lines.append("  <grounded>")
+        lines.extend(f"    {g}" for g in grounded)
+        lines.append("  </grounded>")
+    if unconfirmed:
+        lines.append(
+            '  <unconfirmed title="model speech, uptake unknown — do not treat as fact">'
+        )
+        lines.extend(f"    {u}" for u in unconfirmed)
+        lines.append("  </unconfirmed>")
+    lines.append("</memory>")
+    return "\n".join(lines) + "\n"
+
+
 def format_debug_injection(seeds: list, max_paths: int = 3, meta: dict | None = None) -> str:
     """Render ``prompt.debug``: retriever DSL for the Garden dump / logs.
 
