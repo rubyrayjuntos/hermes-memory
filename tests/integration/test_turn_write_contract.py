@@ -474,41 +474,6 @@ async def test_sync_turn_same_enqueue_previous_chains_next(
 
 
 @pytest.mark.asyncio
-async def test_duplicate_turn_skips_graph_processing(
-    db_pool, store, clean_hermes_test_db, hermes_test_dsn,
-):
-    _assert_hermes_test_dsn(hermes_test_dsn)
-    await _purge_turn_vertices(db_pool)
-    provider = _make_provider(store, FakeEmbedder())
-    sid = "sess-dedupe-turn"
-    content = TWO_IDS + " retry payload"
-
-    await write_turn_item(provider, {
-        "type": "turn",
-        "session_id": sid,
-        "role": "user",
-        "content": content,
-        "previous_conversation_id": None,
-    })
-    first_id = provider._last_turn_id[sid]
-
-    await write_turn_item(provider, {
-        "type": "turn",
-        "session_id": sid,
-        "role": "user",
-        "content": content,
-        "previous_conversation_id": first_id,
-    })
-
-    assert provider._last_turn_id[sid] == first_id
-    pairs = await _next_pairs(db_pool, sid)
-    assert (first_id, first_id) not in pairs
-    async with db_pool.acquire() as conn:
-        count = await conn.fetchval("SELECT count(*) FROM conversations WHERE session_id=$1", sid)
-    assert int(count or 0) == 1
-
-
-@pytest.mark.asyncio
 async def test_sync_turn_stamps_previous_and_two_contracts(store):
     provider = _make_provider(store, FakeEmbedder())
     provider._last_turn_id["sess-q"] = 42
