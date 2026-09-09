@@ -355,7 +355,6 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         (crashed-and-retried drain, double-delivered sync_turn). A user
         repeating a sentence next week is a NEW span — the window is what
         separates a retry from a re-utterance. History is grandfathered:
-        History is grandfathered:
         pre-existing duplicates stay as-is. Below 80 chars the lookup is
         skipped entirely: short acknowledgements are always new spans.
         """
