@@ -34,9 +34,13 @@ def test_repair_cues_tight():
     assert classify_repair("a", "No, I meant the Tokyo Eye rig") == "repaired"
     assert classify_repair("a", "that's wrong, not that one") == "repaired"
     assert classify_repair("a", "you don't have to keep saying masterclass") == "repaired"
+    assert classify_repair("a", "Don't frame it that way") == "repaired"
     assert classify_repair("a", "yes, make sure the repair is in the repo") == "unknown"
     assert classify_repair("a", "no problem, looks good") == "unknown"
     assert classify_repair("a", "I know kung fu") == "unknown"
+    assert classify_repair("a", "Don't worry about it") == "unknown"
+    assert classify_repair("a", "I don't know yet") == "unknown"
+    assert classify_repair("a", "It doesn't matter") == "unknown"
     assert classify_repair("a", "let's apply first to HPC S2S") == "unknown"
 
 
@@ -56,3 +60,13 @@ def test_assertions_boring_only():
     assert extract_assertions("the sun peaked through the clouds") == []
     # No supported verb → no claim, even with entities present.
     assert extract_assertions("Tokyo Eye shares MLflow gates with the factory") == []
+    # Negated object → span only, never a positive claim.
+    assert extract_assertions("Tokyo Eye is not a guidance bus.") == []
+    # Generic/deictic subjects → span only (Title-Case noun bug, smaller).
+    assert extract_assertions("Pipeline is green.") == []
+    assert extract_assertions("This factory uses MLflow.") == []
+    # Real names still pass.
+    assert extract_assertions("Deloitte uses Azure.") == [{
+        "subject": "Deloitte", "verb": "uses", "object": "Azure",
+        "polarity": "positive", "act": "assert",
+    }]

@@ -30,6 +30,8 @@ class ReceptionStore(Protocol):
         self, prior_span_id: int, next_span_id: int,
         next_text: str, new_claims: Sequence[dict],
     ) -> int: ...
+    async def stamp_claims_status(self, conv_id: int, status: str) -> None: ...
+    async def fetch_pending_reception(self, limit: int) -> list[dict]: ...
 
 # Tight repair cues. Deliberately NOT \\bno\\b: it fires on "no problem",
 # "I know", "innovation". A leading "no" (the correction position) counts.
@@ -43,7 +45,17 @@ _REPAIR_RES = [
     # Leading "no" counts only in correction position: bare "No." or "No, ...".
     # "no problem" / "I know" must not fire (the \bno\b hazard).
     re.compile(r"^\s*no\b(?=\s*[,.:;]|$)", re.IGNORECASE),
-    re.compile(r"(?i)\bdon'?t\b"),  # "don't frame it that way" rejects manner, not topic
+]
+
+# "don't" fires ONLY on manner/correction uses ("don't keep saying X",
+# "don't frame it that way"). Bare "don't worry" / "don't know" / "doesn't
+# matter" abstain — otherwise every casual negative stamps repaired and the
+# retractor eats the prior span (the don't-cannon hazard).
+_MANNER_RES = [
+    re.compile(
+        r"(?i)\bdon'?t\b.{0,48}\b(say|saying|said|calls?|calling|"
+        r"frame|framing|phras\w*|describ\w*|word\w*|tone|manner)\b"
+    ),
 ]
 
 # Deictic repair with no new assertion: "no, not that" points at the prior
@@ -60,8 +72,20 @@ _ALIAS_RES = [
     re.compile(r"(.{2,60}?)\s+aka\s+(.{2,60})", re.IGNORECASE),
 ]
 
-# Boringly explicit assertions only: "<Entity> is <something>" / "<Entity> uses <something>".
-# Subject must look like a name (starts uppercase); the verb must be on the surface.
+# Claim subjects must be name-like. Pronouns, deictics, and generic process
+# nouns ("Pipeline is green" from pasted logs) never name an entity — minting
+# them repeats the Title-Case noun bug at smaller blast radius.
+_STOP_FIRST = frozenset({
+    "it", "they", "he", "she", "we", "you", "i",
+    "this", "that", "these", "those", "the", "a", "an",
+    "here", "there", "what", "which", "who", "how", "when", "where", "why",
+    "pipeline", "want", "got", "per", "one", "all", "both", "with", "from",
+})
+
+# A negated object ("is not a guidance bus") must never become a positive
+# claim. Negation is span-only until explicit polarity extraction lands;
+# corrections travel through the repair-cue path instead.
+_NEGATION = re.compile(r"^(not|no|never|neither)\b", re.IGNORECASE)
 _ASSERTION_RES = [
     ("is", re.compile(r"\b([A-Z][\w\-]+(?:\s+[A-Z][\w\-]+){0,3})\s+is\s+([^.\n]{2,120})")),
     ("uses", re.compile(r"\b([A-Z][\w\-]+(?:\s+[A-Z][\w\-]+){0,3})\s+uses\s+([^.\n]{2,120})")),
@@ -102,6 +126,9 @@ def classify_repair(prior_text: str, next_text: str) -> str:
     for rx in _REPAIR_RES:
         if rx.search(nxt):
             return "repaired"
+    for rx in _MANNER_RES:
+        if rx.search(nxt):
+            return "repaired"
     return "unknown"
 
 
@@ -121,8 +148,13 @@ def extract_assertions(text: str) -> list[dict]:
         for m in rx.finditer(text or ""):
             subject = m.group(1).strip()
             obj = m.group(2).strip().rstrip(".")
-            if subject and obj:
-                out.append({
+            if not subject or not obj:
+                continue
+            if subject.split()[0].lower() in _STOP_FIRST:
+                continue
+            if _NEGATION.match(obj):
+                continue
+            out.append({
                     "subject": subject,
                     "verb": verb,
                     "object": obj,
