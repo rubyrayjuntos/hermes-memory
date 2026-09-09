@@ -560,10 +560,11 @@ class HybridAgeMemoryProvider(MemoryProvider):
         vec_literal = vec_to_literal(vec) if vec else None
 
         try:
-            conv_id = await store.insert_turn(
+            inserted_turn = await store.insert_turn(
                 session_id, self._agent_identity,
                 item.get("role") or "user", content, vec_literal,
                 metadata={"kind": classify_session_kind(session_id)},
+                include_inserted=True,
             )
         except Exception as exc:
             if _is_missing_embed_version_schema(exc):
@@ -584,7 +585,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             )
             item["_ledger_failed"] = True
             return
-        if conv_id is None:
+        if inserted_turn is None:
             LEDGER.record(
                 WriteOutcome(
                     Stage.SQL_TURN,
@@ -594,6 +595,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 )
             )
             item["_ledger_failed"] = True
+            return
+        if isinstance(inserted_turn, tuple):
+            conv_id, inserted_new = inserted_turn
+        else:
+            conv_id, inserted_new = int(inserted_turn), True
+        if not inserted_new:
             return
         self._last_turn_id[session_id] = int(conv_id)
         degraded = False
