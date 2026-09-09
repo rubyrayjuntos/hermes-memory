@@ -23,7 +23,7 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 |--------|----------------|
 | Unofficial `hybrid-age` **MemoryProvider** (one slot, additive) | Official Nous plugin or in-tree `hermes memory setup` pick |
 | Local Postgres + pgvector recall **and** Apache AGE walks | Hosted / multi-tenant memory service |
-| Prefetch injects dated `<PAST_CONTEXT>` notes (Fountain pane is retriever debug, not the prompt) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
+| Prefetch injects quoted spans in a fenced `<memory>` block (`<grounded>` = user/doc speech, `<unconfirmed>` = model speech pending uptake; Fountain pane is retriever debug, not the prompt) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
 | Turn extract → ordered Nouns + `mentions`; ingest for code | Automatic Obsidian vault recall |
 | `hermes-memory-install` / `verify` / `upgrade` / `uninstall` | Coverage under `hermes backup` (export Postgres yourself) |
 | Loopback only (`127.0.0.1:5450` and `:7890`) | Drop-in for every gateway/wrapper without the CLI |

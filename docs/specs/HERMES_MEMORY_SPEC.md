@@ -137,7 +137,7 @@ Synchronous. Never raises. Does the FULL retrieve — there is no cache.
     ├─► vector_search: vector_k=12, drop similarity < 0.55, drop SECRET_RE
     ├─► Graph expansion via beam_score (walk.py)
     ├─► Budget ≤1200 tokens
-    └─► format_injection → fenced <PAST_CONTEXT> block
+    └─► format_span_injection → fenced <memory> block (grounded / unconfirmed)
 ```
 
 - `queue_prefetch` and any pre-warmed cache are **not in the tree**.
@@ -193,6 +193,30 @@ inside `<PAST_CONTEXT>`, and `_HIGH_RELEVANCE = 0.65` used only to pick the qual
 labels `high relevance` vs `related` (`_relevance_word` only). Grep: that constant is not
 read by Fountain, debug injection, or any second meaning. That 0.65 is **not** the PDF
 notice. Timeout and exception still return `""` with no notice. See §6.
+
+### Provenance-first packing (wip/span-pack-reception, pending merge)
+
+`format_injection` (seeds + verbalized `"You previously linked …"` path notes) is
+superseded at the prefetch call site by `format_span_injection`
+(`provider_helpers.py`): the same contract (`""` on empty, token budget,
+SECRET filtering, similarity door) with different contents — quoted conversation
+spans in two bins. `<grounded>` holds user/doc speech; `<unconfirmed>` holds
+assistant speech whose uptake is still `unknown`, labeled as model speculation.
+No triples, no hop verbalization, no `[SEED V…]` labels in the prompt.
+
+Each hit packs ±1 same-episode neighbor (`conversations_neighbors`, LAG/LEAD
+over `(ts, id)`), rendered subordinate (`neighbor="true"`), truncated before
+hits when the budget binds. Neighbors are packed, never embedded or extracted —
+the span stays the only stored atom.
+
+Write side (`V12__span_claims_uptake.sql`, guarded reception stage in the drain):
+aliases from explicit equations/normalization only (partial-unique live mapping);
+claims from user spans for boringly explicit `is`/`uses` patterns only
+(assistant spans yield none); uptake `repaired|unknown` on assistant→user pairs
+(`unknown` until labeled thresholds land); polarity-opposite and deictic
+retraction via `valid=retracted + superseded_by`, never delete. Expansion is
+restricted to `valid='live'` when claim-aware recall lands; current recall reads
+spans only.
 
 ---
 

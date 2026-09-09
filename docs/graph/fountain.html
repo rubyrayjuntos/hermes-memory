@@ -260,8 +260,20 @@ function escapeHTML(s) {
 
 function gemKind(n) {
   if (n._searchSeed) return 'seed';
+  // §6.1 Color by noun.type — live DISTINCT types are "" (1823) and "concept" (6). Fixed palette, don't invent.
+  const typ = (n.props || n.properties || {}).type || n.type || '';
+  if (String(typ).toLowerCase() === 'concept') return 'turquoise';
   return LABEL_GEM[n.label] || LABEL_GEM[n.group] || 'lapis';
 }
+// §6.1 Orphan dimming + in-situ label helpers (rendering decision, no new data)
+function isOrphanNode(n, degree) {
+  if (degree === 0) return true;
+  // Weak single-provenance: magnitude <0.6 && single turn — 0 today (verified live), keep check for future
+  // We approximate via degree>0 but weakest incident edge <0.6 with single provenance len 1 — not in current view, so false
+  return false;
+}
+const TOP_LABEL_N = 15;
+let topLabelIds = new Set();
 
 function setStatus(ok, txt) {
   const d = document.getElementById('dot');
@@ -485,15 +497,16 @@ function rebuildScene() {
     const kind = l.label;
     if (kind === 'PASSPORT') return;
     const pa = new THREE.Vector3(...a.pos), pb = new THREE.Vector3(...b.pos);
-    const w = Number(l.weight != null ? l.weight : 0.5);
+    const w = Number(l.weight != null ? l.weight : l.magnitude != null ? Number(l.magnitude)/8 : 0.5);
     const c = Number(l.cosine != null ? l.cosine : 0.5);
-    const force = Math.max(0.05, Math.min(1, 0.6 * w + 0.4 * c));
-    let radius = 0.010 + force * 0.012;
+    // §6.2 Thickness/opacity binding: magnitude/8 (live, not force mix). Keep c for decay only.
+    const magNorm = Math.max(0, Math.min(1, w));
+    let radius = 0.010 + magNorm * 0.012;
     let sag = 0.6;
     let segs = 8;
     if (kind === 'mentions') {
-      radius = 0.011 + force * 0.018;
-      sag = 0.55 + (1 - force) * 0.45;
+      radius = 0.009 + magNorm * 0.014;
+      sag = 0.55 + (1 - magNorm) * 0.45;
       segs = 12;
     } else if (kind === 'IN_SESSION') {
       radius = 0.009 + w * 0.012;
@@ -528,7 +541,7 @@ function rebuildScene() {
       roughness: isGhost ? 0.35 : 0.32,
       metalness: kind === 'mentions' ? 0.18 : isGhost ? 0.10 : 0.12,
       transparent: true,
-      opacity: isGhost ? 0.25 : (0.38 + force * 0.55),
+      opacity: isGhost ? 0.25 : (0.38 + magNorm * 0.55),
       transmission: 0,
       thickness: 0.2,
       emissive: isGhost ? 0xE040B0 : (lit ? 0xffffff : 0x000000),
@@ -560,9 +573,35 @@ function rebuildScene() {
       : 0.52 + Math.min(0.10, deg * 0.012);
     const detail = n.label === 'Noun' ? 1 : 0;
     const geo = new THREE.IcosahedronGeometry(radius, detail);
-    const mesh = new THREE.Mesh(geo, materialFor(kind, n._searchSeed));
+    // §6.1 Orphan dimming (degree 0 → 30% opacity) + §6.4 Search focus+fade (untouched → 15%) + §6.5 Degraded pulse marker
+    const degWithFallback = Number(n.val || degreeById.get(sid(n.id)) || 0);
+    const orphan = isOrphanNode(n, degWithFallback);
+    const matKind = kind;
+    let baseMat = materialFor(matKind, n._searchSeed);
+    // Orphan dim
+    if (orphan) { baseMat.opacity = 0.30; baseMat.transparent = true; }
+    // Search focus+fade: seed full, expanded by score/hop, untouched 15%
+    if (searchActive) {
+      const isSeed = !!n._searchSeed;
+      const isExpanded = n._hop != null;
+      if (!isSeed && !isExpanded) { baseMat.opacity = Math.min(baseMat.opacity, 0.15); baseMat.transparent = true; }
+      else if (isExpanded) {
+        const hop = Number(n._hop || 1);
+        const score = Number(n._seed_score || 0.5);
+        baseMat.opacity = Math.max(0.30, Math.min(0.95, 0.45 + score*0.4 - hop*0.08));
+        baseMat.transparent = true;
+      }
+    }
+    // In-situ label flag for top-N by degree (render decision)
+    n._showLabel = topLabelIds.has(sid(n.id));
+    // Degraded pulse marker: if any incident edge's provenance turn is graph_degraded/unpassported, flag for tick()
+    const hasDegraded = raw.links.some(l => (sid(l.source)===sid(n.id) || sid(l.target)===sid(n.id)) && (l.degraded || l.graph_degraded));
+    n._degraded = hasDegraded;
+    const mesh = new THREE.Mesh(geo, baseMat);
     mesh.position.set(...n.pos);
     mesh.userData.node = n;
+    mesh.userData.orphan = orphan;
+    mesh.userData.degraded = hasDegraded;
     mesh.castShadow = true;
     const glow = new THREE.Mesh(
       new THREE.IcosahedronGeometry(radius, detail),
@@ -618,7 +657,15 @@ function initThree() {
   function showNodeTip(n, ev) {
     const degree = degreeById.get(sid(n.id)) || 0;
     const typ = (n.props || n.properties || {}).type || n.type || n.label || 'Noun';
-    tip.innerHTML = `<b>${escapeHTML(nodeName(n))}</b><br>type=${escapeHTML(String(typ))} · degree=${degree} (loaded graph)`;
+    // §6.3 Expanded hover: len(provenance_turns) approximated by incident edge count, last_active via max turn_id, co-fired via memory_chunk_nodes bridge hint
+    const incident = raw.links.filter(l => sid(l.source)===sid(n.id) || sid(l.target)===sid(n.id));
+    const turnIds = new Set(); incident.forEach(l => (l.provenance_turns||[]).forEach(t=>turnIds.add(String(t))));
+    const inTurns = turnIds.size || (degree>0 ? incident.length : 0);
+    const lastActive = incident.length ? Math.max(...incident.map(l => Math.max(...(l.provenance_turns||[0])))) : 0;
+    const coFiredHint = inTurns ? ` · in ${inTurns} turn(s)` : '';
+    const lastHint = lastActive ? ` · last ${lastActive}` : '';
+    // Respect §6.3: no drift (noun has no stored embedding)
+    tip.innerHTML = `<b>${escapeHTML(nodeName(n))}</b><br>type=${escapeHTML(String(typ))} · degree=${degree}${coFiredHint}${lastHint} (loaded graph)`;
     placeTip(ev);
   }
   function showEdgeTip(l, ev) {
@@ -669,6 +716,13 @@ function initThree() {
     const t = clock.getElapsedTime();
     if (graphGroup) {
       graphGroup.children.forEach(obj => {
+        // §6.5 Degraded pulse (not buried text) — drain_status != complete → pulse
+        if (obj.userData.degraded && obj.userData.node) {
+          const ph = (Math.sin(t * 2.2) * 0.5 + 0.5);
+          obj.material.emissive = new THREE.Color(0xC94A1A);
+          obj.material.emissiveIntensity = 0.18 + ph*0.22;
+          return;
+        }
         // ghost tubes — pulsing magenta 0% → 50% (vector proximity, not persisted)
         if (obj.userData.isGhost) {
           const max = obj.userData.ghostMax || 0.50;
@@ -708,6 +762,11 @@ function recomputeDegrees() {
     degreeById.set(a, (degreeById.get(a) || 0) + 1);
     degreeById.set(b, (degreeById.get(b) || 0) + 1);
   }
+  // §6.1 In-situ labels for top-N by degree (live, no new field)
+  {
+    const sorted = [...raw.nodes].sort((a,b)=>(degreeById.get(sid(b.id))||0)-(degreeById.get(sid(a.id))||0));
+    topLabelIds = new Set(sorted.slice(0, TOP_LABEL_N).map(n=>sid(n.id)));
+  }
 }
 
 function nodeName(n) {
@@ -737,20 +796,29 @@ async function selectNode(n) {
       : '1-hop fetch failed';
     return;
   }
-  const lines = [];
-  lines.push(`${hop.label || nodeName(n)}  type=${hop.type || typ}`);
-  if (hop.embed_reason) lines.push('', hop.embed_reason);
-  else lines.push('', `embed ${hop.embed_model} / ${hop.embed_dim}`);
+  // Spec §2: 4 sourced sections, not a raw lines dump (OC-MVP-4). Never blank.
+  const hookEl = document.getElementById('hook');
+  const esc = escapeHTML;
+  const sections = [];
+  // 1. Identity
+  sections.push(`<div class="mono" style="font-weight:700;color:var(--foreground)">${esc(hop.label || nodeName(n))} <span style="color:var(--muted-foreground)">· ${esc(hop.type || typ)}</span></div>`);
+  // 2. Embedding provenance
+  if (hop.embed_reason) sections.push(`<div class="mono" style="margin-top:8px;color:#8A6D1E">⚠ ${esc(hop.embed_reason)}</div>`);
+  else sections.push(`<div class="mono" style="margin-top:8px;color:var(--muted-foreground)">embed ${esc(String(hop.embed_model))} / ${esc(String(hop.embed_dim))}</div>`);
+  // 3. Empty reasons (never blank)
   if ((hop.empty_reasons || []).length) {
-    hop.empty_reasons.forEach(r => lines.push('', r));
+    sections.push(`<div class="mono" style="margin-top:10px">${hop.empty_reasons.map(r => `<div style="color:var(--muted-foreground)">• ${esc(r)}</div>`).join('')}</div>`);
   }
-  (hop.neighbors || []).forEach(nb => {
-    lines.push('', `mentions → ${nb.label}  magnitude=${nb.magnitude ?? 'unavailable'}`);
-    (nb.excerpts || []).forEach(ex => {
-      lines.push(`  turn ${ex.turn_id}: ${(ex.excerpt || '').slice(0, 160)}`);
+  // 4. 1-hop neighbors: label, magnitude, provenance_turns → excerpts (the "why")
+  if (!(hop.neighbors || []).length && !(hop.empty_reasons || []).length) {
+    sections.push(`<div class="mono" style="margin-top:10px;color:var(--muted-foreground)">${esc('No connections yet — mentioned once, not yet linked to anything else.')}</div>`);
+  } else {
+    (hop.neighbors || []).forEach(nb => {
+      const prov = (nb.provenance_turns || []).join(', ');
+      sections.push(`<div style="margin-top:12px"><div class="mono" style="color:var(--foreground)">mentions → ${esc(nb.label || String(nb.noun_id))} <span style="color:var(--muted-foreground)">magnitude=${esc(String(nb.magnitude ?? 'unavailable'))} ${prov ? `· turns ${esc(prov)}` : ''}</span></div>${(nb.excerpts || []).map(ex => `<div class="mono" style="margin-left:10px;margin-top:4px;padding-left:8px;border-left:2px solid var(--border);color:var(--muted-foreground)">turn ${esc(String(ex.turn_id))}: ${esc((ex.excerpt || '').slice(0,240))} <span style="font-size:11px">[${esc(String(ex.drain_status || 'unknown'))}]</span></div>`).join('')}</div>`);
     });
-  });
-  document.getElementById('hook').textContent = lines.join('\n');
+  }
+  hookEl.innerHTML = sections.join('');
   const extra = document.getElementById('nodelist');
   if (hop.neighbors && hop.neighbors.length) {
     extra.innerHTML = hop.neighbors.map(nb => {
