@@ -26,3 +26,22 @@ except ImportError:  # pragma: no cover
 
 def injection_token_cap(max_tokens: int, hard_cap: int = INJECTION_HARD_CAP) -> int:
     return max(1, int(min(int(max_tokens), int(hard_cap)) * TOKENIZER_SLACK))
+
+
+# Query-side window for ANN. Stored turns embed whole-text, so the query must
+# see a comparable window: truncating the enriched query by tokens (not a
+# magic char count) keeps both sides in the same geometry. 2048 sits well
+# inside nomic-embed-text's 8192-token window and covers multi-turn enrichment.
+QUERY_TOKEN_CAP = 2048
+
+
+def truncate_tokens(text: str, max_tokens: int) -> str:
+    """Short passthrough; long text cut to max_tokens (cl100k approx)."""
+    text = text or ""
+    if count_tokens(text) <= max_tokens:
+        return text
+    try:
+        toks = _ENC.encode(text)[:max_tokens]
+        return _ENC.decode(toks)
+    except NameError:  # no tiktoken: char fallback mirrors count_tokens
+        return text[: max_tokens * 4]

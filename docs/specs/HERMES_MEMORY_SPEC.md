@@ -218,6 +218,19 @@ retraction via `valid=retracted + superseded_by`, never delete. Expansion is
 restricted to `valid='live'` when claim-aware recall lands; current recall reads
 spans only.
 
+Contract edges (follow-ups, same branch): bins are uptake-ranked, not
+speaker-only — assistant `accepted|used` joins grounded, `repaired` priors
+render as `<superseded>` notes, asserted spans outrank claims-empty ones and
+pasted tool output packs last (`V13` canon columns, `span_overlays` fetch).
+Retraction resolves subjects/objects through the current alias map on both
+sides (aliases are retroactive). Negated objects and generic/deictic subjects
+stay span-only; repair cues exclude bare `no`/`don't` (manner uses only).
+`V14.conversations.claims_status` (`pending|ready|none|failed`, history
+grandfathered to `none`) plus drain-start catch-up closes the crash window
+between insert and stage. Queries embed a 2048-token window, not `[:800]`
+chars, to match whole-text turn embeddings. Frozen prompt gate:
+`tests/fixtures/recall-golden.json` + `test_recall_golden.py`.
+
 ---
 
 ## 4. NOW Contract — Ingest Path (codebase indexing, separate from conversation writes)

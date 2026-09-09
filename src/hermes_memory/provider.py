@@ -224,6 +224,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
         await self.store.require_schema_head()
         async with pool.acquire() as conn:
             await self.store.load_age(conn)
+        # Reap reception overlays orphaned by a crash (claims_status='pending').
+        # Bounded and guarded: a failed catch-up must never block the drain.
+        try:
+            reaped = await self.catch_up_reception(self.store, limit=200)
+            if reaped:
+                logger.info("reception catch-up reaped=%d", reaped)
+        except Exception:
+            logger.warning("reception catch-up failed", exc_info=True)
         # Strong reference so the drain loop is never garbage-collected mid-flight.
         self._drain_task = asyncio.create_task(self._awrite_drain())
 
@@ -436,11 +444,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
     async def _reception_stage(
         self, store: ReceptionStore, conv_id: int, session_id: str, role: str, content: str
-    ) -> None:
+    ) -> str:
         """Alias-on-write, user-span claims, uptake, and repair retraction.
 
-        Never raises (caller guards too). Assistant spans yield no claims and
-        no aliases: model speech stays unconfirmed until uptake says otherwise.
+        Never raises (caller guards too). Returns the claims_status stamp:
+        ready|none. Assistant spans yield no claims and no aliases: model
+        speech stays unconfirmed until uptake says otherwise.
         """
         from .reception import (
             classify_repair,
@@ -448,11 +457,20 @@ class HybridAgeMemoryProvider(MemoryProvider):
             extract_assertions,
         )
 
+        async def _stamp(status: str) -> str:
+            try:
+                await store.stamp_claims_status(conv_id, status)
+            except Exception:
+                logger.warning("claims_status stamp failed", exc_info=True)
+            return status
+
         if role != "user" or not (content or "").strip():
-            return
+            return await _stamp("none")
+        wrote = False
         for surface, canon in extract_alias_equations(content):
             try:
-                await store.insert_alias(surface, canon, "user_span")
+                if await store.insert_alias(surface, canon, "user_span"):
+                    wrote = True
             except Exception:
                 logger.warning("alias write failed", exc_info=True)
         prior: dict | None = None
@@ -468,6 +486,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         if prior is not None:
             try:
                 await store.write_uptake(int(prior["id"]), conv_id, verdict)
+                wrote = True
             except Exception:
                 logger.warning("uptake write failed", exc_info=True)
         new_claims: list[dict] = []
@@ -477,6 +496,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 # Runs after write_uptake so insert_claims inherits this turn's
                 # verdict immediately instead of theoretically.
                 ids = await store.insert_claims(conv_id, parsed)
+                if ids:
+                    wrote = True
                 for claim, cid in zip(parsed, ids):
                     claim["claim_id"] = cid
                 new_claims = parsed
@@ -489,6 +510,27 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 )
             except Exception:
                 logger.warning("retract failed", exc_info=True)
+        return await _stamp("ready" if wrote else "none")
+
+    async def catch_up_reception(self, store: ReceptionStore, limit: int = 200) -> int:
+        """Reap spans left 'pending' by a crash between insert and stage."""
+        try:
+            rows = await store.fetch_pending_reception(limit)
+        except Exception:
+            logger.warning("reception catch-up lookup failed", exc_info=True)
+            return 0
+        done = 0
+        for r in rows:
+            try:
+                await self._reception_stage(
+                    store, int(r["id"]), str(r["session_id"]),
+                    str(r.get("role") or "user"), str(r.get("content") or ""),
+                )
+            except Exception:
+                logger.warning("reception catch-up item failed", exc_info=True)
+                continue
+            done += 1
+        return done
 
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
@@ -774,7 +816,11 @@ class HybridAgeMemoryProvider(MemoryProvider):
         try:
             async with asyncio.timeout(self.config.prefetch_timeout_s):
                 enriched = self._enrich_query(query)
-                emb = await self.embedder.embed_text(enriched[:800]) if self.embedder else None
+                from .tokens import QUERY_TOKEN_CAP, truncate_tokens
+
+                emb = await self.embedder.embed_text(
+                    truncate_tokens(enriched, QUERY_TOKEN_CAP)
+                ) if self.embedder else None
                 t_embed = time.perf_counter()
                 seeds = await self.store.vector_search(vec_to_literal(emb), self.config.vector_k) \
                     if (emb and self.store) else []
@@ -919,6 +965,31 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     "content": body,
                     "ts": row.get("ts"),
                 }
+        # Uptake + claim overlays for contract binning. Same graceful
+        # degradation as neighbors: pre-migration stores simply lack the
+        # method and every hit packs as uptake-unknown.
+        overlay_fetcher: Callable[[list], Awaitable[dict]] | None = getattr(
+            self.store, "span_overlays", None
+        )
+        if selected and callable(overlay_fetcher):
+            try:
+                overlay_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
+                overlays = await overlay_fetcher(overlay_ids)
+            except Exception as exc:
+                # 42P01 undefined_table = pre-migration store: quiet skip.
+                # Anything else is a real failure and stays loud.
+                if getattr(exc, "sqlstate", "") == "42P01":
+                    logger.debug("span overlay tables absent (pre-migration)")
+                else:
+                    logger.exception("overlay fetch failed")
+                overlays = {}
+            for s in selected:
+                ov = overlays.get(s.get("turn_id")) or {}
+                if ov.get("uptake"):
+                    s["uptake"] = ov["uptake"]
+                s["live_claims"] = ov.get("live_claims", 0)
+                if ov.get("retracted"):
+                    s["retracted"] = ov["retracted"]
         from .tokens import injection_token_cap
 
         block = format_span_injection(

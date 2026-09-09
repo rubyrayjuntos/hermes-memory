@@ -806,6 +806,21 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             )
         return row is not None
 
+    async def alias_map(self) -> dict[str, str]:
+        """Live alias map: surface_norm → canon_id. Small table, one SELECT."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
+            )
+        return {r["surface_norm"]: r["canon_id"] for r in rows}
+
+    @staticmethod
+    def _canon(text: str, amap: dict[str, str]) -> str:
+        from .reception import normalize_surface
+
+        norm = normalize_surface(text)
+        return amap.get(norm, norm)
+
     async def insert_claims(self, span_id: int, claims: Sequence[dict]) -> list[int]:
         """Insert user-span claims; inherit the span's own verdict if classified.
 
@@ -822,18 +837,26 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                     ORDER BY created_at DESC LIMIT 1""",
                 int(span_id),
             )
+            amap = {
+                r["surface_norm"]: r["canon_id"]
+                for r in await conn.fetch(
+                    "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
+                )
+            }
             ids: list[int] = []
             for c in claims:
                 cid = await conn.fetchval(
                     """
                     INSERT INTO claims
-                        (span_id, subject, verb, object, polarity, act, uptake)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        (span_id, subject, verb, object, polarity, act, uptake,
+                         subject_canon, object_canon)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     RETURNING claim_id
                     """,
                     int(span_id), c["subject"], c["verb"], c["object"],
                     c.get("polarity", "positive"), c.get("act", "assert"),
                     uptake or "unknown",
+                    self._canon(c["subject"], amap), self._canon(c["object"], amap),
                 )
                 ids.append(int(cid))
         return ids
@@ -889,29 +912,43 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
 
         retracted = 0
         async with self.pool.acquire() as conn:
+            amap = {
+                r["surface_norm"]: r["canon_id"]
+                for r in await conn.fetch(
+                    "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
+                )
+            }
             if new_claims:
                 for c in new_claims:
                     if c.get("act") != "assert" or not c.get("claim_id"):
                         continue
-                    res = await conn.execute(
-                        """
-                        UPDATE claims SET valid = 'retracted', superseded_by = $6
-                         WHERE valid = 'live' AND span_id <> $4
-                           AND lower(verb) = lower($2)
-                           AND regexp_replace(lower(subject), '[^a-z0-9 ]', '', 'g') =
-                               regexp_replace(lower($1), '[^a-z0-9 ]', '', 'g')
-                           AND regexp_replace(lower(object), '[^a-z0-9 ]', '', 'g') =
-                               regexp_replace(lower($3), '[^a-z0-9 ]', '', 'g')
-                           AND polarity <> $5
-                        """,
-                        c["subject"], c["verb"], c["object"],
-                        int(next_span_id), c.get("polarity", "positive"),
-                        int(c["claim_id"]),
+                    # Resolve through the CURRENT map on both sides: aliases
+                    # are retroactive (a later "TE = Tokyo Eye" unifies
+                    # history). Stored canon columns are the write-time cache.
+                    new_sub = self._canon(c["subject"], amap)
+                    new_obj = self._canon(c["object"], amap)
+                    cands = await conn.fetch(
+                        """SELECT claim_id, subject, object FROM claims
+                            WHERE valid = 'live' AND span_id <> $1
+                              AND lower(verb) = lower($2)
+                              AND polarity <> $3""",
+                        int(next_span_id), c["verb"],
+                        c.get("polarity", "positive"),
                     )
-                    try:
-                        retracted += int(str(res).split()[-1])
-                    except (ValueError, IndexError):
-                        pass
+                    for r in cands:
+                        if (self._canon(r["subject"], amap) != new_sub
+                                or self._canon(r["object"], amap) != new_obj):
+                            continue
+                        res = await conn.execute(
+                            """UPDATE claims SET valid = 'retracted',
+                                      superseded_by = $1
+                                WHERE claim_id = $2 AND valid = 'live'""",
+                            int(c["claim_id"]), int(r["claim_id"]),
+                        )
+                        try:
+                            retracted += int(str(res).split()[-1])
+                        except (ValueError, IndexError):
+                            pass
             elif is_deictic_repair(next_text):
                 res = await conn.execute(
                     """UPDATE claims SET valid = 'retracted'
@@ -923,6 +960,72 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 except (ValueError, IndexError):
                     pass
         return retracted
+
+    async def span_overlays(self, ids: Sequence[int]) -> dict[int, dict]:
+        """Per-hit overlay for packing: uptake verdict (as prior span),
+        live-claim count, and retracted claim subjects. Pure SELECTs."""
+        wanted: list[int] = []
+        seen: set[int] = set()
+        for raw in ids or []:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n in seen:
+                continue
+            seen.add(n)
+            wanted.append(n)
+        out: dict[int, dict] = {
+            n: {"uptake": None, "live_claims": 0, "retracted": []} for n in wanted
+        }
+        if not wanted:
+            return out
+        async with self.pool.acquire() as conn:
+            for r in await conn.fetch(
+                """SELECT prior_span_id, value FROM uptakes
+                    WHERE prior_span_id = ANY($1::bigint[])""",
+                wanted,
+            ):
+                out[int(r["prior_span_id"])]["uptake"] = r["value"]
+            for r in await conn.fetch(
+                """SELECT span_id,
+                          count(*) FILTER (WHERE valid = 'live') AS live
+                     FROM claims WHERE span_id = ANY($1::bigint[])
+                     GROUP BY span_id""",
+                wanted,
+            ):
+                out[int(r["span_id"])]["live_claims"] = int(r["live"])
+            for r in await conn.fetch(
+                """SELECT span_id, subject, verb, object FROM claims
+                    WHERE span_id = ANY($1::bigint[]) AND valid = 'retracted'
+                    LIMIT 12""",
+                wanted,
+            ):
+                lst = out[int(r["span_id"])]["retracted"]
+                if len(lst) < 2:
+                    lst.append({
+                        "subject": r["subject"],
+                        "verb": r["verb"],
+                        "object": r["object"],
+                    })
+        return out
+
+    async def stamp_claims_status(self, conv_id: int, status: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE conversations SET claims_status = $1 WHERE id = $2",
+                status, int(conv_id),
+            )
+
+    async def fetch_pending_reception(self, limit: int = 50) -> list[dict]:
+        """Spans orphaned between insert_turn and the reception stage (crash)."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT id, session_id, role, content FROM conversations
+                    WHERE claims_status = 'pending' ORDER BY id LIMIT $1""",
+                int(limit),
+            )
+        return [dict(r) for r in rows]
 
     async def ensure_flower_labels(self) -> None:
         """Session / Turn / NEXT / IN_SESSION only. No Concept or ABOUT."""

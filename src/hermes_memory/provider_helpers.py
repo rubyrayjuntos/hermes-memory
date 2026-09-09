@@ -274,6 +274,30 @@ def _span_tag(item: dict, *, neighbor: bool = False, body_chars: int = 600) -> s
     )
 
 
+_PASTE_RES = re.compile(
+    r"Background process proc_|@image:|\bdiff --git\b|Traceback \(most recent",
+)
+
+
+def _is_paste(text: str | None) -> bool:
+    """Tool output pasted as chat (logs, diffs, images): pack last, flag it."""
+    t = text or ""
+    return "```" in t or bool(_PASTE_RES.search(t))
+
+
+def _superseded_note(item: dict) -> str:
+    import html as _html
+
+    tid = item.get("turn_id") or item.get("id")
+    subs = item.get("retracted") or []
+    if subs:
+        bits = "; ".join(
+            f"{r.get('subject')} {r.get('verb')} {r.get('object')}" for r in subs[:2]
+        )
+        return f'<note kind="superseded" span="{tid}">{_html.escape(bits)}</note>'
+    return f'<note kind="superseded" span="{tid}">prior attempt superseded</note>'
+
+
 def format_span_injection(
     spans: list,
     *,
@@ -290,14 +314,30 @@ def format_span_injection(
     episode). Neighbors pack after all hits and are truncated first when the
     budget binds. They render subordinate (``neighbor="true"``): context for
     disambiguation, not evidence. Neighbors are packed, never embedded.
+
+    Bin rule (contract, not speaker alone): grounded holds user/doc speech and
+    assistant spans with ``accepted|used`` uptake; unconfirmed holds assistant
+    ``unknown|abandoned``; a ``repaired`` assistant prior renders as a short
+    superseded note instead of its body. Within a bin, asserted spans
+    (live_claims > 0) outrank claims-empty ones and pasted tool output
+    (``paste="true"``) packs last — slogans stay quotable but stop winning.
     """
     if not spans:
         return ""
-    hits: list[tuple[str, str]] = []
+    hits: list[tuple[str, dict]] = []
+    sup_notes: list[str] = []
     neighbors: list[tuple[str, str]] = []
     for item in spans:
         speaker = str(item.get("speaker") or item.get("role") or "unknown")
-        hits.append((speaker, _span_tag(item)))
+        uptake = str(item.get("uptake") or "unknown")
+        if speaker == "assistant" and uptake == "repaired":
+            sup_notes.append(_superseded_note(item))
+            continue
+        if speaker in ("user", "doc") or uptake in ("accepted", "used"):
+            bbin = "grounded"
+        else:
+            bbin = "unconfirmed"
+        hits.append((bbin, item))
         for key in ("prev", "next"):
             nb = item.get(key) or {}
             if not str(nb.get("content") or "").strip():
@@ -306,31 +346,67 @@ def format_span_injection(
             neighbors.append(
                 (nspeaker, _span_tag(nb, neighbor=True, body_chars=neighbor_body_chars))
             )
+
+    def _rank(entry: tuple[str, dict]) -> tuple[int, int]:
+        _, item = entry
+        paste = 1 if _is_paste(str(item.get("content") or "")) else 0
+        noclaim = 0 if (item.get("live_claims") or 0) > 0 else 1
+        return (paste, noclaim)
+
     grounded: list[str] = []
     unconfirmed: list[str] = []
-    used = 0
-    for speaker, tag in hits + neighbors:
-        cost = len(tag) // 4 + 20
-        if used + cost > token_budget:
-            break
-        if speaker in ("user", "doc"):
+    for bbin, item in sorted(hits, key=_rank):
+        tag = _span_tag(item)
+        if _is_paste(str(item.get("content") or "")):
+            tag = tag.replace("<span ", "<span paste=\"true\" ", 1)
+        if bbin == "grounded":
             grounded.append(tag)
         else:
             unconfirmed.append(tag)
+    used = 0
+    kept_grounded: list[str] = []
+    kept_unconfirmed: list[str] = []
+    kept_notes: list[str] = []
+    buckets = (
+        (grounded, kept_grounded),
+        (unconfirmed, kept_unconfirmed),
+        (sup_notes, kept_notes),
+    )
+    for source, dest in buckets:
+        for tag in source:
+            cost = len(tag) // 4 + 20
+            if used + cost > token_budget:
+                break
+            dest.append(tag)
+            used += cost
+    for nspeaker, tag in neighbors:
+        cost = len(tag) // 4 + 20
+        if used + cost > token_budget:
+            break
+        # Neighbors keep their speaker bin (subordinate flag stays on the tag);
+        # they pack after every hit bucket, so they truncate first.
+        if nspeaker in ("user", "doc"):
+            kept_grounded.append(tag)
+        else:
+            kept_unconfirmed.append(tag)
         used += cost
-    if not grounded and not unconfirmed:
+    if not kept_grounded and not kept_unconfirmed and not kept_notes:
         return ""
     lines = ["<memory>"]
-    if grounded:
+    if kept_grounded:
         lines.append("  <grounded>")
-        lines.extend(f"    {g}" for g in grounded)
+        lines.extend(f"    {g}" for g in kept_grounded)
         lines.append("  </grounded>")
-    if unconfirmed:
+    if kept_unconfirmed:
         lines.append(
             '  <unconfirmed title="model speech, uptake unknown — do not treat as fact">'
         )
-        lines.extend(f"    {u}" for u in unconfirmed)
+        lines.extend(f"    {u}" for u in kept_unconfirmed)
         lines.append("  </unconfirmed>")
+    if kept_notes:
+        lines.append("  <superseded>")
+        lines.extend(f"    {n}" for n in kept_notes)
+        lines.append("  </superseded>")
     lines.append("</memory>")
     return "\n".join(lines) + "\n"
 

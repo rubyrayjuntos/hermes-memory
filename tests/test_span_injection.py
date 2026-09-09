@@ -61,3 +61,36 @@ def test_no_path_verbalization():
     out = format_span_injection([seed_like])
     assert "previously linked" not in out
     assert "ABOUT" not in out
+
+
+def test_accepted_assistant_joins_grounded():
+    span = dict(ASSISTANT, uptake="accepted")
+    out = format_span_injection([span])
+    assert "<grounded>" in out and 'speaker="assistant"' in out
+    assert "<unconfirmed" not in out
+
+
+def test_repaired_prior_becomes_superseded_note():
+    span = dict(ASSISTANT, uptake="repaired", retracted=[
+        {"subject": "Nightingale", "verb": "uses", "object": "Atlas"}])
+    out = format_span_injection([span])
+    assert "HPC S2S docs are ready" not in out  # body withheld, not live
+    assert "<superseded>" in out
+    assert "Nightingale uses Atlas" in out
+
+
+def test_repaired_without_subjects_still_noted():
+    span = dict(ASSISTANT, uptake="repaired")
+    out = format_span_injection([span])
+    assert "<superseded>" in out and "prior attempt superseded" in out
+
+
+def test_asserted_spans_outrank_slogans_and_paste():
+    slogan = dict(USER, turn_id=1, content="Tokyo Eye shares MLflow gates")
+    asserted = dict(USER, turn_id=2, content="Deloitte uses Azure.",
+                    live_claims=1)
+    paste = dict(USER, turn_id=3,
+                 content="[IMPORTANT: Background process proc_1 completed\nok]")
+    out = format_span_injection([slogan, paste, asserted])
+    assert out.index('id="2"') < out.index('id="1"') < out.index('id="3"')
+    assert 'paste="true"' in out
