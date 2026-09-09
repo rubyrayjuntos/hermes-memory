@@ -347,7 +347,9 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         content: str,
         vec_literal: Optional[str],
         metadata: Dict[str, Any] | None = None,
-    ) -> Optional[int]:
+        *,
+        include_inserted: bool = False,
+    ) -> Optional[int] | tuple[int, bool]:
         """Insert a turn and return its id (RETURNING id) for graph linkage.
 
         Idempotent on retry: same session+role+bytes within a trailing
@@ -378,7 +380,8 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 logger.info(
                     "span dedupe hit session=%s role=%s id=%s", session_id, role, dup
                 )
-                return int(dup)
+                turn_id = int(dup)
+                return (turn_id, False) if include_inserted else turn_id
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -397,7 +400,10 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 self.embed_model,
                 self.embed_dim,
             )
-            return int(row["id"]) if row and row["id"] is not None else None
+            if not row or row["id"] is None:
+                return None
+            turn_id = int(row["id"])
+            return (turn_id, True) if include_inserted else turn_id
 
     async def set_drain_status(self, turn_id: int, status: str) -> None:
         """Stamp this drain's C–F outcome on an existing row (V11).
