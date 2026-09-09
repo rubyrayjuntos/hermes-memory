@@ -1,5 +1,5 @@
 """Unit tests for reception-side pure functions (aliases, repair, assertions)."""
-from src.hermes_memory.reception import (
+from hermes_memory.reception import (
     classify_repair,
     extract_alias_equations,
     extract_assertions,

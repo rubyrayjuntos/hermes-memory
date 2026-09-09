@@ -455,32 +455,40 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 await store.insert_alias(surface, canon, "user_span")
             except Exception:
                 logger.warning("alias write failed", exc_info=True)
+        prior: dict | None = None
+        try:
+            prior = await store.previous_turn(session_id, conv_id, role="assistant")
+        except Exception:
+            logger.warning("previous turn lookup failed", exc_info=True)
+        verdict = (
+            classify_repair(str(prior.get("content") or ""), content)
+            if prior is not None
+            else "unknown"
+        )
+        if prior is not None:
+            try:
+                await store.write_uptake(int(prior["id"]), conv_id, verdict)
+            except Exception:
+                logger.warning("uptake write failed", exc_info=True)
         new_claims: list[dict] = []
         try:
             parsed = extract_assertions(content)
             if parsed:
+                # Runs after write_uptake so insert_claims inherits this turn's
+                # verdict immediately instead of theoretically.
                 ids = await store.insert_claims(conv_id, parsed)
                 for claim, cid in zip(parsed, ids):
                     claim["claim_id"] = cid
                 new_claims = parsed
         except Exception:
             logger.warning("claim insert failed", exc_info=True)
-        try:
-            prior = await store.previous_turn(session_id, conv_id, role="assistant")
-        except Exception:
-            logger.warning("previous turn lookup failed", exc_info=True)
-            return
-        if prior is None:
-            return
-        verdict = classify_repair(str(prior.get("content") or ""), content)
-        try:
-            await store.write_uptake(int(prior["id"]), conv_id, verdict)
-            if verdict == "repaired":
+        if prior is not None and verdict == "repaired":
+            try:
                 await store.retract_on_repair(
                     int(prior["id"]), conv_id, content, new_claims
                 )
-        except Exception:
-            logger.warning("uptake/retract failed", exc_info=True)
+            except Exception:
+                logger.warning("retract failed", exc_info=True)
 
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""

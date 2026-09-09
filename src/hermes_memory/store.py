@@ -807,12 +807,19 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         return row is not None
 
     async def insert_claims(self, span_id: int, claims: Sequence[dict]) -> list[int]:
-        """Insert user-span claims; inherit span uptake if already classified."""
+        """Insert user-span claims; inherit the span's own verdict if classified.
+
+        The verdict on span S is the uptake row where S is next (user spans)
+        or prior (assistant spans). v1 inserts user-span claims only, after the
+        stage writes this turn's uptake row, so inheritance fires immediately.
+        """
         if not claims:
             return []
         async with self.pool.acquire() as conn:
             uptake = await conn.fetchval(
-                "SELECT value FROM uptakes WHERE prior_span_id = $1 LIMIT 1",
+                """SELECT value FROM uptakes
+                    WHERE prior_span_id = $1 OR next_span_id = $1
+                    ORDER BY created_at DESC LIMIT 1""",
                 int(span_id),
             )
             ids: list[int] = []

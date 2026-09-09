@@ -1,5 +1,5 @@
 """Unit tests for the provenance-first span renderer (neighbor rule)."""
-from src.hermes_memory.provider_helpers import format_span_injection
+from hermes_memory.provider_helpers import format_span_injection
 
 USER = {
     "turn_id": 914,
