@@ -790,7 +790,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("prefetch timeout query=%r", query[:80])
             return ""
 
-        from .provider_helpers import format_injection, format_span_injection
+        from .provider_helpers import format_span_injection
 
         seed_turn_ids: set[int] = set()
         for s in kept_seeds:

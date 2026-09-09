@@ -16,11 +16,11 @@ Spec: docs/PANE_INTERACTION_SPEC.md §§1-3 (hover identity String-ID);
 """
 
 from hermes_memory.graph_view import (
-    parse_vertex,
-    pack_search,
-    stringify_id,
-    parse_vertex_id_param,
     humanize_node,
+    pack_search,
+    parse_vertex,
+    parse_vertex_id_param,
+    stringify_id,
 )
 
 

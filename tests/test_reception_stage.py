@@ -1,5 +1,4 @@
 """Tests for _reception_stage: user-only claims/aliases, uptake, repair retraction."""
-import pytest
 
 
 class FakeStore:
