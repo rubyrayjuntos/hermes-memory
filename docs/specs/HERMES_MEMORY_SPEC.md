@@ -231,6 +231,18 @@ between insert and stage. Queries embed a 2048-token window, not `[:800]`
 chars, to match whole-text turn embeddings. Frozen prompt gate:
 `tests/fixtures/recall-golden.json` + `test_recall_golden.py`.
 
+Dedupe is four layers, not one (`V15` + `insert_turn` guard). Spans:
+idempotent insert on (session, role, bytes) inside a trailing 10-minute
+window — retries collapse, re-utterances stay new, history grandfathered.
+Names: alias dictionary only (explicit equations, normalizer); cycles and
+self-maps refused with a log; resolution is transitive with lex-smallest
+survivor; aliases are retroactive at retract time, never rewritten.
+Claims: partial unique key (subject_canon, verb, object_canon, polarity)
+WHERE live — repeats merge (span_id → latest, seen_count bumps, never
+resurrects); opposite polarity with a non-repaired verdict abstains as
+`valid='unknown'`; objects stay opaque, never fused. Noun vertices are
+pane-only and out of the inject contract.
+
 ---
 
 ## 4. NOW Contract — Ingest Path (codebase indexing, separate from conversation writes)

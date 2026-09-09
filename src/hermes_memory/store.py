@@ -348,8 +348,38 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         vec_literal: Optional[str],
         metadata: Dict[str, Any] | None = None,
     ) -> Optional[int]:
-        """Insert a turn and return its id (RETURNING id) for graph linkage."""
+        """Insert a turn and return its id (RETURNING id) for graph linkage.
+
+        Idempotent on retry: same session+role+bytes within a trailing
+        10-minute window returns the existing id instead of double-inserting
+        (crashed-and-retried drain, double-delivered sync_turn). A user
+        repeating a sentence next week is a NEW span — the window is what
+        separates a retry from a re-utterance. History is grandfathered:
+        History is grandfathered:
+        pre-existing duplicates stay as-is. Below 80 chars the lookup is
+        skipped entirely: short acknowledgements are always new spans.
+        """
         assert_embedding_compatible(vec_literal, self.embed_dim)
+        import hashlib
+
+        dup = None
+        if len(content or "") >= 80:
+            content_hash = hashlib.md5((content or "").encode("utf-8")).hexdigest()
+            async with self.pool.acquire() as conn:
+                dup = await conn.fetchval(
+                    """
+                    SELECT id FROM conversations
+                     WHERE session_id = $1 AND role = $2 AND md5(content) = $3
+                       AND ts > now() - interval '10 minutes'
+                     ORDER BY id DESC LIMIT 1
+                    """,
+                    session_id, role, content_hash,
+                )
+            if dup is not None:
+                logger.info(
+                    "span dedupe hit session=%s role=%s id=%s", session_id, role, dup
+                )
+                return int(dup)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -793,8 +823,34 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         return dict(row) if row is not None else None
 
     async def insert_alias(self, surface_norm: str, canon_id: str, source: str) -> bool:
-        """Explicit-equation alias only. True if a new live mapping won."""
+        """Explicit-equation alias only. True if a new live mapping won.
+
+        Refuses self-maps and cycles: if canon_id resolves transitively back
+        to surface_norm, the row would corrupt the dictionary (A→B→A), so the
+        span stays unaliased and the collision is logged for manual review.
+        Renaming is a retract of the old alias + a new live mapping, never an
+        overwrite (partial unique index enforces one live canon per surface).
+        """
+        if surface_norm == canon_id:
+            return False
         async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
+            )
+            amap = {r["surface_norm"]: r["canon_id"] for r in rows}
+            cur, chain = canon_id, [surface_norm]
+            for _ in range(8):
+                nxt = amap.get(cur)
+                if nxt is None:
+                    break
+                if nxt in chain:
+                    logger.warning(
+                        "alias cycle refused %s -> %s (chain %s)",
+                        surface_norm, canon_id, chain,
+                    )
+                    return False
+                chain.append(cur)
+                cur = nxt
             row = await conn.fetchrow(
                 """
                 INSERT INTO aliases (surface_norm, canon_id, source)
@@ -808,25 +864,103 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
 
     async def alias_map(self) -> dict[str, str]:
         """Live alias map: surface_norm → canon_id. Small table, one SELECT."""
+        amap, _ = await self.alias_graph()
+        return amap
+
+    async def alias_graph(
+        self,
+    ) -> tuple[dict[str, str], dict[str, tuple]]:
+        """Live alias dictionary plus canon-birth metadata.
+
+        meta[canon] = (first_seen, min_alias_id): earliest live row that
+        ESTABLISHED the slug as a canon_id (not merely touched it as a
+        surface). Survivor elections (never lex-smallest: lex promotes
+        nicknames like "te" over "tokyo eye") prefer the oldest canon birth —
+        canons are born as equation left-hand sides, so oldest-birth is
+        earliest-LHS — then drop slugs under 4 chars when a longer live
+        alias exists in the same component.
+        """
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
+                """SELECT surface_norm, canon_id, created_at, alias_id
+                     FROM aliases WHERE valid = 'live'"""
             )
-        return {r["surface_norm"]: r["canon_id"] for r in rows}
+        amap: dict[str, str] = {}
+        meta: dict[str, tuple] = {}
+        for r in rows:
+            amap[r["surface_norm"]] = r["canon_id"]
+            key = (r["created_at"], int(r["alias_id"]))
+            if r["canon_id"] not in meta or key < meta[r["canon_id"]]:
+                meta[r["canon_id"]] = key
+        return amap, meta
 
     @staticmethod
-    def _canon(text: str, amap: dict[str, str]) -> str:
+    def _graph(rows) -> tuple[dict[str, str], dict[str, tuple]]:
+        """Build (amap, meta) from live alias rows on an already-held connection."""
+        amap: dict[str, str] = {}
+        meta: dict[str, tuple] = {}
+        for r in rows:
+            amap[r["surface_norm"]] = r["canon_id"]
+            for slug in (r["surface_norm"], r["canon_id"]):
+                key = (r["created_at"], int(r["alias_id"]))
+                if slug not in meta or key < meta[slug]:
+                    meta[slug] = key
+        return amap, meta
+
+    @staticmethod
+    def _elect(members: list[str], meta: dict[str, tuple] | None) -> str:
+        """Cycle survivor: oldest canon birth wins; short slugs lose to longer
+        live aliases; never lexicographic (lex elects nicknames). Slugs with
+        no canon birth (surface-only) sort as newest."""
+        from datetime import datetime, timezone
+
+        pool = [m for m in members if len(m) >= 4] or list(members)
+        if not meta:
+            return pool[0]
+        far = (datetime.max.replace(tzinfo=timezone.utc), 10**18)
+        return min(pool, key=lambda m: meta.get(m, far))
+
+    @staticmethod
+    def _resolve(
+        text: str, amap: dict[str, str], meta: dict[str, tuple] | None = None
+    ) -> tuple[str, bool]:
+        """Canon for text through the live map. Returns (canon, cycled).
+
+        Transitive with a depth cap. A cycle collapses via _elect (oldest
+        equation, short slugs demoted — never lex). Unresolved names fall
+        back to their own normalization: distinct surfaces stay distinct,
+        never forged equal.
+        """
         from .reception import normalize_surface
 
-        norm = normalize_surface(text)
-        return amap.get(norm, norm)
+        cur = normalize_surface(text)
+        seen = [cur]
+        for _ in range(8):
+            nxt = amap.get(cur)
+            if nxt is None or nxt == cur:
+                return cur, False
+            if nxt in seen:
+                return Store._elect(seen[seen.index(nxt):] + [nxt], meta), True
+            seen.append(nxt)
+            cur = nxt
+        return cur, False
+
+    @staticmethod
+    def _canon(
+        text: str, amap: dict[str, str], meta: dict[str, tuple] | None = None
+    ) -> str:
+        return Store._resolve(text, amap, meta)[0]
 
     async def insert_claims(self, span_id: int, claims: Sequence[dict]) -> list[int]:
         """Insert user-span claims; inherit the span's own verdict if classified.
 
-        The verdict on span S is the uptake row where S is next (user spans)
-        or prior (assistant spans). v1 inserts user-span claims only, after the
-        stage writes this turn's uptake row, so inheritance fires immediately.
+        One live row per proposition: the partial unique key
+        (subject_canon, verb, object_canon, polarity) WHERE valid='live'
+        merges repeats (span_id moves to the latest saying, seen_count bumps).
+        A live opposite-polarity row with a non-repaired verdict abstains —
+        the new row goes in as valid='unknown', never a second live truth.
+        Same subject+verb with a different object, or a different verb, is a
+        second row: objects stay opaque, never fused, never fuzzy-matched.
         """
         if not claims:
             return []
@@ -837,26 +971,65 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                     ORDER BY created_at DESC LIMIT 1""",
                 int(span_id),
             )
-            amap = {
-                r["surface_norm"]: r["canon_id"]
-                for r in await conn.fetch(
-                    "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
-                )
-            }
+            verdict = uptake or "unknown"
+            amap, meta = Store._graph(await conn.fetch(
+                """SELECT surface_norm, canon_id, created_at, alias_id
+                     FROM aliases WHERE valid = 'live'"""
+            ))
             ids: list[int] = []
             for c in claims:
+                sub = self._canon(c["subject"], amap, meta)
+                obj = self._canon(c["object"], amap, meta)
+                verb = c["verb"]
+                pol = c.get("polarity", "positive")
+                opp = await conn.fetchval(
+                    """SELECT claim_id FROM claims
+                        WHERE valid = 'live' AND span_id <> $4
+                          AND subject_canon = $1 AND lower(verb) = lower($2)
+                          AND object_canon = $3 AND polarity <> $5
+                        LIMIT 1""",
+                    sub, verb, obj, int(span_id), pol,
+                )
+                if opp is not None and verdict != "repaired":
+                    # Abstain: keep the audit trail, keep it out of the live set.
+                    prior_row = await conn.fetchval(
+                        """SELECT claim_id FROM claims
+                            WHERE span_id = $1 AND subject_canon = $2
+                              AND lower(verb) = lower($3) AND object_canon = $4
+                              AND polarity = $5
+                            LIMIT 1""",
+                        int(span_id), sub, verb, obj, pol,
+                    )
+                    if prior_row is not None:
+                        ids.append(int(prior_row))
+                        continue
+                    cid = await conn.fetchval(
+                        """
+                        INSERT INTO claims
+                            (span_id, subject, verb, object, polarity, act,
+                             uptake, subject_canon, object_canon, valid)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'unknown')
+                        RETURNING claim_id
+                        """,
+                        int(span_id), c["subject"], verb, c["object"], pol,
+                        c.get("act", "assert"), verdict, sub, obj,
+                    )
+                    ids.append(int(cid))
+                    continue
                 cid = await conn.fetchval(
                     """
                     INSERT INTO claims
                         (span_id, subject, verb, object, polarity, act, uptake,
                          subject_canon, object_canon)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (subject_canon, verb, object_canon, polarity)
+                        WHERE valid = 'live'
+                    DO UPDATE SET span_id = EXCLUDED.span_id,
+                                  seen_count = claims.seen_count + 1
                     RETURNING claim_id
                     """,
-                    int(span_id), c["subject"], c["verb"], c["object"],
-                    c.get("polarity", "positive"), c.get("act", "assert"),
-                    uptake or "unknown",
-                    self._canon(c["subject"], amap), self._canon(c["object"], amap),
+                    int(span_id), c["subject"], verb, c["object"], pol,
+                    c.get("act", "assert"), verdict, sub, obj,
                 )
                 ids.append(int(cid))
         return ids
@@ -912,12 +1085,10 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
 
         retracted = 0
         async with self.pool.acquire() as conn:
-            amap = {
-                r["surface_norm"]: r["canon_id"]
-                for r in await conn.fetch(
-                    "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
-                )
-            }
+            amap, meta = Store._graph(await conn.fetch(
+                """SELECT surface_norm, canon_id, created_at, alias_id
+                     FROM aliases WHERE valid = 'live'"""
+            ))
             if new_claims:
                 for c in new_claims:
                     if c.get("act") != "assert" or not c.get("claim_id"):
@@ -925,8 +1096,8 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                     # Resolve through the CURRENT map on both sides: aliases
                     # are retroactive (a later "TE = Tokyo Eye" unifies
                     # history). Stored canon columns are the write-time cache.
-                    new_sub = self._canon(c["subject"], amap)
-                    new_obj = self._canon(c["object"], amap)
+                    new_sub = self._canon(c["subject"], amap, meta)
+                    new_obj = self._canon(c["object"], amap, meta)
                     cands = await conn.fetch(
                         """SELECT claim_id, subject, object FROM claims
                             WHERE valid = 'live' AND span_id <> $1
@@ -936,8 +1107,8 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                         c.get("polarity", "positive"),
                     )
                     for r in cands:
-                        if (self._canon(r["subject"], amap) != new_sub
-                                or self._canon(r["object"], amap) != new_obj):
+                        if (self._canon(r["subject"], amap, meta) != new_sub
+                                or self._canon(r["object"], amap, meta) != new_obj):
                             continue
                         res = await conn.execute(
                             """UPDATE claims SET valid = 'retracted',
