@@ -900,10 +900,9 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         meta: dict[str, tuple] = {}
         for r in rows:
             amap[r["surface_norm"]] = r["canon_id"]
-            for slug in (r["surface_norm"], r["canon_id"]):
-                key = (r["created_at"], int(r["alias_id"]))
-                if slug not in meta or key < meta[slug]:
-                    meta[slug] = key
+            key = (r["created_at"], int(r["alias_id"]))
+            if r["canon_id"] not in meta or key < meta[r["canon_id"]]:
+                meta[r["canon_id"]] = key
         return amap, meta
 
     @staticmethod
