@@ -2,147 +2,140 @@
 """hermes-memory-uninstall — Uninstall CLI for Hermes Librarian."""
 
 import argparse
+import os
 import shutil
 import subprocess
-import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from psycopg import Error as PsycopgError
+from psycopg.conninfo import conninfo_to_dict
+
+from hermes_memory.install_state import InstallState, install_state_path, load_install_state
+
 HERMES_HOME = Path.home() / ".hermes"
 
 
-def get_env_files():
-    return (HERMES_HOME / ".env", HERMES_HOME / "profiles" / "librarian" / ".env")
+@dataclass(frozen=True)
+class UninstallTarget:
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str | None = None
 
 
-def write_env_file(path, content):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+def resolve_uninstall_target(args: argparse.Namespace, state: InstallState | None) -> UninstallTarget | None:
+    """Resolve an explicit or recorded target without guessing a database."""
+    if args.dsn is not None:
+        try:
+            parts = conninfo_to_dict(args.dsn)
+            if set(parts) - {"host", "port", "dbname", "user", "password"}:
+                raise ValueError
+            host, database, user = (parts[key] for key in ("host", "dbname", "user"))
+            port = int(parts.get("port", "5432"))
+            if not all((host, database, user)) or "," in host or not 1 <= port <= 65535:
+                raise ValueError
+            return UninstallTarget(host, port, database, user, parts.get("password"))
+        except (KeyError, ValueError, TypeError, PsycopgError) as exc:
+            # Never include raw DSN or the parser's potentially credential-bearing error.
+            raise ValueError("Invalid DSN: specify host, port, database and user") from exc
+    if state is not None:
+        return UninstallTarget(state.database_host, state.database_port,
+                               state.database_name, state.database_user)
+    if args.keep_db:
+        return None
+    raise ValueError("No installation record or explicit DSN; refusing database removal")
 
 
-def main():
+def build_compose_down_command(state: InstallState) -> list[str] | None:
+    """Build a shutdown command only for recorded Compose ownership."""
+    if state.compose_project is None or state.compose_file is None:
+        return None
+    return ["docker", "compose", "-p", state.compose_project, "-f", state.compose_file, "down"]
+
+
+def _matches_record(target: UninstallTarget | None, state: InstallState | None) -> bool:
+    return target is not None and state is not None and (
+        target.host, target.port, target.database, target.user
+    ) == (state.database_host, state.database_port, state.database_name, state.database_user)
+
+
+def main(argv=None, *, home=None, runner=subprocess.run) -> int:
     parser = argparse.ArgumentParser(
         prog="hermes-memory-uninstall",
         description="Uninstall the Hermes Librarian hybrid-age provider.",
     )
-    parser.add_argument("--force", action="store_true",
-                        help="Skip confirmation prompt")
-    parser.add_argument("--keep-db", action="store_true",
-                        help="Keep the hermes_memory database")
-    parser.add_argument("--remove-plugin", action="store_true",
-                        help="Remove the hybrid-age plugin directory")
-    parser.add_argument("--dsn", default=None,
-                        help="Postgres DSN of the database to drop "
-                             "(default: HYBRID_AGE_DSN env or 127.0.0.1:5450/hermes_memory)")
-    args = parser.parse_args()
+    parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--keep-db", action="store_true", help="Keep the database")
+    parser.add_argument("--remove-plugin", action="store_true", help="Remove the hybrid-age plugin directory")
+    parser.add_argument("--dsn", default=None, help="Explicit Postgres DSN of the database to drop")
+    args = parser.parse_args(argv)
+    home = Path(home) if home is not None else HERMES_HOME
 
-    # Confirmation prompt
+    try:
+        state = load_install_state(install_state_path(home))
+        target = resolve_uninstall_target(args, state)
+    except (ValueError, OSError) as exc:
+        print(f"Uninstall refused: {exc}")
+        return 1
+
     if not args.force:
-        prompt = (
-            "This will disable the hybrid-age provider, "
-            "drop the hermes_memory database (unless --keep-db), "
-            "and remove the plugin directory (unless --remove-plugin is off). "
-            "Continue? [y/N]: "
-        )
-        answer = input(prompt).strip().lower()
+        answer = input("Disable the provider and uninstall the selected resources? [y/N]: ").strip().lower()
         if answer != "y":
             print("Uninstall cancelled.")
-            sys.exit(0)
+            return 0
 
-    # 0. Stop viz API
-    print("[0/5] Stopping graph API...")
+    if target:
+        print(f"Database target: {target.host}:{target.port}/{target.database} (user {target.user})")
+    compose = build_compose_down_command(state) if state and _matches_record(target, state) else None
+    if compose:
+        if not args.keep_db:
+            compose.append("--volumes")
+        result = runner(compose, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Compose shutdown failed; uninstall stopped.")
+            return 1
+
+    print("Stopping graph API...")
     try:
         from hermes_memory.graph_api import stop_daemon
         stop_daemon()
-        print("    graph API stopped.")
-    except Exception as e:
-        print(f"    graph API stop skipped: {e}")
+    except Exception:
+        print("Graph API stop skipped.")
 
-    # 1. Set provider to built-in in config
-    print("[1/5] Setting provider to built-in...")
     hermes_bin = shutil.which("hermes") or "hermes"
-    result = subprocess.run(
-        [hermes_bin, "config", "set", "memory.provider", "built-in"],
-        capture_output=True, text=True,
-    )
+    result = runner([hermes_bin, "config", "set", "memory.provider", "built-in"],
+                    capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"    hermes config set failed: {result.stderr}")
-    else:
-        print("    Provider set to built-in.")
+        print("Hermes provider configuration failed.")
 
-    # 2. Drop or keep the DB — derive from configured DSN, not hardcoded 5450
-    print("[2/5] Database handling...")
-    if not args.keep_db:
-        import os
-        import urllib.parse as up
-        dsn = args.dsn or os.environ.get("HYBRID_AGE_DSN") or "postgres://hermes:ci-local-password@127.0.0.1:5450/hermes_memory"
-        # Prefer `dropdb` with --dsn if target provided, else parse host/port/db
-        drop_cmd: list[str]
-        # psycopg-style dsn parsing: extract parts for dropdb when not using URI directly
-        parsed = up.urlparse(dsn)
-        if parsed.scheme.startswith("postgres"):
-            host = parsed.hostname or "127.0.0.1"
-            port = str(parsed.port or "5450")
-            user = parsed.username or "hermes"
-            db = parsed.path.lstrip("/") or "hermes_memory"
-            drop_cmd = ["dropdb", "-h", host, "-p", port, "-U", user, db]
-            # Use --no-password style; password via PGPASSWORD env if present
-            pw = parsed.password or os.environ.get("HERMES_PG_PASSWORD", "")
-            env = None
-            if pw:
-                import os as _os
-                env = _os.environ.copy()
-                env["PGPASSWORD"] = pw
-            result = subprocess.run(drop_cmd, capture_output=True, text=True, env=env)
-        else:
-            result = subprocess.run(["dropdb", dsn], capture_output=True, text=True)
+    if not args.keep_db and not compose:
+        assert target is not None
+        env = None
+        if target.password:
+            env = os.environ.copy()
+            env["PGPASSWORD"] = target.password
+        result = runner(["dropdb", "-h", target.host, "-p", str(target.port), "-U", target.user,
+                         "--", target.database], capture_output=True, text=True, env=env)
         if result.returncode != 0:
-            print(f"    dropdb issue: {result.stderr.strip()[:300]}")
-            print(f"    (DSN was {parsed.hostname}:{parsed.port}/{parsed.path.lstrip('/')}) — check that this is the intended database.")
-    else:
-        print("    Keeping hermes_memory database (--keep-db).")
+            print("Database removal failed.")
+            return 1
 
-    # 3. Remove plugin dirs if requested (default + librarian profile)
     if args.remove_plugin:
-        print("[3/5] Removing plugin directory...")
-        for plugin_dir in (
-            HERMES_HOME / "plugins" / "hybrid-age",
-            HERMES_HOME / "profiles" / "librarian" / "plugins" / "hybrid-age",
-        ):
+        for plugin_dir in (home / "plugins" / "hybrid-age",
+                           home / "profiles" / "librarian" / "plugins" / "hybrid-age"):
             if plugin_dir.is_symlink():
                 plugin_dir.unlink()
-                print(f"    Unlinked {plugin_dir}")
             elif plugin_dir.exists():
-                shutil.rmtree(str(plugin_dir))
-                print(f"    Removed {plugin_dir}")
-            else:
-                print(f"    {plugin_dir} does not exist.")
+                shutil.rmtree(plugin_dir)
 
-    # 4. Restart Hermes so built-in provider becomes active
-    print("[4/5] Restarting Hermes...")
-    result = subprocess.run([hermes_bin, "restart"],
-                            capture_output=True, text=True)
+    result = runner([hermes_bin, "restart"], capture_output=True, text=True)
     if result.returncode != 0:
-        # fallback: hermes memory off
-        subprocess.run([hermes_bin, "memory", "off"],
-                        capture_output=True, text=True)
-        print("    Hermes restarted (via memory off).")
-    else:
-        print("    Hermes restarted.")
-
-    # 5. Summary
-    print("[5/5] Summary:")
-    print("    Provider: built-in")
-    if not args.keep_db:
-        print("    hermes_memory database: dropped")
-    else:
-        print("    hermes_memory database: kept")
-    if args.remove_plugin:
-        print("    Plugin directory: removed")
-    else:
-        print("    Plugin directory: kept")
+        runner([hermes_bin, "memory", "off"], capture_output=True, text=True)
     print("Uninstall complete.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
