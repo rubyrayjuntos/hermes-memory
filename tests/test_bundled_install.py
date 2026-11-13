@@ -111,3 +111,16 @@ def test_keep_db_uninstall_retains_the_password_its_volume_needs(tmp_path, monke
 
     assert main(["--force", "--keep-db"], home=tmp_path, runner=runner) == 0
     assert "HERMES_PG_PASSWORD=pw-retained" in env_file.read_text()
+
+
+def test_plugin_manifest_declares_the_same_dependencies_as_the_package():
+    """Hermes admits pip_dependencies from plugin.yaml; they must match the package's own list."""
+    import tomllib
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    manifest = yaml.safe_load((root / "src" / "hermes_memory" / "plugin.yaml").read_text(encoding="utf-8"))
+    assert manifest["name"] == "hybrid-age"
+    assert sorted(manifest["pip_dependencies"]) == sorted(project["dependencies"])

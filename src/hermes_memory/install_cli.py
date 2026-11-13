@@ -627,7 +627,7 @@ def main(argv: list[str] | None = None) -> int:
 
         with tempfile.TemporaryDirectory(prefix="hermes-memory-pin-") as tmp:
             export = Path(tmp)
-            print(f"[1/7] Exporting pinned tree {sha[:12]}…")
+            print(f"[1/7] Preparing install files for build {sha[:12]}…")
             if bundled:
                 export_bundle(export, BUNDLE_DIR)
                 src_pkg = Path(__file__).resolve().parent
@@ -667,7 +667,7 @@ def main(argv: list[str] | None = None) -> int:
                 if result.returncode != 0:
                     print(f"    pip install failed: {result.stderr}", file=sys.stderr)
                     return 1
-            print("    Package installed from pin.")
+                print("    Package installed from pin.")
 
             print("[3/7] Configuring Hermes config.yaml…")
             hermes_bin = shutil.which("hermes") or "hermes"
@@ -686,18 +686,22 @@ def main(argv: list[str] | None = None) -> int:
                 ([], "default"),
                 (["--profile", "librarian"], "librarian"),
             ):
+                # ``memory setup`` admits the plugin's declared pip_dependencies into
+                # Hermes's own runtime, then saves the selection. Setting the key directly
+                # skips that step, and the provider then cannot import in the gateway.
                 result = subprocess.run(
-                    [hermes_bin, *profile_args, "config", "set", "memory.provider", "hybrid-age"],
+                    [hermes_bin, *profile_args, "memory", "setup", "hybrid-age"],
                     capture_output=True,
                     text=True,
+                    stdin=subprocess.DEVNULL,
                 )
                 if result.returncode != 0:
-                    print(f"    memory.provider ({label}) via hermes CLI failed: {result.stderr.strip()[:200]}")
-                else:
-                    index = 1 if profile_args else 0
-                    if index < len(CONFIG_PATHS) and CONFIG_PATHS[index].exists():
-                        record_owned_path("config_paths", CONFIG_PATHS[index])
-                    print(f"    memory.provider=hybrid-age ({label})")
+                    print(f"    memory setup hybrid-age ({label}) failed: {result.stderr.strip()[:300]}", file=sys.stderr)
+                    return 1
+                index = 1 if profile_args else 0
+                if index < len(CONFIG_PATHS) and CONFIG_PATHS[index].exists():
+                    record_owned_path("config_paths", CONFIG_PATHS[index])
+                print(f"    memory provider hybrid-age activated ({label}), dependencies admitted")
 
             print("[4/7] Writing hybrid_age block to config.yaml…")
             for config_path in CONFIG_PATHS:
