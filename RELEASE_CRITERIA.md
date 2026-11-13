@@ -169,3 +169,44 @@ A local pytest pass is not a repository claim. A green PR is not a green `main`.
 - Treating `OC-MVP-1`/`OC-MVP-2` as `OC-MVP-4`. Honesty is not hover/click/funnel. The interaction spec is an MVP gate of its own.
 - Promoting [#72](https://github.com/rubyrayjuntos/hermes-memory/issues/72) into an MVP Delivery or OC ship-blocker. It is RQ construction, named on `RQ-MVP-1`.
 - [#73](https://github.com/rubyrayjuntos/hermes-memory/issues/73) as an MVP row. Naming/hygiene only.
+
+
+## Disposable release-gate readiness (local only)
+
+`python scripts/release_gate.py` runs the non-integration suite, the CI Ruff
+scope plus the gate script, the declared mypy scope, and offline wheel build,
+metadata and provider-registration checks in copied source with generated
+`HOME`/Hermes home. It invokes no live lifecycle commands. Command status is
+reported; arbitrary child output is withheld to avoid publishing credentials.
+
+This supports review of `D-MVP-3` (test coverage) and `D-PROD-4` (packaging
+readiness); it does not replace merged CI evidence, version/tag work, or any
+user-facing demonstration. No Open/Met row changes follow from the local gate.
+
+`--live --dsn ... --embed-url ... --execute` runs the install → verify →
+hermes-status → uninstall `--keep-db` → reinstall → verify → hermes-status →
+full uninstall lifecycle in a temporary venv and HOME, against a derived
+`hermes_release_gate_*` Docker database and an isolated loopback Ollama. The
+operator's Hermes home, `:5450`, `:5452` and `:11434` are not targeted.
+
+Automated run on 2026-11-13 (uncommitted working tree, staged snapshot): 28 of
+28 lifecycle checks passed, exit 0. Evidence: automated transcript only. Not
+level 6 under DEFINITION_OF_DONE.md: no human observed it, and
+Hermes recall of seeded facts across restart is not covered. No Open/Met row
+changes from this run. Remaining evidence: a human-observed, redacted
+transcript of the same sequence, and recall through Hermes.
+
+The run found and fixed four defects in the lifecycle path: verify cleanup
+deleted synthetic conversations still referenced by claims (`RESTRICT`
+foreign keys); uninstall's `compose down` failed because the recorded compose
+file requires `HERMES_PG_PASSWORD`; uninstall called a nonexistent
+`hermes restart`, so every uninstall reported incomplete; and the installer
+had no isolated-target mode. Each fix has a regression test where the test
+suite can express it; the verify cleanup fix is covered only by the live run.
+
+## Document changelog
+
+| Version | Created | Modified | Author | Notes |
+|---------|---------|----------|--------|-------|
+| 1.1 | 2026-09-05 | 2026-11-13 | Codex | Add disposable release-gate readiness and explicit live isolation blocker; no criteria status changes. |
+| 1.2 | 2026-09-05 | 2026-11-13 | Claude | Record the automated isolated lifecycle run and its defect fixes; no criteria status changes. |

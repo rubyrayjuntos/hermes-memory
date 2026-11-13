@@ -101,9 +101,36 @@ the recorded stack. Without a usable record or explicit DSN, database removal
 is refused rather than guessing a target. Failed cleanup returns nonzero and
 retains the installation record for retry.
 
-The planned disposable release-gate command is `python scripts/release_gate.py`;
-it is not yet available on this branch. Its optional `--live` phase requires an
-explicitly isolated Docker/Ollama environment and is separate from local tests.
+Run `python scripts/release_gate.py` from an environment with `.[dev]`
+installed for disposable, offline release checks. It copies the source into a
+temporary directory, generates a fresh `HOME` and Hermes home, and runs the
+non-integration pytest suite, `ruff check src tests scripts/release_gate.py`,
+the declared mypy scope, an offline wheel build, wheel entry-point inspection,
+and provider registration from the wheel. It excludes operator `.env` files,
+credentials, integration/migration opt-ins, and inherited pip configuration.
+No install/uninstall CLI, Docker deletion, database removal, or live service is
+invoked. All temporary files are removed. Status transcripts omit child output
+because failing tests can print credentials; rerun the named failing check in a
+controlled development environment for diagnostics. Legacy scripts outside this
+scope are not included in the Ruff release gate.
+
+`python scripts/release_gate.py --live --dsn "$RELEASE_GATE_DSN" --embed-url
+http://127.0.0.1:<port>/v1` prints a plan and exits 2 without `--execute`.
+With `--execute` it runs the lifecycle in a temporary venv and temporary HOME:
+install of a staged snapshot of the working tree (`--ref HEAD`, `--release-gate-target`), `hermes-memory-verify
+--require-embed`, `hermes memory status` (must report `hybrid-age`), uninstall
+with `--keep-db`, reinstall and verify, then full uninstall. The run-owned
+Docker container and volume are removed in a `finally`, using names derived from
+the validated DSN. The DSN must select a loopback host, a port other than
+5450/5452, and a database named `hermes_release_gate_<run-id>`; the embed URL
+must be loopback and not port 11434. The installer's `--release-gate-target`
+refuses a HOME outside the system temp directory. Use `--log-dir` only for a
+local, operator-chosen transcript directory; it may contain disposable-test
+secrets.
+
+The live lifecycle does **not** yet cover Hermes recall of seeded facts across a
+restart, or restart of owned services. It is automated evidence, not
+human-observed level-6 evidence.
 
 **Topology (do not mix):** clone / Documents work is `:5450` / `hermes_memory`.
 The install pin is `:5452` / `hermes_memory_installed`. Missing `HYBRID_AGE_DSN`
@@ -355,4 +382,4 @@ MIT
 
 | Version | Created | Modified | Author | Notes |
 |---|---|---|---|---|
-| 1.1 | 2026-08-24 | 2026-11-13 | Codex | Document clone-first packaging, installation ownership, uninstall behavior, and planned release gate. |
+| 1.2 | 2026-08-24 | 2026-11-13 | Codex | Document disposable offline release gate, guarded live plan, and remaining lifecycle evidence. |
