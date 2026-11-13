@@ -3,11 +3,20 @@
 import shutil
 import subprocess
 import sys
+import tomllib
 from importlib.metadata import PathDistribution
 from pathlib import Path
 from zipfile import ZipFile
 
 from hermes_memory.provider import HybridAgeMemoryProvider
+
+
+def test_dev_dependencies_include_offline_wheel_build_requirements() -> None:
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject.open("rb") as f:
+        dev = tomllib.load(f)["project"]["optional-dependencies"]["dev"]
+    assert "setuptools>=68" in dev
+    assert "wheel" in dev
 
 
 def test_built_wheel_entry_point_registers_one_provider(tmp_path: Path) -> None:
