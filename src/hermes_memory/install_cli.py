@@ -355,7 +355,12 @@ def _retained_env_fingerprints(previous: InstallState | None) -> dict[str, str]:
     retained: dict[str, str] = {}
     if previous is None:
         return retained
+    allowed = {str(path) for path in get_env_files()}
     for path in previous.env_paths:
+        if path not in allowed or not Path(path).parent.resolve().is_relative_to(HERMES_HOME.resolve()):
+            continue
+        if Path(path).is_symlink():
+            continue
         try:
             lines = Path(path).read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
@@ -469,7 +474,9 @@ def main(argv: list[str] | None = None) -> int:
         if previous is None:
             return ()
         allowed_paths = {str(path) for path in allowed}
-        return tuple(path for path in getattr(previous, field) if path in allowed_paths)
+        return tuple(path for path in getattr(previous, field)
+                     if path in allowed_paths and Path(path).exists()
+                     and Path(path).parent.resolve().is_relative_to(HERMES_HOME.resolve()))
 
     same_target = previous is not None and (
         previous.database_host, previous.database_port, previous.database_name, previous.database_user

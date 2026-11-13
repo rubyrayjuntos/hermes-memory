@@ -8,9 +8,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
 from psycopg import Error as PsycopgError
 from psycopg.conninfo import conninfo_to_dict
 
+from hermes_memory.config_cleanup import remove_hybrid_age_config, remove_owned_env_values
 from hermes_memory.install_state import InstallState, install_state_path, load_install_state
 
 HERMES_HOME = Path.home() / ".hermes"
@@ -68,7 +70,9 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
     )
     parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
     parser.add_argument("--keep-db", action="store_true", help="Keep the database")
-    parser.add_argument("--remove-plugin", action="store_true", help="Remove the hybrid-age plugin directory")
+    plugin = parser.add_mutually_exclusive_group()
+    plugin.add_argument("--keep-plugin", action="store_true", help="Keep plugin and skill directories")
+    plugin.add_argument("--remove-plugin", action="store_true", help="Compatibility alias for default cleanup")
     parser.add_argument("--dsn", default=None, help="Explicit Postgres DSN of the database to drop")
     args = parser.parse_args(argv)
     home = Path(home) if home is not None else HERMES_HOME
@@ -83,7 +87,7 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
             state = None
         target = resolve_uninstall_target(args, state)
     except (ValueError, OSError) as exc:
-        print(f"Uninstall refused: {exc}")
+        print(f"Incomplete: uninstall refused: {exc}")
         return 1
 
     if not args.force:
@@ -98,23 +102,23 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
     if compose:
         if not args.keep_db:
             compose.append("--volumes")
-        result = runner(compose, capture_output=True, text=True)
+        try:
+            result = runner(compose, capture_output=True, text=True)
+        except OSError:
+            print("Incomplete: Compose shutdown failed; uninstall stopped.")
+            return 1
         if result.returncode != 0:
-            print("Compose shutdown failed; uninstall stopped.")
+            print("Incomplete: Compose shutdown failed; uninstall stopped.")
             return 1
 
+    failed = False
     print("Stopping graph API...")
     try:
         from hermes_memory.graph_api import stop_daemon
         stop_daemon()
     except Exception:
-        print("Graph API stop skipped.")
-
-    hermes_bin = shutil.which("hermes") or "hermes"
-    result = runner([hermes_bin, "config", "set", "memory.provider", "built-in"],
-                    capture_output=True, text=True)
-    if result.returncode != 0:
-        print("Hermes provider configuration failed.")
+        print("Graph API stop failed.")
+        failed = True
 
     if not args.keep_db and not compose:
         assert target is not None
@@ -124,23 +128,65 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
             env.pop(name, None)
         if target.password is not None:
             env["PGPASSWORD"] = target.password
-        result = runner(["dropdb", "-h", target.host, "-p", str(target.port), "-U", target.user,
-                         "--", target.database], capture_output=True, text=True, env=env)
-        if result.returncode != 0:
+        try:
+            result = runner(["dropdb", "-h", target.host, "-p", str(target.port), "-U", target.user,
+                             "--", target.database], capture_output=True, text=True, env=env)
+        except OSError:
+            result = None
+        if result is None or result.returncode != 0:
             print("Database removal failed.")
-            return 1
+            failed = True
 
-    if args.remove_plugin:
-        for plugin_dir in (home / "plugins" / "hybrid-age",
-                           home / "profiles" / "librarian" / "plugins" / "hybrid-age"):
-            if plugin_dir.is_symlink():
-                plugin_dir.unlink()
-            elif plugin_dir.exists():
-                shutil.rmtree(plugin_dir)
+    def safe_path(raw: str, candidates: tuple[Path, ...]) -> Path:
+        path = Path(raw)
+        if path not in candidates or not path.parent.resolve().is_relative_to(home.resolve()):
+            raise ValueError("recorded path is outside its expected location")
+        if path.is_symlink() and path not in artifact_paths:
+            raise ValueError("recorded configuration path is a symlink")
+        return path
 
-    result = runner([hermes_bin, "restart"], capture_output=True, text=True)
-    if result.returncode != 0:
-        runner([hermes_bin, "memory", "off"], capture_output=True, text=True)
+    roots = (home, home / "profiles" / "librarian")
+    plugin_paths = tuple(root / "plugins" / "hybrid-age" for root in roots)
+    skill_paths = tuple(root / "skills" / "librarian-setup" for root in roots)
+    artifact_paths = plugin_paths + skill_paths
+    if state:
+        steps = [(state.env_paths, tuple(root / ".env" for root in roots),
+                  lambda p: remove_owned_env_values(p, state.owned_env_fingerprints)),
+                 (state.config_paths, tuple(root / "config.yaml" for root in roots),
+                  remove_hybrid_age_config)]
+        if not args.keep_plugin:
+            def remove_artifact(path):
+                if path.is_symlink():
+                    path.unlink()
+                elif path.exists():
+                    shutil.rmtree(path)
+            steps.extend([(state.plugin_dirs, plugin_paths, remove_artifact),
+                          (state.skill_dirs, skill_paths, remove_artifact)])
+        for paths, allowed, action in steps:
+            for raw in paths:
+                try:
+                    action(safe_path(raw, allowed))
+                except (OSError, ValueError, yaml.YAMLError) as exc:
+                    print(f"Cleanup failed for {raw}: {type(exc).__name__}")
+                    failed = True
+
+    hermes_bin = shutil.which("hermes") or "hermes"
+    try:
+        result = runner([hermes_bin, "restart"], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Hermes restart failed.")
+            failed = True
+    except OSError:
+        print("Hermes restart failed.")
+        failed = True
+    if not failed and state is not None:
+        try:
+            install_state_path(home).unlink(missing_ok=True)
+        except OSError:
+            failed = True
+    if failed:
+        print("Incomplete: uninstall did not finish; installation record retained.")
+        return 1
     print("Uninstall complete.")
     return 0
 

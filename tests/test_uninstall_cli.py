@@ -162,3 +162,52 @@ def test_dropdb_discards_ambient_password_when_dsn_has_none(tmp_path, calls, mon
     assert result == 0
     env = next(kwargs["env"] for command, kwargs in calls[0] if command[0] == "dropdb")
     assert "PGPASSWORD" not in env
+
+
+def test_owned_artifacts_removed_by_default(tmp_path, calls, state):
+    plugin = tmp_path / 'plugins' / 'hybrid-age'
+    skill = tmp_path / 'skills' / 'librarian-setup'
+    plugin.mkdir(parents=True)
+    skill.mkdir(parents=True)
+    state = replace(state, plugin_dirs=(str(plugin),), skill_dirs=(str(skill),))
+    write_install_state(install_state_path(tmp_path), state)
+    result, _ = invoke(tmp_path, calls, '--keep-db')
+    assert result == 0
+    assert not plugin.exists() and not skill.exists()
+    assert not install_state_path(tmp_path).exists()
+
+
+def test_keep_plugin_preserves_plugin_and_skill(tmp_path, calls, state):
+    plugin = tmp_path / 'plugins' / 'hybrid-age'
+    skill = tmp_path / 'skills' / 'librarian-setup'
+    plugin.mkdir(parents=True)
+    skill.mkdir(parents=True)
+    write_install_state(install_state_path(tmp_path), replace(state, plugin_dirs=(str(plugin),), skill_dirs=(str(skill),)))
+    result, _ = invoke(tmp_path, calls, '--keep-db', '--keep-plugin')
+    assert result == 0
+    assert plugin.exists() and skill.exists()
+
+
+def test_untrusted_owned_path_is_not_removed_and_retains_state(tmp_path, calls, state, capsys):
+    victim = tmp_path / 'other'
+    victim.mkdir()
+    write_install_state(install_state_path(tmp_path), replace(state, plugin_dirs=(str(victim),)))
+    result, _ = invoke(tmp_path, calls, '--keep-db')
+    assert result != 0 and victim.exists() and install_state_path(tmp_path).exists()
+    assert 'Incomplete' in capsys.readouterr().out
+
+
+def test_required_failure_retains_state_and_reports_incomplete(tmp_path, state, monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, 'hermes_memory.graph_api', types.SimpleNamespace(stop_daemon=lambda: None))
+    write_install_state(install_state_path(tmp_path), state)
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1 if command[0] != 'docker' else 0, '', '')
+    assert main(['--force', '--keep-db'], home=tmp_path, runner=runner) != 0
+    assert install_state_path(tmp_path).exists()
+    assert 'Incomplete' in capsys.readouterr().out
+
+
+def test_refusal_reports_incomplete(tmp_path, calls, capsys):
+    result, _ = invoke(tmp_path, calls)
+    assert result != 0
+    assert 'Incomplete' in capsys.readouterr().out

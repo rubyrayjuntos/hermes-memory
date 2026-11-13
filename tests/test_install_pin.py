@@ -351,3 +351,48 @@ def test_reinstall_preserves_only_still_matching_password_ownership(
         assert (current_hash == state.owned_env_fingerprints.get("HERMES_PG_PASSWORD")) == (
             index >= edited_count
         )
+
+
+@pytest.mark.parametrize("edited_count", [0, 1, 2])
+def test_reinstall_cleanup_preserves_edited_passwords(isolated_install, monkeypatch, edited_count):
+    import subprocess
+    import sys
+    import types
+
+    from hermes_memory.uninstall_cli import main as uninstall
+
+    cli, home = isolated_install
+    assert cli.main(["--yes", "--ref", "HEAD"]) == 0
+    paths = cli.get_env_files()
+    for path in paths[:edited_count]:
+        path.write_text(path.read_text().replace(
+            "HERMES_PG_PASSWORD=test-only-install-owned-password",
+            "HERMES_PG_PASSWORD=test-only-user-edited-password",
+        ))
+    assert cli.main(["--yes", "--ref", "HEAD"]) == 0
+    monkeypatch.setitem(sys.modules, "hermes_memory.graph_api", types.SimpleNamespace(stop_daemon=lambda: None))
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, "", "")
+    assert uninstall(["--force", "--keep-db"], home=home, runner=runner) == 0
+    for index, path in enumerate(paths):
+        text = path.read_text()
+        assert ("HERMES_PG_PASSWORD=test-only-user-edited-password" in text) == (index < edited_count)
+        assert "HERMES_PG_PASSWORD=test-only-install-owned-password" not in text
+
+
+def test_reinstall_does_not_retain_missing_artifact_ownership(isolated_install, monkeypatch):
+    import shutil
+
+    from hermes_memory.install_state import install_state_path, load_install_state
+
+    cli, home = isolated_install
+    assert cli.main(["--yes", "--ref", "HEAD"]) == 0
+    missing = home / "skills" / "librarian-setup"
+    shutil.rmtree(missing)
+    def fail_export(repo, sha, dest):
+        raise SystemExit("test export failure")
+    monkeypatch.setattr(cli, "export_pin", fail_export)
+    with pytest.raises(SystemExit):
+        cli.main(["--yes", "--ref", "HEAD"])
+    state = load_install_state(install_state_path(home))
+    assert str(missing) not in state.skill_dirs
