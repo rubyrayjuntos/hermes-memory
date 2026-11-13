@@ -76,6 +76,62 @@ the `v0.1.0` tag): it copies
 sets `memory.provider=hybrid-age` and serves the inspector on
 `http://127.0.0.1:7890`.
 
+A wheel can be built and exposes `hybrid-age` in the
+`hermes_agent.memory_providers` entry-point group, but it is not a standalone
+installer. Run `hermes-memory-install` from an environment tied to a Git
+checkout: outside a checkout it stops before changing Hermes and asks you to
+clone. The installer exports the selected committed tree; local uncommitted
+changes are not included.
+
+The installer records non-secret ownership and progress in
+`<hermes-home>/hermes-memory-install.json` (normally `~/.hermes/`, mode
+`0600`). A successful install records its owned plugin, skill, configuration,
+environment values, and database/Compose target. Incomplete installs retain a
+record for recovery; environment values are represented by fingerprints, not
+secrets.
+
+To uninstall, run `hermes-memory-uninstall`. By default it removes recorded
+plugin and skill directories and cleans up owned configuration and unchanged
+owned environment values. `--keep-plugin` preserves the plugin and skill
+folders; `--keep-db` preserves the database. The legacy `--remove-plugin` is
+accepted as an alias for the default cleanup. The recorded owned Compose stack
+is stopped with `down --volumes` when removing its database, or `down` with
+`--keep-db`. An explicitly different `--dsn` targets `dropdb` without stopping
+the recorded stack. Without a usable record or explicit DSN, database removal
+is refused rather than guessing a target. Failed cleanup returns nonzero and
+retains the installation record for retry.
+
+Run `python scripts/release_gate.py` from an environment with `.[dev]`
+installed for disposable, offline release checks. It copies the source into a
+temporary directory, generates a fresh `HOME` and Hermes home, and runs the
+non-integration pytest suite, `ruff check src tests scripts/release_gate.py`,
+the declared mypy scope, an offline wheel build, wheel entry-point inspection,
+and provider registration from the wheel. It excludes operator `.env` files,
+credentials, integration/migration opt-ins, and inherited pip configuration.
+No install/uninstall CLI, Docker deletion, database removal, or live service is
+invoked. All temporary files are removed. Status transcripts omit child output
+because failing tests can print credentials; rerun the named failing check in a
+controlled development environment for diagnostics. Legacy scripts outside this
+scope are not included in the Ruff release gate.
+
+`python scripts/release_gate.py --live --dsn "$RELEASE_GATE_DSN" --embed-url
+http://127.0.0.1:<port>/v1` prints a plan and exits 2 without `--execute`.
+With `--execute` it runs the lifecycle in a temporary venv and temporary HOME:
+install of a staged snapshot of the working tree (`--ref HEAD`, `--release-gate-target`), `hermes-memory-verify
+--require-embed`, `hermes memory status` (must report `hybrid-age`), uninstall
+with `--keep-db`, reinstall and verify, then full uninstall. The run-owned
+Docker container and volume are removed in a `finally`, using names derived from
+the validated DSN. The DSN must select a loopback host, a port other than
+5450/5452, and a database named `hermes_release_gate_<run-id>`; the embed URL
+must be loopback and not port 11434. The installer's `--release-gate-target`
+refuses a HOME outside the system temp directory. Use `--log-dir` only for a
+local, operator-chosen transcript directory; it may contain disposable-test
+secrets.
+
+The live lifecycle does **not** yet cover Hermes recall of seeded facts across a
+restart, or restart of owned services. It is automated evidence, not
+human-observed level-6 evidence.
+
 **Topology (do not mix):** clone / Documents work is `:5450` / `hermes_memory`.
 The install pin is `:5452` / `hermes_memory_installed`. Missing `HYBRID_AGE_DSN`
 after dotenv load **raises** — there is no silent fallback to `:5450`.
@@ -297,7 +353,7 @@ until re-tested.
 | `hermes-memory-install` | Pin a git ref into `~/.hermes/plugins/hybrid-age` (copy + `.hermes-memory-version`), non-editable pip, installed DB on `:5452` / `hermes_memory_installed`, viz API `:7890`, verify. Does not attach to the `:5450` dev stack. |
 | `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
 | `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
-| `hermes-memory-uninstall` | Stop viz API, disable hybrid‑age, drop hermes_memory DB (unless `--keep-db`), remove plugin dirs, fall back to built‑in MEMORY.md/USER.md. |
+| `hermes-memory-uninstall` | Clean up recorded ownership; use `--keep-plugin` and `--keep-db` to preserve those categories. Database removal requires a recorded or explicit target. |
 | `hermes-memory-api` | Read-only viz API (`start`/`stop`/`status`/`serve`) on 127.0.0.1:7890. Pane: `http://127.0.0.1:7890/api/librarian/pane`. |
 | `hermes-memory-backfill-about` | Legacy Title-Case linker only. Does **not** run live C–F (no nouns, passports, `semantic_edge`, or `drain_status`). The old name `hermes-memory-backfill` now exits 2 and prints this distinction. |
 | `scripts/replay_conversation_manifold.py --live` | The C–F backfill: flower, `extract_nouns`, passports, `upsert_mentions_chain`, `drain_status` on `hermes_memory`. Default (no `--live`) copies onto `hermes_test`. |
@@ -321,3 +377,9 @@ pg_restore -d hermes_memory ~/librarian-2026-08-31.dump
 ## License
 
 MIT
+
+## Document changelog
+
+| Version | Created | Modified | Author | Notes |
+|---|---|---|---|---|
+| 1.2 | 2026-08-24 | 2026-11-13 | Codex | Document disposable offline release gate, guarded live plan, and remaining lifecycle evidence. |
