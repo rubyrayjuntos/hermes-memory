@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import io
 import os
 import re
@@ -24,8 +25,11 @@ import sys
 import tarfile
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
+
+from hermes_memory.install_state import InstallState, install_state_path, write_install_state
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_HOME = Path.home() / ".hermes"
@@ -45,6 +49,26 @@ INSTALLED_PORT = "5452"
 INSTALLED_DB = "hermes_memory_installed"
 DEV_PORT = 5450
 DEV_DB = "hermes_memory"
+
+
+def require_git_checkout(repo: Path) -> None:
+    """Refuse wheel/site-packages invocation before any Hermes mutation."""
+    guidance = (
+        "install: clone-first installation requires a Git checkout. "
+        "Clone hermes-memory and run hermes-memory-install from that checkout's environment."
+    )
+    if not (repo / ".git").exists():
+        raise SystemExit(guidance)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        raise SystemExit(guidance) from None
+    if result.returncode != 0 or result.stdout.strip() != "true":
+        raise SystemExit(guidance)
 
 
 def default_release_ref(repo: Path) -> str:
@@ -73,7 +97,7 @@ def resolve_pin(repo: Path, ref: str) -> tuple[str, str]:
     )
     if result.returncode != 0:
         raise SystemExit(
-            f"install: cannot resolve --ref {ref!r}: {result.stderr.strip() or result.stdout.strip()}"
+            f"install: cannot resolve --ref {ref!r}. Use a valid ref in a clone-first Git checkout."
         )
     return ref, result.stdout.strip()
 
@@ -344,10 +368,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yes", action="store_true", help="Assume yes to all prompts")
     args = parser.parse_args(argv)
 
+    require_git_checkout(REPO_ROOT)
     ref = args.ref or default_release_ref(REPO_ROOT)
     ref, sha = resolve_pin(REPO_ROOT, ref)
     print(f"install: pin ref={ref} sha={sha}")
 
+    password_updates: dict[str, str] = {}
     dsn = args.dsn
     if dsn and is_dev_clone_dsn(dsn) and not args.reuse_dsn:
         print(
@@ -382,8 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             print("ERROR: a Postgres password is required.", file=sys.stderr)
             return 1
         dsn = installed_dsn(pw)
-        for env_path in get_env_files():
-            merge_env_file(env_path, {"HERMES_PG_PASSWORD": pw})
+        password_updates["HERMES_PG_PASSWORD"] = pw
 
     def _prompt(label, default, env_name):
         if args.yes:
@@ -399,179 +424,214 @@ def main(argv: list[str] | None = None) -> int:
     graph = args.graph or _prompt("HYBRID_AGE_GRAPH", "hermes_knowledge", "HYBRID_AGE_GRAPH")
 
     updates = {
+        **password_updates,
         "HYBRID_AGE_DSN": dsn,
         "HYBRID_AGE_EMBED_URL": embed_url,
         "HYBRID_AGE_EMBED_MODEL": embed_model,
         "HYBRID_AGE_GRAPH": graph,
     }
-    for env_path in get_env_files():
-        merge_env_file(env_path, updates)
-    os.environ["HYBRID_AGE_DSN"] = dsn
-    os.environ.setdefault("HYBRID_AGE_EMBED_URL", embed_url)
-    os.environ.setdefault("HYBRID_AGE_EMBED_MODEL", embed_model)
-    os.environ.setdefault("HYBRID_AGE_GRAPH", graph)
+    parsed = urlparse(dsn)
+    owns_compose = not is_dev_clone_dsn(dsn)
+    state = InstallState(
+        sha=sha,
+        ref=ref,
+        compose_project=INSTALLED_COMPOSE_PROJECT if owns_compose else None,
+        compose_container=INSTALLED_CONTAINER if owns_compose else None,
+        compose_file=str(HERMES_HOME / "compose" / "hermes-memory-installed.yml")
+        if owns_compose else None,
+        database_host=parsed.hostname or "localhost",
+        database_port=parsed.port or 5432,
+        database_name=unquote(parsed.path.lstrip("/")),
+        database_user=unquote(parsed.username or "hermes"),
+        plugin_dirs=tuple(str(path) for path in PLUGIN_DIRS),
+        skill_dirs=tuple(str(path) for path in (
+            HERMES_HOME / "skills" / "librarian-setup",
+            HERMES_HOME / "profiles" / "librarian" / "skills" / "librarian-setup",
+        )),
+        config_paths=tuple(str(path) for path in CONFIG_PATHS),
+        env_paths=tuple(str(path) for path in get_env_files()),
+        owned_env_fingerprints={
+            key: hashlib.sha256(value.encode("utf-8")).hexdigest()
+            for key, value in updates.items()
+        },
+    )
+    state_path = install_state_path(HERMES_HOME)
+    write_install_state(state_path, state)
+    succeeded = False
+    try:
+        for env_path in get_env_files():
+            merge_env_file(env_path, updates)
+        os.environ["HYBRID_AGE_DSN"] = dsn
+        os.environ.setdefault("HYBRID_AGE_EMBED_URL", embed_url)
+        os.environ.setdefault("HYBRID_AGE_EMBED_MODEL", embed_model)
+        os.environ.setdefault("HYBRID_AGE_GRAPH", graph)
 
-    with tempfile.TemporaryDirectory(prefix="hermes-memory-pin-") as tmp:
-        export = Path(tmp)
-        print(f"[1/7] Exporting pinned tree {sha[:12]}…")
-        export_pin(REPO_ROOT, sha, export)
-        src_pkg = export / "src" / "hermes_memory"
-        skill_src = export / "skills" / "librarian-setup"
+        with tempfile.TemporaryDirectory(prefix="hermes-memory-pin-") as tmp:
+            export = Path(tmp)
+            print(f"[1/7] Exporting pinned tree {sha[:12]}…")
+            export_pin(REPO_ROOT, sha, export)
+            src_pkg = export / "src" / "hermes_memory"
+            skill_src = export / "skills" / "librarian-setup"
 
-        print("[1b/7] Installing hybrid-age plugin from pin (copy, not symlink)…")
-        for plugin_dir in PLUGIN_DIRS:
-            copy_plugin_tree(src_pkg, plugin_dir)
-            stamp = write_version_stamp(plugin_dir, sha=sha, ref=ref)
-            print(f"    {plugin_dir} sha={sha[:12]} stamp={stamp.name}")
+            print("[1b/7] Installing hybrid-age plugin from pin (copy, not symlink)…")
+            for plugin_dir in PLUGIN_DIRS:
+                copy_plugin_tree(src_pkg, plugin_dir)
+                stamp = write_version_stamp(plugin_dir, sha=sha, ref=ref)
+                print(f"    {plugin_dir} sha={sha[:12]} stamp={stamp.name}")
 
-        print("[1c/7] Installing librarian-setup skill from pin…")
-        if skill_src.is_dir():
-            for skill_dir in (
-                HERMES_HOME / "skills" / "librarian-setup",
-                HERMES_HOME / "profiles" / "librarian" / "skills" / "librarian-setup",
-            ):
-                skill_dir.parent.mkdir(parents=True, exist_ok=True)
-                if skill_dir.exists():
-                    shutil.rmtree(skill_dir)
-                shutil.copytree(skill_src, skill_dir)
-                print(f"    Skill dir: {skill_dir}")
-        else:
-            print(f"    WARNING: {skill_src} not in pin — skip skill copy.")
-
-        print("[2/7] pip install (non-editable) from pinned tree…")
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", str(export)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(f"    pip install failed: {result.stderr}", file=sys.stderr)
-            return 1
-        print("    Package installed from pin.")
-
-        print("[3/7] Configuring Hermes config.yaml…")
-        hermes_bin = shutil.which("hermes") or "hermes"
-        for cmd, ok in (
-            ([hermes_bin, "config", "set", "plugins.enabled", "['hybrid-age']"], "plugins.enabled set."),
-            ([hermes_bin, "config", "set", "plugins.disabled", "['pgvector']"], "plugins.disabled set."),
-        ):
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"    hermes config set failed: {result.stderr}")
+            print("[1c/7] Installing librarian-setup skill from pin…")
+            if skill_src.is_dir():
+                for skill_dir in (
+                    HERMES_HOME / "skills" / "librarian-setup",
+                    HERMES_HOME / "profiles" / "librarian" / "skills" / "librarian-setup",
+                ):
+                    skill_dir.parent.mkdir(parents=True, exist_ok=True)
+                    if skill_dir.exists():
+                        shutil.rmtree(skill_dir)
+                    shutil.copytree(skill_src, skill_dir)
+                    print(f"    Skill dir: {skill_dir}")
             else:
-                print(f"    {ok}")
-        for profile_args, label in (
-            ([], "default"),
-            (["--profile", "librarian"], "librarian"),
-        ):
+                print(f"    WARNING: {skill_src} not in pin — skip skill copy.")
+
+            print("[2/7] pip install (non-editable) from pinned tree…")
             result = subprocess.run(
-                [hermes_bin, *profile_args, "config", "set", "memory.provider", "hybrid-age"],
+                [sys.executable, "-m", "pip", "install", str(export)],
                 capture_output=True,
                 text=True,
             )
             if result.returncode != 0:
-                print(f"    memory.provider ({label}) via hermes CLI failed: {result.stderr.strip()[:200]}")
-            else:
-                print(f"    memory.provider=hybrid-age ({label})")
-
-        print("[4/7] Writing hybrid_age block to config.yaml…")
-        for config_path in CONFIG_PATHS:
-            write_hybrid_age_block(config_path, embed_model, graph)
-            print(f"    updated {config_path}")
-
-        print(f"[5/7] Starting installed Postgres ({_redact_dsn(dsn)})…")
-        compose_path = export / "docker-compose.installed.yml"
-        record_path = HERMES_HOME / "compose" / "hermes-memory-installed.yml"
-        if is_dev_clone_dsn(dsn):
-            print("    --reuse-dsn: not creating a new compose project.")
-        elif not (export / "docker" / "Dockerfile").is_file():
-            print("    WARNING: pin is missing docker/Dockerfile.")
-            return 1
-        else:
-            write_installed_compose(compose_path)
-            write_installed_compose(record_path)
-            env = os.environ.copy()
-            parsed = urlparse(dsn)
-            if parsed.password:
-                env["HERMES_PG_PASSWORD"] = parsed.password
-            env["HERMES_PG_DB"] = INSTALLED_DB
-            env["HERMES_PG_HOST_PORT"] = INSTALLED_PORT
-            result = subprocess.run(
-                [
-                    "docker",
-                    "compose",
-                    "-p",
-                    INSTALLED_COMPOSE_PROJECT,
-                    "-f",
-                    str(compose_path),
-                    "up",
-                    "-d",
-                    "postgres",
-                ],
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            if result.returncode != 0:
-                print(f"    docker compose failed: {result.stderr}", file=sys.stderr)
+                print(f"    pip install failed: {result.stderr}", file=sys.stderr)
                 return 1
-            print(f"    {INSTALLED_CONTAINER} on {INSTALLED_PORT}/{INSTALLED_DB}")
+            print("    Package installed from pin.")
 
-            print("[5b/7] Waiting for installed PostgreSQL…")
-            max_wait = 60
-            waited = 0
-            while waited < max_wait:
-                health = subprocess.run(
-                    ["docker", "inspect", "-f", "{{.State.Health.Status}}", INSTALLED_CONTAINER],
+            print("[3/7] Configuring Hermes config.yaml…")
+            hermes_bin = shutil.which("hermes") or "hermes"
+            for cmd, ok in (
+                ([hermes_bin, "config", "set", "plugins.enabled", "['hybrid-age']"], "plugins.enabled set."),
+                ([hermes_bin, "config", "set", "plugins.disabled", "['pgvector']"], "plugins.disabled set."),
+            ):
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"    hermes config set failed: {result.stderr}")
+                else:
+                    print(f"    {ok}")
+            for profile_args, label in (
+                ([], "default"),
+                (["--profile", "librarian"], "librarian"),
+            ):
+                result = subprocess.run(
+                    [hermes_bin, *profile_args, "config", "set", "memory.provider", "hybrid-age"],
                     capture_output=True,
                     text=True,
                 )
-                if health.stdout.strip() == "healthy":
-                    print("    PostgreSQL is healthy.")
-                    break
-                time.sleep(1)
-                waited += 1
+                if result.returncode != 0:
+                    print(f"    memory.provider ({label}) via hermes CLI failed: {result.stderr.strip()[:200]}")
+                else:
+                    print(f"    memory.provider=hybrid-age ({label})")
+
+            print("[4/7] Writing hybrid_age block to config.yaml…")
+            for config_path in CONFIG_PATHS:
+                write_hybrid_age_block(config_path, embed_model, graph)
+                print(f"    updated {config_path}")
+
+            print(f"[5/7] Starting installed Postgres ({_redact_dsn(dsn)})…")
+            compose_path = export / "docker-compose.installed.yml"
+            record_path = HERMES_HOME / "compose" / "hermes-memory-installed.yml"
+            if is_dev_clone_dsn(dsn):
+                print("    --reuse-dsn: not creating a new compose project.")
+            elif not (export / "docker" / "Dockerfile").is_file():
+                print("    WARNING: pin is missing docker/Dockerfile.")
+                return 1
             else:
-                print(f"    WARNING: {INSTALLED_CONTAINER} not healthy after {max_wait}s.")
-
-            migrate = export / "scripts" / "migrate.py"
-            if migrate.is_file():
-                print("[5c/7] Applying pinned migrations…")
-                mig = subprocess.run(
-                    [sys.executable, str(migrate), "--dsn", dsn],
+                write_installed_compose(compose_path)
+                write_installed_compose(record_path)
+                env = os.environ.copy()
+                parsed = urlparse(dsn)
+                if parsed.password:
+                    env["HERMES_PG_PASSWORD"] = parsed.password
+                env["HERMES_PG_DB"] = INSTALLED_DB
+                env["HERMES_PG_HOST_PORT"] = INSTALLED_PORT
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        "-p",
+                        INSTALLED_COMPOSE_PROJECT,
+                        "-f",
+                        str(compose_path),
+                        "up",
+                        "-d",
+                        "postgres",
+                    ],
                     capture_output=True,
                     text=True,
+                    env=env,
                 )
-                print(mig.stdout)
-                if mig.returncode != 0:
-                    print(f"    migrate failed: {mig.stderr}", file=sys.stderr)
+                if result.returncode != 0:
+                    print(f"    docker compose failed: {result.stderr}", file=sys.stderr)
                     return 1
+                print(f"    {INSTALLED_CONTAINER} on {INSTALLED_PORT}/{INSTALLED_DB}")
 
-        print("[6/7] Restarting graph API (7890)…")
-        try:
-            from hermes_memory.graph_api import start_daemon, wait_ready
+                print("[5b/7] Waiting for installed PostgreSQL…")
+                max_wait = 60
+                waited = 0
+                while waited < max_wait:
+                    health = subprocess.run(
+                        ["docker", "inspect", "-f", "{{.State.Health.Status}}", INSTALLED_CONTAINER],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if health.stdout.strip() == "healthy":
+                        print("    PostgreSQL is healthy.")
+                        break
+                    time.sleep(1)
+                    waited += 1
+                else:
+                    print(f"    WARNING: {INSTALLED_CONTAINER} not healthy after {max_wait}s.")
 
-            start_daemon()
-            if wait_ready(timeout=8.0):
-                print("    graph API is up and serving.")
+                migrate = export / "scripts" / "migrate.py"
+                if migrate.is_file():
+                    print("[5c/7] Applying pinned migrations…")
+                    mig = subprocess.run(
+                        [sys.executable, str(migrate), "--dsn", dsn],
+                        capture_output=True,
+                        text=True,
+                    )
+                    print(mig.stdout)
+                    if mig.returncode != 0:
+                        print(f"    migrate failed: {mig.stderr}", file=sys.stderr)
+                        return 1
+
+            print("[6/7] Restarting graph API (7890)…")
+            try:
+                from hermes_memory.graph_api import start_daemon, wait_ready
+
+                start_daemon()
+                if wait_ready(timeout=8.0):
+                    print("    graph API is up and serving.")
+                else:
+                    print("    graph API may not be up yet. Log: /tmp/librarian_api.log")
+            except Exception as exc:
+                print(f"    API start failed: {exc}")
+
+            print("[7/7] Running hermes-memory-verify…")
+            result = subprocess.run(
+                [sys.executable, "-m", "hermes_memory.verify"],
+                capture_output=True,
+                text=True,
+            )
+            print(result.stdout)
+            if result.returncode == 0:
+                print(f"Installation complete! pin={sha[:12]} dsn={_redact_dsn(dsn)} verify=PASS")
             else:
-                print("    graph API may not be up yet. Log: /tmp/librarian_api.log")
-        except Exception as exc:
-            print(f"    API start failed: {exc}")
-
-        print("[7/7] Running hermes-memory-verify…")
-        result = subprocess.run(
-            [sys.executable, "-m", "hermes_memory.verify"],
-            capture_output=True,
-            text=True,
+                print("Installation finished with verify: FAIL")
+            print("    skipped hermes-memory-backfill-about (ABOUT/Concept only; not C–F).")
+            succeeded = result.returncode == 0
+            return 0 if succeeded else 1
+    finally:
+        write_install_state(
+            state_path, replace(state, status="complete" if succeeded else "incomplete")
         )
-        print(result.stdout)
-        if result.returncode == 0:
-            print(f"Installation complete! pin={sha[:12]} dsn={_redact_dsn(dsn)} verify=PASS")
-        else:
-            print("Installation finished with verify: FAIL")
-        print("    skipped hermes-memory-backfill-about (ABOUT/Concept only; not C–F).")
-        return 0 if result.returncode == 0 else 1
 
 
 if __name__ == "__main__":

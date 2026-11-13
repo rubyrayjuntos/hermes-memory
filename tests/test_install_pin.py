@@ -108,3 +108,109 @@ def test_resolve_and_export_pin_is_this_repo_head(tmp_path: Path) -> None:
     export_pin(REPO_ROOT, sha, dest)
     assert (dest / "src" / "hermes_memory" / "walk.py").is_file()
     assert (dest / "sql" / "migrations").is_dir()
+
+
+def test_checkout_preflight_accepts_worktree_git_file() -> None:
+    from hermes_memory.install_cli import require_git_checkout
+
+    require_git_checkout(REPO_ROOT)
+
+
+def test_noncheckout_preflight_precedes_all_hermes_mutation(tmp_path, monkeypatch, capsys):
+    import pytest
+
+    from hermes_memory import install_cli
+
+    repo = tmp_path / "wheel" / "site-packages"
+    repo.mkdir(parents=True)
+    home = tmp_path / "hermes-home"
+    monkeypatch.setattr(install_cli, "REPO_ROOT", repo)
+    monkeypatch.setattr(install_cli, "HERMES_HOME", home)
+    monkeypatch.setattr(install_cli, "PLUGIN_DIRS", (home / "plugins" / "hybrid-age",))
+    monkeypatch.setattr(install_cli, "CONFIG_PATHS", (home / "config.yaml",))
+    with pytest.raises(SystemExit, match="clone"):
+        install_cli.main(["--yes"])
+    assert not home.exists()
+    assert "HERMES_PG_PASSWORD=" not in capsys.readouterr().out
+
+
+def test_install_records_owned_values_and_failure_status(tmp_path, monkeypatch):
+    import hashlib
+    import subprocess
+
+    from hermes_memory import install_cli
+    from hermes_memory.install_state import install_state_path, load_install_state
+
+    home = tmp_path / "hermes-home"
+    monkeypatch.setattr(install_cli, "HERMES_HOME", home)
+    monkeypatch.setattr(install_cli, "PLUGIN_DIRS", (home / "plugins" / "hybrid-age",))
+    monkeypatch.setattr(install_cli, "CONFIG_PATHS", (home / "config.yaml",))
+    for key in ("HYBRID_AGE_DSN", "HYBRID_AGE_EMBED_URL", "HYBRID_AGE_EMBED_MODEL", "HYBRID_AGE_GRAPH"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HERMES_PG_PASSWORD", "test-only-generated-value")
+    # Fail the first external mutation (pip), after real local file writes/export.
+    real_run = subprocess.run
+
+    def runner(command, **kwargs):
+        if command[0] == "git":
+            return real_run(command, **kwargs)
+        assert command[1:4] == ["-m", "pip", "install"]
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="pip unavailable")
+
+    monkeypatch.setattr(install_cli.subprocess, "run", runner)
+    assert install_cli.main(["--yes", "--ref", "HEAD"]) == 1
+    state = load_install_state(install_state_path(home))
+    assert state.status == "incomplete"
+    assert state.database_host == "127.0.0.1"
+    assert state.database_port == 5452
+    assert state.database_name == "hermes_memory_installed"
+    assert state.database_user == "hermes"
+    assert state.compose_project == "hermes-memory-installed"
+    assert state.compose_container == "hermes-memory-postgres-installed"
+    assert state.compose_file == str(home / "compose" / "hermes-memory-installed.yml")
+    assert state.plugin_dirs == (str(home / "plugins" / "hybrid-age"),)
+    assert state.owned_env_fingerprints["HERMES_PG_PASSWORD"] == hashlib.sha256(
+        b"test-only-generated-value"
+    ).hexdigest()
+    text = install_state_path(home).read_text()
+    assert "test-only-generated-value" not in text
+    assert "postgres://" not in text
+
+
+def test_successful_reused_target_records_no_compose_ownership(tmp_path, monkeypatch):
+    import hashlib
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    from hermes_memory import install_cli
+    from hermes_memory.install_state import install_state_path, load_install_state
+
+    home = tmp_path / "hermes-home"
+    monkeypatch.setattr(install_cli, "HERMES_HOME", home)
+    monkeypatch.setattr(install_cli, "PLUGIN_DIRS", (home / "plugins" / "hybrid-age",))
+    monkeypatch.setattr(install_cli, "CONFIG_PATHS", (home / "config.yaml",))
+    for key in ("HYBRID_AGE_DSN", "HYBRID_AGE_EMBED_URL", "HYBRID_AGE_EMBED_MODEL", "HYBRID_AGE_GRAPH"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(sys.modules, "hermes_memory.graph_api", SimpleNamespace(
+        start_daemon=lambda: None, wait_ready=lambda **kwargs: True,
+    ))
+    real_run = subprocess.run
+
+    def runner(command, **kwargs):
+        if command[0] == "git":
+            return real_run(command, **kwargs)
+        assert command[0] != "docker"
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(install_cli.subprocess, "run", runner)
+    dsn = "postgres://hermes:test-only-reused-value@127.0.0.1:5450/hermes_memory"
+    assert install_cli.main(["--yes", "--ref", "HEAD", "--dsn", dsn, "--reuse-dsn"]) == 0
+    state = load_install_state(install_state_path(home))
+    assert state.status == "complete"
+    assert state.database_port == 5450
+    assert state.database_name == "hermes_memory"
+    assert (state.compose_project, state.compose_container, state.compose_file) == (None, None, None)
+    assert "HERMES_PG_PASSWORD" not in state.owned_env_fingerprints
+    assert state.owned_env_fingerprints["HYBRID_AGE_DSN"] == hashlib.sha256(dsn.encode()).hexdigest()
+    assert "test-only-reused-value" not in install_state_path(home).read_text()
