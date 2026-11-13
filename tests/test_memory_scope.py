@@ -11,6 +11,11 @@ def test_shared_scope_ignores_the_chat_session_identity():
     assert resolve_agent_identity("shared", {}) == SHARED_AGENT_IDENTITY
 
 
+def test_shared_scope_still_honors_a_caller_named_owner():
+    """verify and other callers name their owner; that must not be overridden."""
+    assert resolve_agent_identity("shared", {"agent_identity": "c5-verify"}) == "c5-verify"
+
+
 def test_session_scope_keeps_per_chat_identity():
     assert resolve_agent_identity("session", GATEWAY) == "agent:main:local:dm:chat-1"
     assert resolve_agent_identity("session", {"agent_identity": "default"}) == SHARED_AGENT_IDENTITY

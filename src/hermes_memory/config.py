@@ -298,6 +298,11 @@ def resolve_agent_identity(scope: str, kwargs: Dict[str, Any]) -> str:
     """Memory owner for a session. ``shared`` pins one owner for the profile, so every
     chat session reads and writes the same memory. ``session`` keeps the per-chat owner."""
     if scope == "shared":
+        # A caller that names its own memory owner (verify, tests) keeps it; a chat
+        # session's per-chat key does not split the shared memory.
+        explicit = kwargs.get("agent_identity")
+        if explicit and explicit not in (SHARED_AGENT_IDENTITY, kwargs.get("gateway_session_key")):
+            return str(explicit)
         return SHARED_AGENT_IDENTITY
     explicit = kwargs.get("agent_identity")
     if explicit == SHARED_AGENT_IDENTITY:
