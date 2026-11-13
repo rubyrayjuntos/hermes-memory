@@ -74,7 +74,13 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
     home = Path(home) if home is not None else HERMES_HOME
 
     try:
-        state = load_install_state(install_state_path(home))
+        try:
+            state = load_install_state(install_state_path(home))
+        except ValueError:
+            if args.dsn is None and not args.keep_db:
+                raise
+            print("Invalid installation record; recorded ownership is unavailable.")
+            state = None
         target = resolve_uninstall_target(args, state)
     except (ValueError, OSError) as exc:
         print(f"Uninstall refused: {exc}")
@@ -112,9 +118,11 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
 
     if not args.keep_db and not compose:
         assert target is not None
-        env = None
-        if target.password:
-            env = os.environ.copy()
+        env = os.environ.copy()
+        for name in ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGDATABASE", "PGUSER",
+                     "PGPORT", "PGHOST", "PGOPTIONS", "PGPASSWORD"):
+            env.pop(name, None)
+        if target.password is not None:
             env["PGPASSWORD"] = target.password
         result = runner(["dropdb", "-h", target.host, "-p", str(target.port), "-U", target.user,
                          "--", target.database], capture_output=True, text=True, env=env)

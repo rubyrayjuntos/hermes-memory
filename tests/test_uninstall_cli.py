@@ -126,3 +126,39 @@ def test_explicit_dsn_with_unhandled_connection_options_is_rejected(tmp_path, ca
     result, commands = invoke(tmp_path, calls, "--dsn", "postgresql://alice@db:5432/mydb?hostaddr=192.0.2.1")
     assert result != 0
     assert commands == []
+
+
+def test_corrupt_record_allows_explicit_target_without_compose(tmp_path, calls):
+    install_state_path(tmp_path).write_text('{broken')
+    result, commands = invoke(tmp_path, calls, "--dsn", "postgresql://alice@db:5432/mydb")
+    assert result == 0
+    assert ["dropdb", "-h", "db", "-p", "5432", "-U", "alice", "--", "mydb"] in commands
+    assert not any(cmd[0] == "docker" for cmd in commands)
+
+
+def test_corrupt_record_allows_keep_db_cleanup_without_compose(tmp_path, calls):
+    install_state_path(tmp_path).write_text('{broken')
+    result, commands = invoke(tmp_path, calls, "--keep-db")
+    assert result == 0
+    assert not any(cmd[0] in ("dropdb", "docker") for cmd in commands)
+
+
+def test_dropdb_ignores_ambient_connection_routing(tmp_path, calls, monkeypatch):
+    for name in ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGDATABASE", "PGUSER",
+                 "PGPORT", "PGHOST", "PGOPTIONS", "PGPASSWORD"):
+        monkeypatch.setenv(name, "ambient-value")
+    result, commands = invoke(tmp_path, calls, "--dsn", "postgresql://alice:intended@db:5432/mydb")
+    assert result == 0
+    drop = next(kwargs for command, kwargs in calls[0] if command[0] == "dropdb")
+    env = drop["env"]
+    assert env["PGPASSWORD"] == "intended"
+    assert not any(name in env for name in ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGDATABASE",
+                                             "PGUSER", "PGPORT", "PGHOST", "PGOPTIONS"))
+
+
+def test_dropdb_discards_ambient_password_when_dsn_has_none(tmp_path, calls, monkeypatch):
+    monkeypatch.setenv("PGPASSWORD", "ambient-value")
+    result, _ = invoke(tmp_path, calls, "--dsn", "postgresql://alice@db:5432/mydb")
+    assert result == 0
+    env = next(kwargs["env"] for command, kwargs in calls[0] if command[0] == "dropdb")
+    assert "PGPASSWORD" not in env
