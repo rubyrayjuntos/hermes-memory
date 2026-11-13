@@ -90,6 +90,15 @@ def derived_compose_names(dsn: str) -> tuple[str, str, str]:
     return project, f"{project}-postgres", f"{project}_pgdata"
 
 
+REQUIRED_WHEEL_MEMBERS = (
+    "hermes_memory/_bundle/build_info.json",
+    "hermes_memory/_bundle/docker/Dockerfile",
+    "hermes_memory/_bundle/sql/migrations/V1__vector_age.sql",
+    "hermes_memory/_bundle/scripts/migrate.py",
+    "hermes_memory/_bundle/skills/librarian-setup/SKILL.md",
+)
+
+
 def inspect_wheel(path: Path) -> None:
     """Fail if the artifact loses provider discovery or lifecycle commands."""
     with ZipFile(path) as archive:
@@ -105,6 +114,10 @@ def inspect_wheel(path: Path) -> None:
             raise ValueError("wheel console lifecycle entry points are missing")
         if "hermes_memory/__init__.py" not in archive.namelist():
             raise ValueError("wheel provider package is missing")
+        missing = [name for name in REQUIRED_WHEEL_MEMBERS if name not in archive.namelist()]
+        if missing:
+            # Without these the installer cannot run outside a Git checkout.
+            raise ValueError("wheel lacks bundled install assets")
 
 
 def subprocess_runner(argv: list[str], *, cwd: Path, env: dict[str, str]):
@@ -114,7 +127,7 @@ def subprocess_runner(argv: list[str], *, cwd: Path, env: dict[str, str]):
 def _stage_source(repo: Path, destination: Path) -> None:
     # Do not copy .env, arbitrary operator files, Git internals or linked paths.
     allowed = {"src", "tests", "scripts", "sql", "docs", ".github", "skills", "docker"}
-    allowed |= {"pyproject.toml", "README.md", "LICENSE", ".env.example"}
+    allowed |= {"pyproject.toml", "setup.py", "README.md", "LICENSE", ".env.example"}
     ignored = shutil.ignore_patterns("__pycache__", "*.egg-info", ".env", ".env.local", ".venv")
 
     def ignore(directory, names):

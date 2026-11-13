@@ -169,8 +169,11 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
     skill_paths = tuple(root / "skills" / "librarian-setup" for root in roots)
     artifact_paths = plugin_paths + skill_paths
     if state:
+        # --keep-db retains the Postgres volume, which only the retained password can open.
+        kept_env = {k: v for k, v in state.owned_env_fingerprints.items()
+                    if not (args.keep_db and k == "HERMES_PG_PASSWORD")}
         steps = [(state.env_paths, tuple(root / ".env" for root in roots),
-                  lambda p: remove_owned_env_values(p, state.owned_env_fingerprints)),
+                  lambda p: remove_owned_env_values(p, kept_env)),
                  (state.config_paths, tuple(root / "config.yaml" for root in roots),
                   remove_hybrid_age_config)]
         if not args.keep_plugin:

@@ -29,6 +29,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from hermes_memory.bundled import (
+    BUNDLE_DIR,
+    export_bundle,
+    is_checkout,
+    resolve_bundle_pin,
+)
 from hermes_memory.install_state import (
     InstallState,
     install_state_path,
@@ -156,7 +162,7 @@ def copy_plugin_tree(src_pkg: Path, plugin_dir: Path) -> None:
     shutil.copytree(
         src_pkg,
         plugin_dir,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "_bundle"),
     )
 
 
@@ -378,6 +384,23 @@ def _redact_dsn(dsn: str) -> str:
     return f"{host}:{port}/{db}"
 
 
+def _existing_env_value(key: str) -> str | None:
+    """Process env first, then the Hermes home env files. Values are never printed."""
+    value = os.environ.get(key)
+    if value:
+        return value
+    for env_path in get_env_files():
+        try:
+            for line in env_path.read_text().splitlines():
+                if line.startswith(f"{key}="):
+                    found = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if found:
+                        return found
+        except OSError:
+            continue
+    return None
+
+
 def _existing_env_dsn() -> str | None:
     dsn = os.environ.get("HYBRID_AGE_DSN")
     if dsn:
@@ -465,10 +488,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {exc}; DSN withheld.", file=sys.stderr)
             return 2
 
-    require_git_checkout(REPO_ROOT)
-    ref = args.ref or default_release_ref(REPO_ROOT)
-    ref, sha = resolve_pin(REPO_ROOT, ref)
-    print(f"install: pin ref={ref} sha={sha}")
+    bundled = not is_checkout(REPO_ROOT)
+    if bundled:
+        if args.ref:
+            print("ERROR: --ref applies to Git checkouts only; this package installs its own build.", file=sys.stderr)
+            return 2
+        ref, sha = resolve_bundle_pin(BUNDLE_DIR)
+        print(f"install: bundled build ref={ref} sha={sha}")
+    else:
+        require_git_checkout(REPO_ROOT)
+        ref = args.ref or default_release_ref(REPO_ROOT)
+        ref, sha = resolve_pin(REPO_ROOT, ref)
+        print(f"install: pin ref={ref} sha={sha}")
 
     state_path = install_state_path(HERMES_HOME)
     previous = load_install_state(state_path)
@@ -495,9 +526,13 @@ def main(argv: list[str] | None = None) -> int:
     if not dsn or "***" in (dsn or ""):
         import getpass
 
-        pw = os.environ.get("HERMES_PG_PASSWORD", "").strip()
-        if not pw and args.yes:
-            pw = secrets.token_urlsafe(20)
+        # Order: process env, then the Hermes home env (kept by --keep-db), then a
+        # generated password when no terminal is available, else an interactive prompt.
+        pw = (_existing_env_value("HERMES_PG_PASSWORD") or "").strip()
+        if not pw and (args.yes or not sys.stdin.isatty()):
+            # hex: URL-safe, so it can never break the DSN (base64 can contain + / =).
+            pw = secrets.token_hex(24)
+            print("install: generated a database password and stored it in the Hermes env file.")
         if not pw:
             pw = getpass.getpass(
                 "HERMES_PG_PASSWORD for the installed database "
@@ -593,8 +628,12 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory(prefix="hermes-memory-pin-") as tmp:
             export = Path(tmp)
             print(f"[1/7] Exporting pinned tree {sha[:12]}…")
-            export_pin(REPO_ROOT, sha, export)
-            src_pkg = export / "src" / "hermes_memory"
+            if bundled:
+                export_bundle(export, BUNDLE_DIR)
+                src_pkg = Path(__file__).resolve().parent
+            else:
+                export_pin(REPO_ROOT, sha, export)
+                src_pkg = export / "src" / "hermes_memory"
             skill_src = export / "skills" / "librarian-setup"
 
             print("[1b/7] Installing hybrid-age plugin from pin (copy, not symlink)…")
@@ -616,15 +655,18 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"    WARNING: {skill_src} not in pin — skip skill copy.")
 
-            print("[2/7] pip install (non-editable) from pinned tree…")
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", str(export)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                print(f"    pip install failed: {result.stderr}", file=sys.stderr)
-                return 1
+            if bundled:
+                print("[2/7] pip install skipped: this package is already installed from its build.")
+            else:
+                print("[2/7] pip install (non-editable) from pinned tree…")
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", str(export)],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    print(f"    pip install failed: {result.stderr}", file=sys.stderr)
+                    return 1
             print("    Package installed from pin.")
 
             print("[3/7] Configuring Hermes config.yaml…")
