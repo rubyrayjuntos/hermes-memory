@@ -25,7 +25,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -177,7 +177,51 @@ def installed_dsn(password: str, *, host: str = "127.0.0.1") -> str:
     return f"postgres://hermes:{password}@{host}:{INSTALLED_PORT}/{INSTALLED_DB}"
 
 
-def write_installed_compose(path: Path) -> None:
+@dataclass(frozen=True)
+class DbTarget:
+    """Compose project/container/port/database for one installed Postgres."""
+
+    project: str
+    container: str
+    port: str
+    db: str
+
+
+INSTALLED_TARGET = DbTarget(INSTALLED_COMPOSE_PROJECT, INSTALLED_CONTAINER, INSTALLED_PORT, INSTALLED_DB)
+RELEASE_GATE_DB_RE = re.compile(r"hermes_release_gate_[a-z0-9_]+")
+
+
+def release_gate_target(dsn: str) -> DbTarget:
+    """Derive a disposable Compose target from a release-gate DSN.
+
+    Accepts only a single-host loopback URI with a ``hermes_release_gate_*``
+    database on a port that is neither the dev stack nor the installed stack.
+    Errors never echo the DSN.
+    """
+    parsed = urlparse(dsn)
+    db = unquote((parsed.path or "/").lstrip("/"))
+    valid = (
+        parsed.scheme in {"postgres", "postgresql"}
+        and (parsed.hostname or "") in {"127.0.0.1", "localhost", "::1"}
+        and parsed.port is not None
+        and parsed.port not in {DEV_PORT, int(INSTALLED_PORT)}
+        and not parsed.query
+        and not parsed.fragment
+        and RELEASE_GATE_DB_RE.fullmatch(db) is not None
+        and len(db) <= 63
+    )
+    if not valid:
+        raise ValueError("release-gate target must be a loopback hermes_release_gate_* database on a non-installed port")
+    project = "hermes-release-gate-" + db.removeprefix("hermes_release_gate_").replace("_", "-")
+    return DbTarget(project, f"{project}-postgres", str(parsed.port), db)
+
+
+def _home_is_disposable() -> bool:
+    """Release-gate installs may only write under the system temp directory."""
+    return HERMES_HOME.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())
+
+
+def write_installed_compose(path: Path, target: DbTarget = INSTALLED_TARGET) -> None:
     """Standalone compose for the installed DB. No ``sql/init``.
 
     Dev compose first-boot mounts ``sql/init`` (HEAD schema). Merging that
@@ -195,25 +239,25 @@ def write_installed_compose(path: Path) -> None:
         "      context: ./docker\n"
         "      dockerfile: Dockerfile\n"
         "    image: hermes-memory-postgres:local\n"
-        f"    container_name: {INSTALLED_CONTAINER}\n"
+        f"    container_name: {target.container}\n"
         "    restart: unless-stopped\n"
         "    environment:\n"
         "      POSTGRES_USER: ${HERMES_PG_USER:-hermes}\n"
         "      POSTGRES_PASSWORD: ${HERMES_PG_PASSWORD:?set HERMES_PG_PASSWORD}\n"
-        f"      POSTGRES_DB: ${{HERMES_PG_DB:-{INSTALLED_DB}}}\n"
+        f"      POSTGRES_DB: ${{HERMES_PG_DB:-{target.db}}}\n"
         "    ports:\n"
-        f'      - "127.0.0.1:{INSTALLED_PORT}:5432"\n'
+        f'      - "127.0.0.1:{target.port}:5432"\n'
         "    volumes:\n"
         "      - pgdata:/var/lib/postgresql/data\n"
         "    healthcheck:\n"
-        f'      test: ["CMD-SHELL", "pg_isready -U $${{POSTGRES_USER:-hermes}} -d $${{POSTGRES_DB:-{INSTALLED_DB}}}"]\n'
+        f'      test: ["CMD-SHELL", "pg_isready -U $${{POSTGRES_USER:-hermes}} -d $${{POSTGRES_DB:-{target.db}}}"]\n'
         "      interval: 5s\n"
         "      timeout: 5s\n"
         "      retries: 12\n"
         "      start_period: 30s\n"
         "volumes:\n"
         "  pgdata:\n"
-        f"    name: {INSTALLED_COMPOSE_PROJECT}_pgdata\n",
+        f"    name: {target.project}_pgdata\n",
         encoding="utf-8",
     )
 
@@ -398,7 +442,28 @@ def main(argv: list[str] | None = None) -> int:
         help="Allow an explicit --dsn that points at the :5450/hermes_memory dev stack.",
     )
     parser.add_argument("--yes", action="store_true", help="Assume yes to all prompts")
+    parser.add_argument(
+        "--release-gate-target",
+        action="store_true",
+        help="Disposable release-gate install: --dsn must name a hermes_release_gate_* "
+        "loopback database, HOME must be under the system temp directory, and the "
+        "graph API daemon is not started.",
+    )
     args = parser.parse_args(argv)
+
+    target = INSTALLED_TARGET
+    if args.release_gate_target:
+        if not args.dsn:
+            print("ERROR: --release-gate-target requires --dsn.", file=sys.stderr)
+            return 2
+        if not _home_is_disposable():
+            print("ERROR: --release-gate-target refuses a HOME outside the system temp directory.", file=sys.stderr)
+            return 2
+        try:
+            target = release_gate_target(args.dsn)
+        except ValueError as exc:
+            print(f"ERROR: {exc}; DSN withheld.", file=sys.stderr)
+            return 2
 
     require_git_checkout(REPO_ROOT)
     ref = args.ref or default_release_ref(REPO_ROOT)
@@ -600,32 +665,32 @@ def main(argv: list[str] | None = None) -> int:
 
             print(f"[5/7] Starting installed Postgres ({_redact_dsn(dsn)})…")
             compose_path = export / "docker-compose.installed.yml"
-            record_path = HERMES_HOME / "compose" / "hermes-memory-installed.yml"
+            record_path = HERMES_HOME / "compose" / f"{target.project}.yml"
             if is_dev_clone_dsn(dsn):
                 print("    --reuse-dsn: not creating a new compose project.")
             elif not (export / "docker" / "Dockerfile").is_file():
                 print("    WARNING: pin is missing docker/Dockerfile.")
                 return 1
             else:
-                write_installed_compose(compose_path)
-                write_installed_compose(record_path)
+                write_installed_compose(compose_path, target)
+                write_installed_compose(record_path, target)
                 state = replace(
-                    state, compose_project=INSTALLED_COMPOSE_PROJECT,
-                    compose_container=INSTALLED_CONTAINER, compose_file=str(record_path),
+                    state, compose_project=target.project,
+                    compose_container=target.container, compose_file=str(record_path),
                 )
                 write_install_state(state_path, state)
                 env = os.environ.copy()
                 parsed = urlparse(dsn)
                 if parsed.password:
                     env["HERMES_PG_PASSWORD"] = parsed.password
-                env["HERMES_PG_DB"] = INSTALLED_DB
-                env["HERMES_PG_HOST_PORT"] = INSTALLED_PORT
+                env["HERMES_PG_DB"] = target.db
+                env["HERMES_PG_HOST_PORT"] = target.port
                 result = subprocess.run(
                     [
                         "docker",
                         "compose",
                         "-p",
-                        INSTALLED_COMPOSE_PROJECT,
+                        target.project,
                         "-f",
                         str(compose_path),
                         "up",
@@ -639,14 +704,14 @@ def main(argv: list[str] | None = None) -> int:
                 if result.returncode != 0:
                     print(f"    docker compose failed: {result.stderr}", file=sys.stderr)
                     return 1
-                print(f"    {INSTALLED_CONTAINER} on {INSTALLED_PORT}/{INSTALLED_DB}")
+                print(f"    {target.container} on {target.port}/{target.db}")
 
                 print("[5b/7] Waiting for installed PostgreSQL…")
                 max_wait = 60
                 waited = 0
                 while waited < max_wait:
                     health = subprocess.run(
-                        ["docker", "inspect", "-f", "{{.State.Health.Status}}", INSTALLED_CONTAINER],
+                        ["docker", "inspect", "-f", "{{.State.Health.Status}}", target.container],
                         capture_output=True,
                         text=True,
                     )
@@ -656,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
                     time.sleep(1)
                     waited += 1
                 else:
-                    print(f"    WARNING: {INSTALLED_CONTAINER} not healthy after {max_wait}s.")
+                    print(f"    WARNING: {target.container} not healthy after {max_wait}s.")
 
                 migrate = export / "scripts" / "migrate.py"
                 if migrate.is_file():
@@ -671,17 +736,20 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"    migrate failed: {mig.stderr}", file=sys.stderr)
                         return 1
 
-            print("[6/7] Restarting graph API (7890)…")
-            try:
-                from hermes_memory.graph_api import start_daemon, wait_ready
+            if args.release_gate_target:
+                print("[6/7] Graph API not started (release-gate target).")
+            else:
+                print("[6/7] Restarting graph API (7890)…")
+                try:
+                    from hermes_memory.graph_api import start_daemon, wait_ready
 
-                start_daemon()
-                if wait_ready(timeout=8.0):
-                    print("    graph API is up and serving.")
-                else:
-                    print("    graph API may not be up yet. Log: /tmp/librarian_api.log")
-            except Exception as exc:
-                print(f"    API start failed: {exc}")
+                    start_daemon()
+                    if wait_ready(timeout=8.0):
+                        print("    graph API is up and serving.")
+                    else:
+                        print("    graph API may not be up yet. Log: /tmp/librarian_api.log")
+                except Exception as exc:
+                    print(f"    API start failed: {exc}")
 
             print("[7/7] Running hermes-memory-verify…")
             result = subprocess.run(
