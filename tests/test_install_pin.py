@@ -130,8 +130,11 @@ def test_noncheckout_preflight_precedes_all_hermes_mutation(tmp_path, monkeypatc
     monkeypatch.setattr(install_cli, "HERMES_HOME", home)
     monkeypatch.setattr(install_cli, "PLUGIN_DIRS", (home / "plugins" / "hybrid-age",))
     monkeypatch.setattr(install_cli, "CONFIG_PATHS", (home / "config.yaml",))
-    with pytest.raises(SystemExit, match="clone"):
+    with pytest.raises(SystemExit) as exc:
         install_cli.main(["--yes"])
+    assert "Git checkout" in str(exc.value)
+    assert "Clone hermes-memory" in str(exc.value)
+    assert "checkout's environment" in str(exc.value)
     assert not home.exists()
     assert "HERMES_PG_PASSWORD=" not in capsys.readouterr().out
 

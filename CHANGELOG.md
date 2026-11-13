@@ -21,6 +21,7 @@ versioning follows [SemVer](https://semver.org/).
 - Ghost kNN DoS caps and namespaced bridge keys (#60).
 
 ### Changed
+- Documented clone-first wheel and provider discovery, recorded installation ownership, and safe uninstall behavior.
 - CI is pip-only (no Poetry). Lint job runs ruff + mypy on extracted modules.
 - Nightly job runs a real Ollama embed e2e (`hermes-memory-verify`), not a stub.
 - Integration CI runs `test_verify_pipeline` and `test_bridge_symmetry` against `HYBRID_AGE_DSN`.
@@ -65,3 +66,9 @@ First tagged release. Six kanban cards ([docs/plans/board.md](docs/plans/board.m
 
 ### Notes
 - Tested against Hermes Agent v0.20.x. MIT licensed.
+
+## Document changelog
+
+| Version | Created | Modified | Author | Notes |
+|---|---|---|---|---|
+| 1.1 | 2026-08-24 | 2026-11-13 | Codex | Record packaging and lifecycle contract documentation. |

@@ -76,6 +76,35 @@ the `v0.1.0` tag): it copies
 sets `memory.provider=hybrid-age` and serves the inspector on
 `http://127.0.0.1:7890`.
 
+A wheel can be built and exposes `hybrid-age` in the
+`hermes_agent.memory_providers` entry-point group, but it is not a standalone
+installer. Run `hermes-memory-install` from an environment tied to a Git
+checkout: outside a checkout it stops before changing Hermes and asks you to
+clone. The installer exports the selected committed tree; local uncommitted
+changes are not included.
+
+The installer records non-secret ownership and progress in
+`<hermes-home>/hermes-memory-install.json` (normally `~/.hermes/`, mode
+`0600`). A successful install records its owned plugin, skill, configuration,
+environment values, and database/Compose target. Incomplete installs retain a
+record for recovery; environment values are represented by fingerprints, not
+secrets.
+
+To uninstall, run `hermes-memory-uninstall`. By default it removes recorded
+plugin and skill directories and cleans up owned configuration and unchanged
+owned environment values. `--keep-plugin` preserves the plugin and skill
+folders; `--keep-db` preserves the database. The legacy `--remove-plugin` is
+accepted as an alias for the default cleanup. The recorded owned Compose stack
+is stopped with `down --volumes` when removing its database, or `down` with
+`--keep-db`. An explicitly different `--dsn` targets `dropdb` without stopping
+the recorded stack. Without a usable record or explicit DSN, database removal
+is refused rather than guessing a target. Failed cleanup returns nonzero and
+retains the installation record for retry.
+
+The planned disposable release-gate command is `python scripts/release_gate.py`;
+it is not yet available on this branch. Its optional `--live` phase requires an
+explicitly isolated Docker/Ollama environment and is separate from local tests.
+
 **Topology (do not mix):** clone / Documents work is `:5450` / `hermes_memory`.
 The install pin is `:5452` / `hermes_memory_installed`. Missing `HYBRID_AGE_DSN`
 after dotenv load **raises** — there is no silent fallback to `:5450`.
@@ -297,7 +326,7 @@ until re-tested.
 | `hermes-memory-install` | Pin a git ref into `~/.hermes/plugins/hybrid-age` (copy + `.hermes-memory-version`), non-editable pip, installed DB on `:5452` / `hermes_memory_installed`, viz API `:7890`, verify. Does not attach to the `:5450` dev stack. |
 | `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
 | `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
-| `hermes-memory-uninstall` | Stop viz API, disable hybrid‑age, drop hermes_memory DB (unless `--keep-db`), remove plugin dirs, fall back to built‑in MEMORY.md/USER.md. |
+| `hermes-memory-uninstall` | Clean up recorded ownership; use `--keep-plugin` and `--keep-db` to preserve those categories. Database removal requires a recorded or explicit target. |
 | `hermes-memory-api` | Read-only viz API (`start`/`stop`/`status`/`serve`) on 127.0.0.1:7890. Pane: `http://127.0.0.1:7890/api/librarian/pane`. |
 | `hermes-memory-backfill-about` | Legacy Title-Case linker only. Does **not** run live C–F (no nouns, passports, `semantic_edge`, or `drain_status`). The old name `hermes-memory-backfill` now exits 2 and prints this distinction. |
 | `scripts/replay_conversation_manifold.py --live` | The C–F backfill: flower, `extract_nouns`, passports, `upsert_mentions_chain`, `drain_status` on `hermes_memory`. Default (no `--live`) copies onto `hermes_test`. |
@@ -321,3 +350,9 @@ pg_restore -d hermes_memory ~/librarian-2026-08-31.dump
 ## License
 
 MIT
+
+## Document changelog
+
+| Version | Created | Modified | Author | Notes |
+|---|---|---|---|---|
+| 1.1 | 2026-08-24 | 2026-11-13 | Codex | Document clone-first packaging, installation ownership, uninstall behavior, and planned release gate. |
