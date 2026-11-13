@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from hermes_memory.install_cli import (
     INSTALLED_CONTAINER,
     INSTALLED_DB,
@@ -165,9 +167,8 @@ def test_install_records_owned_values_and_failure_status(tmp_path, monkeypatch):
     assert state.database_port == 5452
     assert state.database_name == "hermes_memory_installed"
     assert state.database_user == "hermes"
-    assert state.compose_project == "hermes-memory-installed"
-    assert state.compose_container == "hermes-memory-postgres-installed"
-    assert state.compose_file == str(home / "compose" / "hermes-memory-installed.yml")
+    # pip failed before this invocation created any Compose artifacts.
+    assert (state.compose_project, state.compose_container, state.compose_file) == (None, None, None)
     assert state.plugin_dirs == (str(home / "plugins" / "hybrid-age"),)
     assert state.owned_env_fingerprints["HERMES_PG_PASSWORD"] == hashlib.sha256(
         b"test-only-generated-value"
@@ -214,3 +215,139 @@ def test_successful_reused_target_records_no_compose_ownership(tmp_path, monkeyp
     assert "HERMES_PG_PASSWORD" not in state.owned_env_fingerprints
     assert state.owned_env_fingerprints["HYBRID_AGE_DSN"] == hashlib.sha256(dsn.encode()).hexdigest()
     assert "test-only-reused-value" not in install_state_path(home).read_text()
+
+
+@pytest.fixture
+def isolated_install(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    from hermes_memory import install_cli
+
+    home = tmp_path / "hermes-home"
+    monkeypatch.setattr(install_cli, "HERMES_HOME", home)
+    monkeypatch.setattr(install_cli, "PLUGIN_DIRS", (home / "plugins" / "hybrid-age",))
+    monkeypatch.setattr(install_cli, "CONFIG_PATHS", (home / "config.yaml",))
+    for key in ("HYBRID_AGE_DSN", "HYBRID_AGE_EMBED_URL", "HYBRID_AGE_EMBED_MODEL", "HYBRID_AGE_GRAPH"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HERMES_PG_PASSWORD", "test-only-install-owned-password")
+    monkeypatch.setitem(sys.modules, "hermes_memory.graph_api", SimpleNamespace(
+        start_daemon=lambda: None, wait_ready=lambda **kwargs: True,
+    ))
+    real_run = subprocess.run
+
+    def runner(command, **kwargs):
+        if command[0] == "git":
+            return real_run(command, **kwargs)
+        output = "healthy" if command[:2] == ["docker", "inspect"] else ""
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(install_cli.subprocess, "run", runner)
+    return install_cli, home
+
+
+def test_failed_export_does_not_claim_untouched_existing_artifacts(isolated_install, monkeypatch):
+    from hermes_memory.install_state import install_state_path, load_install_state
+
+    cli, home = isolated_install
+    plugin = home / "plugins" / "hybrid-age"
+    skill = home / "skills" / "librarian-setup"
+    plugin.mkdir(parents=True)
+    skill.mkdir(parents=True)
+    (plugin / "existing").write_text("user plugin")
+    (skill / "existing").write_text("user skill")
+    config = home / "config.yaml"
+    config.write_text("user_setting: retained\n")
+
+    def fail_export(repo, sha, dest):
+        raise SystemExit("test export failure")
+
+    monkeypatch.setattr(cli, "export_pin", fail_export)
+    with pytest.raises(SystemExit, match="test export failure"):
+        cli.main(["--yes", "--ref", "HEAD"])
+    state = load_install_state(install_state_path(home))
+    assert state.plugin_dirs == ()
+    assert state.skill_dirs == ()
+    assert state.config_paths == ()
+    assert (state.compose_project, state.compose_container, state.compose_file) == (None, None, None)
+    assert state.status == "incomplete"
+    assert (plugin / "existing").read_text() == "user plugin"
+    assert (skill / "existing").read_text() == "user skill"
+    assert config.read_text() == "user_setting: retained\n"
+
+
+def test_skipped_skill_source_does_not_claim_existing_skill(isolated_install, monkeypatch):
+    from hermes_memory.install_state import install_state_path, load_install_state
+
+    cli, home = isolated_install
+    skill = home / "skills" / "librarian-setup"
+    skill.mkdir(parents=True)
+    (skill / "existing").write_text("user skill")
+
+    def export_without_skill(repo, sha, dest):
+        package = dest / "src" / "hermes_memory"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        (dest / "docker").mkdir()
+        (dest / "docker" / "Dockerfile").write_text("FROM scratch\n")
+
+    monkeypatch.setattr(cli, "export_pin", export_without_skill)
+    assert cli.main(["--yes", "--ref", "HEAD"]) == 0
+    state = load_install_state(install_state_path(home))
+    assert state.skill_dirs == ()
+    assert state.plugin_dirs == (str(home / "plugins" / "hybrid-age"),)
+    assert (skill / "existing").read_text() == "user skill"
+
+
+def test_failed_reinstall_preserves_prior_artifact_ownership(isolated_install, monkeypatch):
+    from hermes_memory.install_state import install_state_path, load_install_state
+
+    cli, home = isolated_install
+    assert cli.main(["--yes", "--ref", "HEAD"]) == 0
+    previous = load_install_state(install_state_path(home))
+
+    def fail_export(repo, sha, dest):
+        raise SystemExit("test export failure")
+
+    monkeypatch.setattr(cli, "export_pin", fail_export)
+    with pytest.raises(SystemExit, match="test export failure"):
+        cli.main(["--yes", "--ref", "HEAD"])
+    current = load_install_state(install_state_path(home))
+    assert current.plugin_dirs == previous.plugin_dirs
+    assert current.skill_dirs == previous.skill_dirs
+    assert current.config_paths == previous.config_paths
+    assert current.compose_file == previous.compose_file
+
+
+@pytest.mark.parametrize("edited_count", [0, 1, 2])
+def test_reinstall_preserves_only_still_matching_password_ownership(
+    isolated_install, edited_count,
+):
+    import hashlib
+
+    from hermes_memory.install_state import install_state_path, load_install_state
+
+    cli, home = isolated_install
+    assert cli.main(["--yes", "--ref", "HEAD"]) == 0
+    paths = cli.get_env_files()
+    for path in paths[:edited_count]:
+        path.write_text(path.read_text().replace(
+            "HERMES_PG_PASSWORD=test-only-install-owned-password",
+            "HERMES_PG_PASSWORD=test-only-user-edited-password",
+        ))
+    assert cli.main(["--yes", "--ref", "HEAD"]) == 0
+    state = load_install_state(install_state_path(home))
+    expected = hashlib.sha256(b"test-only-install-owned-password").hexdigest()
+    if edited_count < 2:
+        assert state.owned_env_fingerprints["HERMES_PG_PASSWORD"] == expected
+    else:
+        assert "HERMES_PG_PASSWORD" not in state.owned_env_fingerprints
+    # These are the comparison inputs that value-sensitive cleanup consumes.
+    # One shared hash continues to distinguish unchanged files from later edits.
+    for index, path in enumerate(paths):
+        values = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+        current_hash = hashlib.sha256(values["HERMES_PG_PASSWORD"].encode()).hexdigest()
+        assert (current_hash == state.owned_env_fingerprints.get("HERMES_PG_PASSWORD")) == (
+            index >= edited_count
+        )

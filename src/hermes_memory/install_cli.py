@@ -29,7 +29,12 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from hermes_memory.install_state import InstallState, install_state_path, write_install_state
+from hermes_memory.install_state import (
+    InstallState,
+    install_state_path,
+    load_install_state,
+    write_install_state,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_HOME = Path.home() / ".hermes"
@@ -345,6 +350,28 @@ def _existing_env_dsn() -> str | None:
     return None
 
 
+def _retained_env_fingerprints(previous: InstallState | None) -> dict[str, str]:
+    """Retain prior ownership only where a recorded file still matches its hash."""
+    retained: dict[str, str] = {}
+    if previous is None:
+        return retained
+    for path in previous.env_paths:
+        try:
+            lines = Path(path).read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            continue
+        values = {}
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key, value = stripped.split("=", 1)
+                values[key.strip()] = value.strip()
+        for key, expected in previous.owned_env_fingerprints.items():
+            if key in values and hashlib.sha256(values[key].encode("utf-8")).hexdigest() == expected:
+                retained[key] = expected
+    return retained
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hermes-memory-install",
@@ -373,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
     ref, sha = resolve_pin(REPO_ROOT, ref)
     print(f"install: pin ref={ref} sha={sha}")
 
+    state_path = install_state_path(HERMES_HOME)
+    previous = load_install_state(state_path)
     password_updates: dict[str, str] = {}
     dsn = args.dsn
     if dsn and is_dev_clone_dsn(dsn) and not args.reuse_dsn:
@@ -431,36 +460,59 @@ def main(argv: list[str] | None = None) -> int:
         "HYBRID_AGE_GRAPH": graph,
     }
     parsed = urlparse(dsn)
-    owns_compose = not is_dev_clone_dsn(dsn)
+    skill_dirs = (
+        HERMES_HOME / "skills" / "librarian-setup",
+        HERMES_HOME / "profiles" / "librarian" / "skills" / "librarian-setup",
+    )
+
+    def prior_paths(field: str, allowed: tuple[Path, ...]) -> tuple[str, ...]:
+        if previous is None:
+            return ()
+        allowed_paths = {str(path) for path in allowed}
+        return tuple(path for path in getattr(previous, field) if path in allowed_paths)
+
+    same_target = previous is not None and (
+        previous.database_host, previous.database_port, previous.database_name, previous.database_user
+    ) == (
+        parsed.hostname or "localhost", parsed.port or 5432,
+        unquote(parsed.path.lstrip("/")), unquote(parsed.username or "hermes"),
+    )
     state = InstallState(
         sha=sha,
         ref=ref,
-        compose_project=INSTALLED_COMPOSE_PROJECT if owns_compose else None,
-        compose_container=INSTALLED_CONTAINER if owns_compose else None,
-        compose_file=str(HERMES_HOME / "compose" / "hermes-memory-installed.yml")
-        if owns_compose else None,
+        compose_project=previous.compose_project if same_target else None,
+        compose_container=previous.compose_container if same_target else None,
+        compose_file=previous.compose_file if same_target else None,
         database_host=parsed.hostname or "localhost",
         database_port=parsed.port or 5432,
         database_name=unquote(parsed.path.lstrip("/")),
         database_user=unquote(parsed.username or "hermes"),
-        plugin_dirs=tuple(str(path) for path in PLUGIN_DIRS),
-        skill_dirs=tuple(str(path) for path in (
-            HERMES_HOME / "skills" / "librarian-setup",
-            HERMES_HOME / "profiles" / "librarian" / "skills" / "librarian-setup",
-        )),
-        config_paths=tuple(str(path) for path in CONFIG_PATHS),
-        env_paths=tuple(str(path) for path in get_env_files()),
-        owned_env_fingerprints={
-            key: hashlib.sha256(value.encode("utf-8")).hexdigest()
-            for key, value in updates.items()
-        },
+        plugin_dirs=prior_paths("plugin_dirs", PLUGIN_DIRS),
+        skill_dirs=prior_paths("skill_dirs", skill_dirs),
+        config_paths=prior_paths("config_paths", CONFIG_PATHS),
+        env_paths=prior_paths("env_paths", get_env_files()),
+        owned_env_fingerprints=_retained_env_fingerprints(previous),
     )
-    state_path = install_state_path(HERMES_HOME)
     write_install_state(state_path, state)
+
+    def record_owned_path(field: str, path: Path) -> None:
+        nonlocal state
+        owned = getattr(state, field)
+        if str(path) not in owned:
+            state = replace(state, **{field: (*owned, str(path))})
+            write_install_state(state_path, state)
+
     succeeded = False
     try:
         for env_path in get_env_files():
             merge_env_file(env_path, updates)
+            state = replace(state, owned_env_fingerprints={
+                **state.owned_env_fingerprints,
+                **{key: hashlib.sha256(value.encode("utf-8")).hexdigest()
+                   for key, value in updates.items()},
+            })
+            record_owned_path("env_paths", env_path)
+            write_install_state(state_path, state)
         os.environ["HYBRID_AGE_DSN"] = dsn
         os.environ.setdefault("HYBRID_AGE_EMBED_URL", embed_url)
         os.environ.setdefault("HYBRID_AGE_EMBED_MODEL", embed_model)
@@ -476,19 +528,18 @@ def main(argv: list[str] | None = None) -> int:
             print("[1b/7] Installing hybrid-age plugin from pin (copy, not symlink)…")
             for plugin_dir in PLUGIN_DIRS:
                 copy_plugin_tree(src_pkg, plugin_dir)
+                record_owned_path("plugin_dirs", plugin_dir)
                 stamp = write_version_stamp(plugin_dir, sha=sha, ref=ref)
                 print(f"    {plugin_dir} sha={sha[:12]} stamp={stamp.name}")
 
             print("[1c/7] Installing librarian-setup skill from pin…")
             if skill_src.is_dir():
-                for skill_dir in (
-                    HERMES_HOME / "skills" / "librarian-setup",
-                    HERMES_HOME / "profiles" / "librarian" / "skills" / "librarian-setup",
-                ):
+                for skill_dir in skill_dirs:
                     skill_dir.parent.mkdir(parents=True, exist_ok=True)
                     if skill_dir.exists():
                         shutil.rmtree(skill_dir)
                     shutil.copytree(skill_src, skill_dir)
+                    record_owned_path("skill_dirs", skill_dir)
                     print(f"    Skill dir: {skill_dir}")
             else:
                 print(f"    WARNING: {skill_src} not in pin — skip skill copy.")
@@ -514,6 +565,8 @@ def main(argv: list[str] | None = None) -> int:
                 if result.returncode != 0:
                     print(f"    hermes config set failed: {result.stderr}")
                 else:
+                    if CONFIG_PATHS and CONFIG_PATHS[0].exists():
+                        record_owned_path("config_paths", CONFIG_PATHS[0])
                     print(f"    {ok}")
             for profile_args, label in (
                 ([], "default"),
@@ -527,11 +580,15 @@ def main(argv: list[str] | None = None) -> int:
                 if result.returncode != 0:
                     print(f"    memory.provider ({label}) via hermes CLI failed: {result.stderr.strip()[:200]}")
                 else:
+                    index = 1 if profile_args else 0
+                    if index < len(CONFIG_PATHS) and CONFIG_PATHS[index].exists():
+                        record_owned_path("config_paths", CONFIG_PATHS[index])
                     print(f"    memory.provider=hybrid-age ({label})")
 
             print("[4/7] Writing hybrid_age block to config.yaml…")
             for config_path in CONFIG_PATHS:
                 write_hybrid_age_block(config_path, embed_model, graph)
+                record_owned_path("config_paths", config_path)
                 print(f"    updated {config_path}")
 
             print(f"[5/7] Starting installed Postgres ({_redact_dsn(dsn)})…")
@@ -545,6 +602,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 write_installed_compose(compose_path)
                 write_installed_compose(record_path)
+                state = replace(
+                    state, compose_project=INSTALLED_COMPOSE_PROJECT,
+                    compose_container=INSTALLED_CONTAINER, compose_file=str(record_path),
+                )
+                write_install_state(state_path, state)
                 env = os.environ.copy()
                 parsed = urlparse(dsn)
                 if parsed.password:
