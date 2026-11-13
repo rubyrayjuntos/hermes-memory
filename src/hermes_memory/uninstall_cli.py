@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 from psycopg import Error as PsycopgError
@@ -57,6 +58,23 @@ def build_compose_down_command(state: InstallState) -> list[str] | None:
     return ["docker", "compose", "-p", state.compose_project, "-f", state.compose_file, "down"]
 
 
+def compose_down_env(dsn: str | None) -> dict[str, str]:
+    """Environment for ``compose down`` on the recorded file.
+
+    The installer's compose file requires ``HERMES_PG_PASSWORD`` to be non-empty
+    during interpolation. ``down`` never connects to Postgres, so a supplied DSN's
+    password is used when present, otherwise any existing value, otherwise an
+    inert placeholder. The password is never recorded or printed.
+    """
+    env = os.environ.copy()
+    password = urlsplit(dsn).password if dsn else None
+    if password:
+        env["HERMES_PG_PASSWORD"] = password
+    elif not env.get("HERMES_PG_PASSWORD"):
+        env["HERMES_PG_PASSWORD"] = "unused-by-compose-down"
+    return env
+
+
 def _matches_record(target: UninstallTarget | None, state: InstallState | None) -> bool:
     return target is not None and state is not None and (
         target.host, target.port, target.database, target.user
@@ -103,7 +121,7 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
         if not args.keep_db:
             compose.append("--volumes")
         try:
-            result = runner(compose, capture_output=True, text=True)
+            result = runner(compose, capture_output=True, text=True, env=compose_down_env(args.dsn))
         except OSError:
             print("Incomplete: Compose shutdown failed; uninstall stopped.")
             return 1
@@ -171,15 +189,9 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
                     print(f"Cleanup failed for {raw}: {type(exc).__name__}")
                     failed = True
 
-    hermes_bin = shutil.which("hermes") or "hermes"
-    try:
-        result = runner([hermes_bin, "restart"], capture_output=True, text=True)
-        if result.returncode != 0:
-            print("Hermes restart failed.")
-            failed = True
-    except OSError:
-        print("Hermes restart failed.")
-        failed = True
+    # The gateway is a host-wide service; restarting it is the operator's call.
+    # A running gateway keeps the removed plugin loaded until it restarts.
+    print("Restart the Hermes gateway to unload the plugin: hermes gateway restart")
     if not failed and state is not None:
         try:
             install_state_path(home).unlink(missing_ok=True)

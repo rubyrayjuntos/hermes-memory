@@ -201,7 +201,7 @@ def test_required_failure_retains_state_and_reports_incomplete(tmp_path, state, 
     monkeypatch.setitem(sys.modules, 'hermes_memory.graph_api', types.SimpleNamespace(stop_daemon=lambda: None))
     write_install_state(install_state_path(tmp_path), state)
     def runner(command, **kwargs):
-        return subprocess.CompletedProcess(command, 1 if command[0] != 'docker' else 0, '', '')
+        return subprocess.CompletedProcess(command, 1 if command[0] == 'docker' else 0, '', '')
     assert main(['--force', '--keep-db'], home=tmp_path, runner=runner) != 0
     assert install_state_path(tmp_path).exists()
     assert 'Incomplete' in capsys.readouterr().out
@@ -229,3 +229,27 @@ def test_parent_symlink_redirect_refused(tmp_path, calls, state, category, name,
     assert result != 0
     assert victim.is_dir()
     assert install_state_path(home).exists()
+
+
+def test_compose_down_supplies_the_variable_its_file_requires(tmp_path, state, calls, monkeypatch):
+    """The recorded compose file interpolates HERMES_PG_PASSWORD with ``:?``; down must not fail on it."""
+    monkeypatch.delenv("HERMES_PG_PASSWORD", raising=False)
+    write_install_state(install_state_path(tmp_path), state)
+    commands, runner = calls
+    assert main(["--force", "--keep-db"], home=tmp_path, runner=runner) == 0
+    compose = [kwargs for command, kwargs in commands if command[:2] == ["docker", "compose"]]
+    assert compose, "compose down must run for recorded ownership"
+    assert compose[0].get("env", {}).get("HERMES_PG_PASSWORD")
+
+
+def test_uninstall_never_restarts_host_gateway_and_completes_without_it(tmp_path, state, calls):
+    """`hermes gateway restart` targets the host's background service, so uninstall must not run it.
+
+    The previous `hermes restart` call was not a Hermes command and made every uninstall incomplete.
+    """
+    write_install_state(install_state_path(tmp_path), state)
+    commands, runner = calls
+    assert main(["--force", "--keep-db"], home=tmp_path, runner=runner) == 0
+    issued = [command for command, _ in commands]
+    assert not any("restart" in command for command in issued)
+    assert not install_state_path(tmp_path).exists()
