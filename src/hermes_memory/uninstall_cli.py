@@ -139,7 +139,8 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
 
     def safe_path(raw: str, candidates: tuple[Path, ...]) -> Path:
         path = Path(raw)
-        if path not in candidates or not path.parent.resolve().is_relative_to(home.resolve()):
+        if (path not in candidates
+                or path.parent.resolve() != home.resolve() / path.parent.relative_to(home)):
             raise ValueError("recorded path is outside its expected location")
         if path.is_symlink() and path not in artifact_paths:
             raise ValueError("recorded configuration path is a symlink")

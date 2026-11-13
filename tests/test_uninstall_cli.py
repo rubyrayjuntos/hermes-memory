@@ -211,3 +211,21 @@ def test_refusal_reports_incomplete(tmp_path, calls, capsys):
     result, _ = invoke(tmp_path, calls)
     assert result != 0
     assert 'Incomplete' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('category,name', [('plugins', 'hybrid-age'), ('skills', 'librarian-setup')])
+@pytest.mark.parametrize('outside', [False, True])
+def test_parent_symlink_redirect_refused(tmp_path, calls, state, category, name, outside):
+    home = tmp_path / 'home'
+    home.mkdir()
+    destination = (tmp_path / 'outside' if outside else home / 'unrelated')
+    victim = destination / name
+    victim.mkdir(parents=True)
+    (home / category).symlink_to(destination, target_is_directory=True)
+    field = 'plugin_dirs' if category == 'plugins' else 'skill_dirs'
+    state = replace(state, **{field: (str(home / category / name),)})
+    write_install_state(install_state_path(home), state)
+    result, _ = invoke(home, calls, '--keep-db')
+    assert result != 0
+    assert victim.is_dir()
+    assert install_state_path(home).exists()

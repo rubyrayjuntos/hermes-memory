@@ -29,3 +29,12 @@ def test_yaml_cleanup_resets_owned_provider(tmp_path):
     path.write_text('memory:\n  provider: hybrid-age\nhybrid_age: {}\n')
     remove_hybrid_age_config(path)
     assert yaml.safe_load(path.read_text()) == {'memory': {'provider': 'built-in'}}
+
+
+def test_yaml_alias_does_not_change_unrelated_mapping(tmp_path):
+    path = tmp_path / 'config.yaml'
+    path.write_text('memory: &settings\n  provider: hybrid-age\n  limit: 5\nother: *settings\nhybrid_age: {}\n')
+    remove_hybrid_age_config(path)
+    result = yaml.safe_load(path.read_text())
+    assert result['memory'] == {'provider': 'built-in', 'limit': 5}
+    assert result['other'] == {'provider': 'hybrid-age', 'limit': 5}

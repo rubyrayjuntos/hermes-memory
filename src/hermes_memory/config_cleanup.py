@@ -37,7 +37,9 @@ def remove_hybrid_age_config(path: Path) -> None:
     config.pop("hybrid_age", None)
     memory = config.get("memory")
     if isinstance(memory, dict) and memory.get("provider") == "hybrid-age":
+        memory = dict(memory)
         memory["provider"] = "built-in"
+        config["memory"] = memory
         changed = True
     if changed:
         path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
