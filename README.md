@@ -40,33 +40,41 @@ each layer (`MEMORY.md`, sessions, this provider) and you run it. Load skill
 `librarian-setup`. You handle the secret bits, then **you** seed three facts
 in chat. Those turns are the first real graph.
 
-Map the skill will walk (clone first if you are not in the repo):
+No clone is needed. Install the release from GitHub with pip, then run the
+installer that ships with it:
 
 ```bash
-# 1. Clone
-git clone https://github.com/rubyrayjuntos/hermes-memory.git
-cd hermes-memory
-
-# 2. Local embeddings (required for recall — default URL is 127.0.0.1:11434/v1)
+# 1. Local embeddings (required for recall — default URL is http://localhost:11434/v1)
 ollama pull nomic-embed-text
 
-# 3. Database password — docker compose will not start without HERMES_PG_PASSWORD
-cp .env.example .env
-# Edit .env: set HERMES_PG_PASSWORD and put the same password in HYBRID_AGE_DSN
-# (replace the *** placeholder).
+# 2. Install the package from a release tag or a commit (replace <tag-or-commit>).
+#    Tags older than the bundled installer (for example v0.1.0) install a package
+#    without the install assets; the installer refuses those with guidance.
+pip install "git+https://github.com/rubyrayjuntos/hermes-memory@<tag-or-commit>"
 
-# 4. Install the package, wire the Hermes plugin, start Postgres, start the viz API
-pip install -e '.[dev]'
-hermes-memory-install
+# 3. Install into Hermes: starts Postgres (127.0.0.1:5452), admits the plugin's
+#    dependencies, activates hybrid-age, and runs verify. The database password is
+#    generated and stored in ~/.hermes/.env unless you export HERMES_PG_PASSWORD first.
+hermes-memory-install --yes
 
-# 5. Confirm the pipeline (exit 0 = PASS). This uses a CI synthetic; it is not your memory.
-hermes-memory-verify
+# 4. Check the pipeline from any directory (exit 0 = PASS, 7/7 layers with embeddings)
+hermes-memory-verify --require-embed
+
+# 5. Restart the Hermes gateway so running sessions load the plugin
+hermes gateway restart
 
 # 6. New Hermes session — load skill librarian-setup and *you* seed three facts in chat
 ```
 
-`hermes-memory-install` installs a **pinned git tree** (`--ref`, default
-`origin/main` via `git archive` — GitHub, not the dirty working clone or
+To remove it: `hermes-memory-uninstall --force` (add `--keep-db` to keep the
+database; the password is kept with it so a reinstall can open it again).
+
+Developers working from a checkout can still run `pip install -e '.[dev]'`
+and `hermes-memory-install --ref HEAD` from the clone. Checkout installs pin
+the Git ref you choose; packaged installs use the build's recorded commit.
+
+`hermes-memory-install` in a checkout installs a **pinned git tree** (`--ref`,
+default `origin/main` via `git archive` — GitHub, not the dirty working clone or
 the `v0.1.0` tag): it copies
 `src/hermes_memory` into `~/.hermes/plugins/hybrid-age`, writes
 `.hermes-memory-version` (SHA + ref), `pip install`s that archive
