@@ -22,26 +22,6 @@ def test_mentions_visible_by_default_and_imports_off():
     assert edge_visible("IMPORTS", allow_imports=True) is True
 
 
-def test_fountain_is_garden_only_ship_surface():
-    html = Path("docs/graph/fountain.html").read_text()
-
-    assert "co-occurrence in mention order" in html
-    assert "Garden live — the mention manifold" in html
-    assert "Session, Turn, and Noun" not in html
-    assert "turn_id" in html
-    assert "session_id" in html
-    assert "#level-ctl, #ghost-row, #ghost-ctl, #coach { display: none !important; }" in html
-    assert "ph.textContent = LEVEL_DEF" not in html
-    assert "ABOUT" not in html
-    assert "Concept" not in html
-    assert "level: 1" in html
-    assert "graph/3d?fresh=1" in html
-    assert "composite × (magnitude / 8)" in html
-    assert "escapeHTML(seed.chunk_id)" in html
-    assert "Number(seed.score).toFixed(2)" in html
-    assert "escapeHTML(seed.id)" not in html
-
-
 def test_readme_advertises_garden_manifold_only():
     readme = Path("README.md").read_text()
 

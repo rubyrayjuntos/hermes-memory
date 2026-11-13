@@ -252,6 +252,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             self._enqueue_write({
                 "type": "turn",
                 "session_id": sid,
+                "agent_identity": self._agent_identity,
                 "role": role,
                 "content": content[:8000],
                 "previous_conversation_id": self._last_turn_id.get(sid),
@@ -291,6 +292,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             meta["indexed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self._enqueue_write({
             "type": "memory",
+            "agent_identity": self._agent_identity,
             "action": action,
             "target": target,
             "content": content,
@@ -410,25 +412,26 @@ class HybridAgeMemoryProvider(MemoryProvider):
             target = item["target"]
             content = item["content"]
             metadata = item.get("metadata") or {}
+            agent_identity = item.get("agent_identity") or self._agent_identity
             try:
                 if action == "add":
                     await store.upsert_memory_entry(
-                        self._agent_identity, target, content, vec_literal, metadata,
+                        agent_identity, target, content, vec_literal, metadata,
                     )
                 elif action == "replace":
                     old_text = metadata.get("old_text") or metadata.get("replaces")
                     if old_text:
                         await store.replace_memory_entries(
-                            self._agent_identity, target, old_text,
+                            agent_identity, target, old_text,
                             content, vec_literal, metadata,
                         )
                     else:
                         await store.upsert_memory_entry(
-                            self._agent_identity, target, content, vec_literal, metadata,
+                            agent_identity, target, content, vec_literal, metadata,
                         )
                 elif action == "remove":
                     await store.remove_memory_entries(
-                        self._agent_identity, target, content,
+                        agent_identity, target, content,
                     )
             except Exception as exc:
                 LEDGER.record(
@@ -561,7 +564,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         try:
             inserted_turn = await store.insert_turn(
-                session_id, self._agent_identity,
+                session_id, item.get("agent_identity") or self._agent_identity,
                 item.get("role") or "user", content, vec_literal,
                 metadata={"kind": classify_session_kind(session_id)},
                 include_inserted=True,
@@ -829,7 +832,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     truncate_tokens(enriched, QUERY_TOKEN_CAP)
                 ) if self.embedder else None
                 t_embed = time.perf_counter()
-                seeds = await self.store.vector_search(vec_to_literal(emb), self.config.vector_k) \
+                seeds = await self.store.vector_search(
+                    vec_to_literal(emb), self.config.vector_k,
+                    agent_identity=self._agent_identity,
+                ) \
                     if (emb and self.store) else []
                 t_vec = time.perf_counter()
                 logger.info(

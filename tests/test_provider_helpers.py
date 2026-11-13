@@ -93,7 +93,8 @@ async def test_prefetch_omits_debug_dsl_from_prompt() -> None:
     from hermes_memory.provider import HybridAgeMemoryProvider
 
     class Store:
-        async def vector_search(self, _literal, _k):
+        async def vector_search(self, _literal, _k, *, agent_identity=None):
+            assert agent_identity == "agent-a"
             return [{
                 "id": "doc:1",
                 "src": "doc_chunk",
@@ -114,6 +115,7 @@ async def test_prefetch_omits_debug_dsl_from_prompt() -> None:
     provider.pool = None
     provider.embedder = Embedder()
     provider.config = HybridAgeConfig(embed_dim=2)
+    provider._agent_identity = "agent-a"
     provider._last_recall_count = 0
     provider._recent_topics = []
     provider._recent_turns = []
@@ -134,7 +136,8 @@ async def test_prefetch_injects_provenance_turn_body_not_cypher() -> None:
     from hermes_memory.walk import WalkRow
 
     class Store:
-        async def vector_search(self, _literal, _k):
+        async def vector_search(self, _literal, _k, *, agent_identity=None):
+            assert agent_identity == "agent-a"
             return [{
                 "id": "41",
                 "src": "conversation",
@@ -208,6 +211,7 @@ async def test_prefetch_injects_provenance_turn_body_not_cypher() -> None:
     provider.pool = None
     provider.embedder = Embedder()
     provider.config = HybridAgeConfig(embed_dim=2, min_similarity=0.5)
+    provider._agent_identity = "agent-a"
     provider._last_recall_count = 0
     provider._recent_topics = []
     provider._recent_turns = []
@@ -248,4 +252,42 @@ def test_initialize_failed_ainit_leaves_uninitialized() -> None:
 
     provider.initialize("sess-2")
     assert provider._initialized is False
+
+
+def test_sync_turn_snapshots_agent_identity_before_enqueue() -> None:
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+    provider._session_id = "session-a"
+    provider._agent_identity = "agent-a"
+    provider._last_turn_id = {}
+    provider._recent_topics = []
+    provider._recent_turns = []
+    provider._max_topics = 8
+    provider._max_turns = 6
+    queued: list[dict] = []
+    provider._enqueue_write = queued.append  # type: ignore[method-assign]
+
+    provider.sync_turn(
+        "Please remember that the Atlas service owns our persistent catalog.",
+        "I will remember that the Atlas service owns the persistent catalog.",
+    )
+    provider._agent_identity = "agent-b"
+
+    assert [item["agent_identity"] for item in queued] == ["agent-a", "agent-a"]
+
+
+def test_memory_write_snapshots_agent_identity_before_enqueue() -> None:
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+    provider._session_id = "session-a"
+    provider._agent_identity = "agent-a"
+    queued: list[dict] = []
+    provider._enqueue_write = queued.append  # type: ignore[method-assign]
+
+    provider.on_memory_write("add", "memory", "Remember Atlas")
+    provider._agent_identity = "agent-b"
+
+    assert queued[0]["agent_identity"] == "agent-a"
 

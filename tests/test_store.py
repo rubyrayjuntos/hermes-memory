@@ -21,7 +21,7 @@ async def test_insert_turn_and_vector_search(db_pool, store, clean_hermes_test_d
     _assert_hermes_test_dsn(hermes_test_dsn)
     vec = "[" + ",".join(["1.0"] + ["0.0"] * 767) + "]"
     await store.insert_turn("sess-1", "default", "user", "hello store", vec, {"src": "test"})
-    rows = await store.vector_search(vec, k=5)
+    rows = await store.vector_search(vec, k=5, agent_identity="default")
     assert len(rows) >= 1
     assert any(r["content"] == "hello store" for r in rows)
     assert all(r["embedding"] for r in rows)
@@ -32,6 +32,26 @@ async def test_insert_turn_and_vector_search(db_pool, store, clean_hermes_test_d
         )
     assert stamped["embed_model"] == "nomic-embed-text"
     assert int(stamped["embed_dim"]) == 768
+
+
+@pytest.mark.asyncio
+async def test_vector_search_isolates_agent_identity(
+    store, clean_hermes_test_db, hermes_test_dsn
+):
+    _assert_hermes_test_dsn(hermes_test_dsn)
+    vec = "[" + ",".join(["1.0"] + ["0.0"] * 767) + "]"
+    await store.insert_turn("sess-a", "agent-a", "user", "agent a turn", vec)
+    await store.insert_turn("sess-b", "agent-b", "user", "agent b turn", vec)
+    await store.upsert_memory_entry("agent-a", "memory", "agent a memory", vec)
+    await store.upsert_memory_entry("agent-b", "memory", "agent b memory", vec)
+
+    rows = await store.vector_search(vec, k=10, agent_identity="agent-a")
+    contents = {row["content"] for row in rows}
+
+    assert "agent a turn" in contents
+    assert "agent a memory" in contents
+    assert "agent b turn" not in contents
+    assert "agent b memory" not in contents
 
 
 @pytest.mark.asyncio

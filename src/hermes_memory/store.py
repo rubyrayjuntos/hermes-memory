@@ -1400,7 +1400,13 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
 
     # -- Vector search ----------------------------------------------------------
 
-    async def vector_search(self, vec_literal: str, k: int) -> List[Dict[str, Any]]:
+    async def vector_search(
+        self,
+        vec_literal: str,
+        k: int,
+        *,
+        agent_identity: str | None = None,
+    ) -> List[Dict[str, Any]]:
         """ANN over file memory, doc_chunks, and conversation turns.
 
         File-backed ``memory_entries`` (metadata.file_path set) are omitted:
@@ -1427,6 +1433,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                   FROM memory_entries
                  WHERE embedding IS NOT NULL
                    AND metadata->>'file_path' IS NULL
+                   AND ($3::text IS NULL OR agent_identity = $3)
                  ORDER BY embedding <=> $1::vector
                  LIMIT $2
               )
@@ -1451,6 +1458,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                        ts
                   FROM conversations
                  WHERE embedding IS NOT NULL
+                   AND ($3::text IS NULL OR agent_identity = $3)
                    AND coalesce(metadata->>'kind', 'interactive') = 'interactive'
                    AND coalesce(session_id, '') NOT LIKE 'verify-c5%'
                    AND coalesce(session_id, '') NOT LIKE 'bench-%'
@@ -1465,7 +1473,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(hnsw_ef_search_sql(ef))
-                rows = await conn.fetch(sql, vec_literal, k)
+                rows = await conn.fetch(sql, vec_literal, k, agent_identity)
         out = [dict(r) for r in rows]
         logger.info("vector_search k=%s hnsw.ef_search=%s hits=%s", k, ef, len(out))
         return out
