@@ -39,7 +39,7 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
     is_one_word_concept,
     should_purge_concept,
 )
-from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config
+from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config, resolve_agent_identity
 from .embed import Embedder, vec_to_literal
 from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
@@ -121,16 +121,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._primary_context = ctx in (None, "primary")
 
         self._session_id = session_id or "default"
-        explicit_identity = kwargs.get("agent_identity")
-        if explicit_identity == "default":
-            explicit_identity = None
-        self._agent_identity = (
-            kwargs.get("gateway_session_key")
-            or explicit_identity
-            or kwargs.get("agent_workspace")
-            or kwargs.get("agent_identity")
-            or "default"
-        )
+        self._agent_identity = resolve_agent_identity(self.config.memory_scope, kwargs)
 
         # Idempotent: if already initialized, just refresh session state.
         if self._initialized:
