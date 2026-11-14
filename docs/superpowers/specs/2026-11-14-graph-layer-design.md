@@ -1,6 +1,6 @@
 # Memory lifecycle and graph layer — design
 
-**Status:** v0.3, for review. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
+**Status:** v0.4, for approval. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
 
 **Supersedes:** v0.1 of this file (which proposed a separate `fact` table and wrongly said `claims` had no writer), and in `2026-09-03-conversation-manifold-design.md`: §2 non-goal "LLM extraction in the drain loop", §6 noun extraction, §7 walker, §8.2.1 injection.
 
@@ -57,14 +57,16 @@ turn_entity(owner, span_id, entity_id, surface, conf)          -- passports to e
 
 ### 4.2 Claims (evolved) and evidence
 
-`claims` gains, additively: `owner`, `subject_id`, `object_id` (entity, nullable when the object is a literal), `fact_text`, `fact_vec vector(768)`, `status`, `valid_from`, `valid_to`, plus `UNIQUE (owner, claim_id)` so evidence can reference it with a composite key.
+`claims` gains, additively: `owner`, `subject_id` (required for new claims: an unresolved subject creates an entity of type `other`, so every claim is traversable from its subject), `object_id` (entity, nullable when the object is a literal), `fact_text`, `fact_vec vector(768)`, `status`, `valid_from`, `valid_to`, plus `UNIQUE (owner, claim_id)` so evidence can reference it with a composite key. When entities merge later, claims are re-pointed to the surviving entity in the same transaction.
 
-The current-claim key uses resolved entities, falling back to canonical text only for unlinked literals, and excludes historical intervals so a value can be re-asserted after it was superseded (NYC → Austin → NYC):
+The current-claim key uses resolved entities, with literal objects prefixed so an entity id can never equal a literal string, and excludes historical intervals so a value can be re-asserted after it was superseded (NYC → Austin → NYC). Because it is built from expressions, it is a unique **index**, not a table constraint:
 
 ```
-UNIQUE (owner, coalesce(subject_id::text, subject_canon), verb,
-        coalesce(object_id::text, object_canon), polarity)
-  WHERE status IN ('grounded','unconfirmed') AND valid_to IS NULL
+CREATE UNIQUE INDEX claims_current_key ON claims (
+    owner, subject_id, verb,
+    (CASE WHEN object_id IS NOT NULL THEN 'e:' || object_id::text ELSE 'l:' || object_canon END),
+    polarity)
+  WHERE status IN ('grounded','unconfirmed') AND valid_to IS NULL;
 ```
 
 This merges "Acme" and "Acme Corp" once they resolve to one entity, and keeps `project:hermes` and `tool:hermes` apart. `verb` is normalized through a verb table (`works_for` ← "employed by", "works at", …) before upsert, and the model's structured output constrains verbs to that table, so functional supersession fires reliably.
@@ -79,7 +81,7 @@ claim_evidence(owner, id, claim_id, span_id, speaker, act, polarity,
   FOREIGN KEY (owner, span_id)  REFERENCES conversations(agent_identity, id) ON DELETE CASCADE
 ```
 
-`state` ∈ live, retracted (by repair or explicit user correction), superseded_version (an older extractor version for the same span).
+`state` ∈ `live`, `withdrawn` (removed by a repair of the span it came from), `superseded_version` (an older extractor version for the same span). "Withdrawn" is deliberately not "retracted": withdrawing evidence removes one piece of support, while a user `retract` act is evidence in its own right and can make the claim `retracted`.
 
 **Claim status is derived** from live evidence, recomputed in the transaction that changes evidence:
 
@@ -88,15 +90,16 @@ claim_evidence(owner, id, claim_id, span_id, speaker, act, polarity,
 | Any user `assert` | `grounded` |
 | Only assistant evidence | `unconfirmed` |
 | User `retract` newer (event time) than the newest `assert` | `retracted` |
-| None (spans deleted, or all evidence retracted/superseded) | `orphaned` (kept, never injected) |
+| None (spans deleted, or all evidence withdrawn or superseded) | `orphaned` (kept, never injected) |
 
-**Supersession** applies to functional relations (`based_in`, `owned_by`, `works_for`, `lives_in`, `role_is`, `status_is`). Whenever evidence changes for any claim of a functional key `(owner, subject, verb)`, the whole timeline for that key is recomputed in the same transaction:
+**Supersession** applies to functional relations (`based_in`, `owned_by`, `works_for`, `lives_in`, `role_is`, `status_is`). For these, claim rows are **intervals derived from evidence**, not rows that evidence picks. Whenever evidence changes for a functional key `(owner, subject_id, verb)`, the key's timeline is rebuilt in the same transaction:
 
-1. Take every `grounded` claim for the key, with `valid_from` = the event time of its earliest live user `assert`, ordered ascending.
-2. For each claim except the last: `valid_to` = the next claim's `valid_from`, `superseded_by` = the next claim.
-3. For the last: `valid_to = NULL`, `superseded_by = NULL`.
+1. Collect the key's live user `assert` evidence events (any object), ordered by event time.
+2. Collapse consecutive events with the same object into one interval: `valid_from` = the first event's time, `valid_to` = the next interval's `valid_from` (NULL for the last).
+3. Map each interval to a claim row: reuse the row that already holds that interval's evidence, create a row for a new interval, and mark rows left without an interval `orphaned`.
+4. Re-point each evidence row to the claim row of its interval; set `superseded_by` along the chain.
 
-The result is independent of ingestion order: a late backfill of an older value is placed into the past, and retracting or deleting the newest value restores the previous one as current. Timelines per key are short, so the recompute is cheap.
+NYC → Austin → NYC is three intervals and two NYC rows; a late backfill or retry lands in the interval its event time belongs to, never on whichever NYC row happens to be current. Retracting or deleting the newest value restores the previous interval as current. Non-functional relations have no intervals: one row per current key. Timelines per key are short, so the rebuild is cheap.
 
 **Confirmation** of an assistant claim by the user adds user evidence; the claim becomes grounded and keeps both evidence rows, so provenance shows who said what.
 
@@ -104,7 +107,7 @@ The result is independent of ingestion order: a late backfill of an older value 
 
 ### 4.3 Graph
 
-The traversable graph is the set of claims with `status = 'grounded'`, `valid_to IS NULL`, and an entity object: edges `subject_id → object_id` labelled `verb`. Literal-object claims are leaf facts. The legacy `noun` / `semantic_edge` co-occurrence graph is not extended.
+The traversable graph is the set of claims with `status = 'grounded'`, `valid_to IS NULL`, and an entity object: edges `subject_id → object_id` labelled `verb`. Every claim has an entity subject (§4.2), so literal-object claims are leaf facts reachable from their subject. Legacy claims whose subject cannot be resolved during migration get an entity created for them (type `other`). The legacy `noun` / `semantic_edge` co-occurrence graph is not extended.
 
 ## 5. Write path
 
@@ -123,7 +126,7 @@ durable_job(owner, id, kind, op_id, payload, status, claimed_by, lease_expires_a
 - **Heartbeat:** a worker extends `lease_expires_at` while it works (only if its fence is current).
 - **Publish:** results are written in one transaction that first locks the job row and checks `fence` = the worker's fence; if not, the transaction aborts and nothing is published.
 - **Fail:** `retryable` with backoff; `failed` after the limit; failures are visible in health and verify.
-- **Session order (extraction):** an extraction job for `(owner, session)` is claimable only when no earlier-event-time extraction job for that session is `pending`, `leased` or `retryable`. A turn's corrections therefore always see the claims of the turns before it. A `failed` job does not block its session.
+- **Session order (extraction), per tier:** an extraction job for `(owner, session, extractor)` is claimable only when no earlier-event-time job of the **same extractor** for that session is `pending`, `leased` or `retryable`. Corrections see the claims of earlier turns from the same tier, and a slow or retrying `model` job never holds up the `rules` job for a later turn. A `failed` job does not block its session.
 
 The V16/V17 `write_outbox` (op_id-unique, fenced) is the capture instance of this lifecycle; Phase 1 moves it onto `durable_job` with a compatibility migration.
 
@@ -144,9 +147,9 @@ The reception stage stops writing claims directly. Its rule extraction becomes t
 
 **Confirmation through uptake.** Users confirm elliptically ("yes, exactly"), and extracting that turn alone yields nothing. When an uptake verdict says a user turn accepted the preceding assistant turn, the pipeline writes user `assert` evidence (`extractor = uptake`) for the `unconfirmed` claims of that assistant span. Today `classify_repair` emits only `repaired` or `unknown`; an `accepted` verdict needs a new, conservative classifier (explicit confirmation cues after an assistant statement or question) and abstains otherwise.
 
-### 5.4 Secret redaction (if adopted)
+### 5.4 Secret redaction (Phase 6)
 
-Decision open (§11). If adopted, redaction runs at capture, before the outbox/job enqueue and the `conversations` insert. Anywhere downstream would leave raw secrets in job payloads, `fact_text`, `fact_vec` and the extraction model's input.
+Adopted as a fast-follow phase after this spec (§10). Redaction runs at capture, before the outbox/job enqueue and the `conversations` insert. Anywhere downstream would leave raw secrets in job payloads, `fact_text`, `fact_vec` and the extraction model's input. Until Phase 6 ships, secrets are filtered only at recall and injection, and documentation must say so.
 
 ## 6. Read path
 
@@ -172,7 +175,7 @@ Modes (`hybrid_age.retrieval_mode`): `vector` (default, today's served path), `s
 
 ### 7.2 Migration
 
-Additive columns and tables only. Existing `claims` rows get `owner` from their span's `agent_identity`, one evidence row each (`extractor = rules`, version `legacy`), and status recomputed. Existing `aliases` rows get an owner from the earliest span whose text contains both surfaces; rows that cannot be attributed are dropped (they are re-derivable from text).
+Additive columns and tables only. Existing `claims` rows get `owner` from their span's `agent_identity`, one evidence row each (`extractor = rules`, version `legacy`), and status recomputed. Existing `aliases` rows get an owner only when exactly one owner has a span whose text contains both surfaces. Rows that match no owner, or more than one, are dropped; they are re-derivable from text by the extraction jobs.
 
 ### 7.3 Rollback
 
@@ -180,7 +183,7 @@ Additive columns and tables only. Existing `claims` rows get `owner` from their 
 
 ### 7.4 Retirement (Phase 4)
 
-The pane switches to entities and claims; the co-occurrence writers stop. No AGE projection of claims is built unless a concrete Cypher consumer exists (decision open, §11). AGE's existing uses — the episodic Session/Turn flower, code-ingest File/Imports, and the pane's graph views — are unchanged by this design.
+The pane switches to entities and claims; the co-occurrence writers stop. AGE is kept (decision, §11): its existing uses — the episodic Session/Turn flower, code-ingest File/Imports, and the pane's graph views — are unchanged by this design. No AGE projection of claims is built unless a concrete Cypher consumer exists.
 
 ## 8. Phase 0 (implemented)
 
@@ -190,7 +193,7 @@ The pane switches to entities and claims; the co-occurrence writers stop. No AGE
 - Health and verify report outbox pending and parked counts.
 - Evidence: cross-owner integration tests with a shared session id fail on the previous code; six concurrent writes of one op store one row; a stale worker cannot settle a reclaimed row; 300-turn burst with immediate shutdown persists every row after replay.
 
-Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencing only); write-path secret redaction (decision pending).
+Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencing only; added with `durable_job` in Phase 1); write-path secret redaction (Phase 6).
 
 ## 9. Acceptance gates (eval harness, before `hybrid` becomes default)
 
@@ -214,8 +217,9 @@ Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencin
 | 1 | `durable_job`; owner + composite keys on claims and aliases; entities; `claim_evidence`; migration of existing rows; reception moved onto evidence | Migration idempotent; reception behaviour unchanged by tests |
 | 2 | Extraction job (rules then model), atomic fenced publish, re-extraction versions | Restart / replay / concurrency / cross-owner tests; fact recall ≥ 0.90 |
 | 3 | Retrieval arms, path-constrained traversal, RRF + MMR, facts block; `shadow` mode | Gates in §9 measured in shadow |
-| 4 | `hybrid` default after gates; pane on entities/claims; retire co-occurrence writers; AGE projection | Pane parity; rollback rehearsed |
+| 4 | `hybrid` default after gates; pane on entities/claims; retire co-occurrence writers | Pane parity; rollback rehearsed |
 | 5 | 10k / 50k-turn scale, backfill of existing history | Latency gates at scale |
+| 6 | Write-path secret redaction at capture (§5.4) — fast follow | Secret-shaped strings absent from conversations, job payloads, claims, embeddings and extractor input |
 
 ## 11. Decisions recorded
 
@@ -223,8 +227,8 @@ Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencin
 2. Model extraction is allowed in the job worker, never on the prompt path; default `llama3.2:3b`.
 3. Assistant output is stored as evidence and stays `unconfirmed` until a user confirms it.
 4. Prompt-path latency budget: p95 ≤ 300 ms at 10k turns.
-5. Open: write-path secret redaction (placement fixed in §5.4 if adopted).
-6. Open: whether to keep Apache AGE beyond its existing uses (§7.4); no claims projection is planned without a Cypher consumer.
+5. Write-path secret redaction: adopted as Phase 6, a fast follow after this spec (user decision, 2026-11-14).
+6. Apache AGE is kept for its existing uses; no claims projection without a Cypher consumer (user decision, 2026-11-14).
 
 ## Sources
 
@@ -238,3 +242,4 @@ Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencin
 | 0.1 | 2026-11-14 | 2026-11-14 | Claude | Research and plan for a typed, owner-scoped graph layer. |
 | 0.2 | 2026-11-14 | 2026-11-14 | Claude | Rewritten after code review: claims as the single authority with evidence rows, owner-composite keys, one durable job lifecycle with fenced atomic publish, event-time supersession, shadow mode, coexistence and rollback. Phase 0 recorded as implemented. |
 | 0.3 | 2026-11-14 | 2026-11-14 | Claude | Spec review: current-claim key on entity ids and excluding historical intervals; full-timeline supersession recompute; `UNIQUE (owner, claim_id)`; job key includes owner; per-session extraction order; two-tier rules→model extraction with a verb table; confirmation through uptake; redaction placement; batched entity linking; iterative HNSW scan; AGE projection deferred. |
+| 0.4 | 2026-11-14 | 2026-11-14 | Claude | Functional timelines rebuilt from user-assert evidence events into interval rows; prefixed expression unique index; session order per extractor tier; entity subject required; evidence state `withdrawn` (distinct from claim `retracted`); ambiguous alias rows dropped in migration. Decisions: keep AGE; redaction as Phase 6. |
