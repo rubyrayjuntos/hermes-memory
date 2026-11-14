@@ -650,6 +650,25 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("previous turn lookup failed", exc_info=True)
             return None
 
+    async def _enqueue_extraction_jobs(self, store: Any, conv_id: int, item: dict) -> None:
+        """Enqueue id-only extraction jobs for a newly inserted turn. Never raises."""
+        job_add = getattr(store, "job_add", None)
+        if not callable(job_add):
+            return
+        try:
+            from .extraction_jobs import job_specs
+
+            owner = item.get("agent_identity") or self._agent_identity
+            for kind, op_id, payload in job_specs(int(conv_id)):
+                await job_add(
+                    owner, kind, op_id, payload,
+                    session_id=item.get("session_id"),
+                    event_time=item.get("captured_at"),
+                    priority=0,
+                )
+        except Exception:
+            logger.warning("extraction job enqueue failed", exc_info=True)
+
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
         from .extract_nouns import extract_nouns
@@ -743,6 +762,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             )
         except Exception:
             logger.warning("reception stage failed", exc_info=True)
+
+        await self._enqueue_extraction_jobs(store, int(conv_id), item)
 
         vertex_id = None
         try:
