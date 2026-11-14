@@ -155,6 +155,8 @@ async def run(args) -> dict:
     # Second owner on the same database: its names must never reach the first owner's answers.
     other_facts, _ = build_corpus(args.other_facts, 0, args.seed + 101)
     other_names = {f.project for f in other_facts} | {f.owner for f in other_facts}
+    # Names both corpora happen to share belong to both owners; they cannot signal a leak.
+    other_names -= {f.project for f in facts} | {f.owner for f in facts}
     if args.other_facts:
         other = HybridAgeMemoryProvider(config=cfg)
         other.initialize(f"eval-other-{args.seed}", agent_identity="eval-other", agent_context="primary")
