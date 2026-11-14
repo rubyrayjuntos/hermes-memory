@@ -33,15 +33,19 @@ class FakeConn:
 class FakePool:
     def __init__(self, conn):
         self.conn = conn
+        self.open = 0  # connections currently held
 
     def acquire(self):
         conn = self.conn
+        pool = self
 
         class _Ctx:
             async def __aenter__(self_inner):
+                pool.open += 1
                 return conn
 
             async def __aexit__(self_inner, *exc):
+                pool.open -= 1
                 return False
 
         return _Ctx()
@@ -113,6 +117,43 @@ async def test_claims_rules_then_model_with_lease_and_flags(monkeypatch):
     assert published["rules"][0][:2] == (1, 1) and published["rules"][0][2] is _embed
     assert published["model"][0][:2] == (2, 1)
     assert store.done == [(2, 1)]  # publish_model does not settle; the worker does
+
+
+async def test_no_pool_connection_is_held_during_the_model_call(monkeypatch):
+    store = FakeStore(jobs={"extract_model": [(2, 1, {"span_id": 9})]})
+    _patch_publish(monkeypatch)
+    held = {}
+
+    async def model(turn, context):
+        held["during_model"] = store.pool.open
+        return {"claims": []}
+
+    n = await extraction_worker.run_extraction_once(object(), store, embed=_embed, model=model)
+
+    assert n == 1
+    assert held["during_model"] == 0
+
+
+async def test_empty_span_settles_job_outside_the_connection(monkeypatch):
+    store = FakeStore(turns={9: ("o", "s", "   ")},
+                      jobs={"extract_model": [(2, 1, {"span_id": 9})]})
+    _patch_publish(monkeypatch)
+    open_at_done = []
+    real_done = store.job_done
+
+    async def job_done(job_id, fence, **kw):
+        open_at_done.append(store.pool.open)
+        return await real_done(job_id, fence, **kw)
+
+    store.job_done = job_done
+
+    async def model(turn, context):
+        raise AssertionError("model must not run for an empty span")
+
+    n = await extraction_worker.run_extraction_once(object(), store, embed=_embed, model=model)
+
+    assert n == 1 and store.done == [(2, 1)]
+    assert open_at_done == [0]
 
 
 async def test_model_gets_four_previous_turns_truncated_and_grounds_claims(monkeypatch):

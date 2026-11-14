@@ -72,18 +72,21 @@ async def _run_model(store, worker: str, model: ModelFn) -> int:
         return 0
     job_id, fence, payload = claimed[0]
     try:
+        # Read everything the model needs, then release the connection: a slow
+        # model must not pin a pool connection that prefetch also uses.
         async with store.pool.acquire() as conn:
             owner_row = await conn.fetchrow(
                 "SELECT owner, payload FROM durable_job WHERE id = $1", int(job_id))
             loaded = await _load_model_input(conn, int(payload["span_id"]), owner_row["owner"])
-            if loaded is None:
-                # Span gone or empty: nothing to extract; settle so the queue moves on.
-                return 1 if await store.job_done(job_id, fence) else 0
-            turn, context, verbs = loaded
-            raw = model(turn, context)
-            if inspect.isawaitable(raw):
-                raw = await raw
-            claims = grounded_claims(raw, turn, context, verbs)
+        if loaded is None:
+            # Span gone or empty: nothing to extract; settle so the queue moves on.
+            return 1 if await store.job_done(job_id, fence) else 0
+        turn, context, verbs = loaded
+        raw = model(turn, context)
+        if inspect.isawaitable(raw):
+            raw = await raw
+        claims = grounded_claims(raw, turn, context, verbs)
+        async with store.pool.acquire() as conn:
             await publish_model(conn, claims, job_id, fence)
         # publish_model does not settle the job; a stale fence makes this False.
         return 1 if await store.job_done(job_id, fence) else 0
