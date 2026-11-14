@@ -4,9 +4,26 @@ All notable changes to this project will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.9.0] - 2026-11-14
+
+Pre-release for human-observed install testing. Not a public release.
+
+### Added
+- Install without a clone: the wheel bundles the install assets and records the commit it was built from. `pip install git+https://github.com/rubyrayjuntos/hermes-memory@<tag-or-commit>`, then `hermes-memory-install`.
+- Plugin manifest (`plugin.yaml`) declares dependencies; `hermes memory setup hybrid-age` admits them into Hermes's runtime.
+- `hybrid_age.memory_scope` (default `shared`): one memory per profile across chat sessions; `session` restores per-chat isolation.
+- Disposable release gate (`scripts/release_gate.py`) and an isolated live lifecycle (`--execute`).
+
+### Fixed
+- Uninstall: compose shutdown needs the interpolation variable; no longer calls a nonexistent `hermes restart`; `--keep-db` keeps the password its volume needs.
+- Verify cleanup removes claim rows before synthetic conversations (RESTRICT foreign keys).
+- Provider loads in the gateway (dependency admission) and no longer logs failed imports for CLI modules.
+- Shared memory is owned per profile, so profiles on one database do not merge memories.
+- Source distributions and checkout installs keep the pinned commit and dirty state.
+
 ## [Unreleased]
 
-`main` since tag `v0.1.0`. Package version in `pyproject.toml` is still `0.1.0` (Alpha).
+`main` since tag `v0.9.0`.
 
 ### Added
 - Fountain live inspector (`docs/graph/fountain.html`) via `hermes-memory-api` on `127.0.0.1:7890`.

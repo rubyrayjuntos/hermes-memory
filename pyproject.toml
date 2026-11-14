@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-memory"
-version = "0.1.0"
+version = "0.9.0"
 description = "Postgres + Apache AGE Vector & Graph Database with prompt context injection for Hermes Agent"
 readme = "README.md"
 license = {text = "MIT"}
