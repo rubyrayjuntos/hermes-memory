@@ -69,6 +69,10 @@ def _is_missing_embed_version_schema(exc: BaseException) -> bool:
 
 
 class HybridAgeMemoryProvider(MemoryProvider):
+    # Optional shadow-retrieval hook: async (query, vector_ids, latency_ms) -> None.
+    # None in the default mode; prefetch only schedules it after the string is built.
+    _shadow_hook = None
+
     def __init__(self, config: Optional[HybridAgeConfig] = None) -> None:
         self.config = config or load_config()
         self.pool = None
@@ -1171,6 +1175,22 @@ class HybridAgeMemoryProvider(MemoryProvider):
             (t_embed - t0) * 1000, (t_vec - t_embed) * 1000,
             (t_graph - t_vec) * 1000, (time.perf_counter() - t0) * 1000,
         )
+        if self._shadow_hook is not None:
+            try:
+                from .shadow import schedule_shadow
+
+                schedule_shadow(
+                    self._shadow_hook,
+                    query,
+                    [s.get("id") for s in selected],
+                    {
+                        "embed": round((t_embed - t0) * 1000, 1),
+                        "vector": round((t_vec - t_embed) * 1000, 1),
+                        "total": round((time.perf_counter() - t0) * 1000, 1),
+                    },
+                )
+            except Exception:
+                logger.warning("shadow hook not scheduled", exc_info=True)
         return block
 
     def _enrich_query(self, query: str) -> str:
