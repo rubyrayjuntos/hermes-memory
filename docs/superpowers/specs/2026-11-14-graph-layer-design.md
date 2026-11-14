@@ -1,6 +1,6 @@
 # Memory lifecycle and graph layer — design
 
-**Status:** v0.2, for review. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
+**Status:** v0.3, for review. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
 
 **Supersedes:** v0.1 of this file (which proposed a separate `fact` table and wrongly said `claims` had no writer), and in `2026-09-03-conversation-manifold-design.md`: §2 non-goal "LLM extraction in the drain loop", §6 noun extraction, §7 walker, §8.2.1 injection.
 
@@ -26,7 +26,7 @@ The served prompt today is **vector memory with neighbour and claim overlays**. 
 3. **Evidence, not counters.** A claim's state is derived from its evidence rows. Confirmation, retraction, deletion and re-extraction change evidence; the claim's state is recomputed in the same transaction.
 4. **Event time, not processing time.** Ordering and supersession use the turn's capture time (`conversations.ts`, set from `captured_at`).
 5. **One durable job lifecycle.** Write capture and extraction use the same lease-and-fence semantics; results publish atomically with the fence check.
-6. **Relational prompt path.** Postgres tables, BTREE / pg_trgm / HNSW, bounded joins. AGE becomes a rebuildable read-only projection after the relational path is proven.
+6. **Relational prompt path.** Postgres tables, BTREE / pg_trgm / HNSW, bounded joins. AGE is not on the prompt path and gets no claims projection without a concrete consumer.
 7. **Shadow before serve.** Hybrid retrieval runs beside vector retrieval and is compared offline before it is allowed to change the prompt.
 
 ## 3. Current state this builds on
@@ -57,13 +57,24 @@ turn_entity(owner, span_id, entity_id, surface, conf)          -- passports to e
 
 ### 4.2 Claims (evolved) and evidence
 
-`claims` gains, additively: `owner`, `subject_id`, `object_id` (entity, nullable when the object is a literal), `fact_text`, `fact_vec vector(768)`, `status`, `valid_from`, `valid_to`. The live key becomes `(owner, subject_canon, verb, object_canon, polarity) WHERE status IN ('grounded','unconfirmed')`.
+`claims` gains, additively: `owner`, `subject_id`, `object_id` (entity, nullable when the object is a literal), `fact_text`, `fact_vec vector(768)`, `status`, `valid_from`, `valid_to`, plus `UNIQUE (owner, claim_id)` so evidence can reference it with a composite key.
+
+The current-claim key uses resolved entities, falling back to canonical text only for unlinked literals, and excludes historical intervals so a value can be re-asserted after it was superseded (NYC → Austin → NYC):
+
+```
+UNIQUE (owner, coalesce(subject_id::text, subject_canon), verb,
+        coalesce(object_id::text, object_canon), polarity)
+  WHERE status IN ('grounded','unconfirmed') AND valid_to IS NULL
+```
+
+This merges "Acme" and "Acme Corp" once they resolve to one entity, and keeps `project:hermes` and `tool:hermes` apart. `verb` is normalized through a verb table (`works_for` ← "employed by", "works at", …) before upsert, and the model's structured output constrains verbs to that table, so functional supersession fires reliably.
 
 ```
 claim_evidence(owner, id, claim_id, span_id, speaker, act, polarity,
                extractor, extractor_version, confidence, event_time,
                state, created_at)
-  UNIQUE (owner, span_id, claim_id, extractor, extractor_version)   -- idempotent retries
+  UNIQUE (owner, span_id, claim_id, extractor, extractor_version)   -- idempotent retries; (owner, span_id)
+                                                                     -- prefix serves the delete cascade
   FOREIGN KEY (owner, claim_id) REFERENCES claims(owner, claim_id)
   FOREIGN KEY (owner, span_id)  REFERENCES conversations(agent_identity, id) ON DELETE CASCADE
 ```
@@ -79,7 +90,13 @@ claim_evidence(owner, id, claim_id, span_id, speaker, act, polarity,
 | User `retract` newer (event time) than the newest `assert` | `retracted` |
 | None (spans deleted, or all evidence retracted/superseded) | `orphaned` (kept, never injected) |
 
-**Supersession** applies to functional relations (`based_in`, `owned_by`, `works_for`, `lives_in`, `role_is`, `status_is`): a grounded claim with a newer event time and a different object sets the older claim's `valid_to` and `superseded_by`. Processing order never decides it; a late backfill cannot supersede a newer fact.
+**Supersession** applies to functional relations (`based_in`, `owned_by`, `works_for`, `lives_in`, `role_is`, `status_is`). Whenever evidence changes for any claim of a functional key `(owner, subject, verb)`, the whole timeline for that key is recomputed in the same transaction:
+
+1. Take every `grounded` claim for the key, with `valid_from` = the event time of its earliest live user `assert`, ordered ascending.
+2. For each claim except the last: `valid_to` = the next claim's `valid_from`, `superseded_by` = the next claim.
+3. For the last: `valid_to = NULL`, `superseded_by = NULL`.
+
+The result is independent of ingestion order: a late backfill of an older value is placed into the past, and retracting or deleting the newest value restores the previous one as current. Timelines per key are short, so the recompute is cheap.
 
 **Confirmation** of an assistant claim by the user adds user evidence; the claim becomes grounded and keeps both evidence rows, so provenance shows who said what.
 
@@ -99,13 +116,14 @@ One job lifecycle for capture and extraction:
 durable_job(owner, id, kind, op_id, payload, status, claimed_by, lease_expires_at,
             fence, attempts, last_error, created_at)
   status: pending → leased → done | retryable → leased … | failed (after N attempts)
-  UNIQUE (kind, op_id)
+  UNIQUE (owner, kind, op_id)
 ```
 
 - **Claim:** `UPDATE … SET status='leased', claimed_by, lease_expires_at = now()+lease, fence = fence+1 … FOR UPDATE SKIP LOCKED`, only for `pending`, `retryable`, or `leased` with an expired lease.
 - **Heartbeat:** a worker extends `lease_expires_at` while it works (only if its fence is current).
 - **Publish:** results are written in one transaction that first locks the job row and checks `fence` = the worker's fence; if not, the transaction aborts and nothing is published.
 - **Fail:** `retryable` with backoff; `failed` after the limit; failures are visible in health and verify.
+- **Session order (extraction):** an extraction job for `(owner, session)` is claimable only when no earlier-event-time extraction job for that session is `pending`, `leased` or `retryable`. A turn's corrections therefore always see the claims of the turns before it. A `failed` job does not block its session.
 
 The V16/V17 `write_outbox` (op_id-unique, fenced) is the capture instance of this lifecycle; Phase 1 moves it onto `durable_job` with a compatibility migration.
 
@@ -114,7 +132,7 @@ The V16/V17 `write_outbox` (op_id-unique, fenced) is the capture instance of thi
 Created for each substantive stored turn (both speakers), keyed `op_id = span_id:extractor_version`.
 
 1. Lease the job; read the turn and up to N previous turns of the same owner and session (by event time).
-2. Extract with the configured extractor: model (Ollama structured JSON) or rules (`extract_assertions` + alias equations, the current reception rules). Model failure → `retryable`; after the limit, fall back to rules and record which extractor produced the evidence.
+2. Extract in two tiers. The `rules` extractor (`extract_assertions` + alias equations, today's reception rules) runs first and publishes immediately, so simple assertions are searchable at once. The `model` extractor (Ollama structured JSON, verbs constrained to the verb table) runs as a later job for the same span; its evidence marks that span's `rules` evidence `superseded_version`. Model failure → `retryable`; after the limit the `rules` evidence stands.
 3. **Publish atomically** (one transaction, fence-checked): resolve entities (alias exact → trigram + name-vector within owner and type → create), upsert claims by live key, insert evidence (idempotent by its unique key), recompute affected claim status and supersession, write `turn_entity`, mark the job done.
 4. Re-extraction with a new extractor version inserts new evidence and marks the span's older-version evidence `superseded_version` in the same transaction.
 
@@ -124,12 +142,19 @@ Measured on the reference GPU: `llama3.2:3b` ~4 s per turn warm, `qwen2.5` ~24 s
 
 The reception stage stops writing claims directly. Its rule extraction becomes the `rules` extractor in §5.2; its repair classification writes `retract` evidence against the prior span's claims; uptake verdicts stay in `uptakes`. One writer path, one lifecycle.
 
+**Confirmation through uptake.** Users confirm elliptically ("yes, exactly"), and extracting that turn alone yields nothing. When an uptake verdict says a user turn accepted the preceding assistant turn, the pipeline writes user `assert` evidence (`extractor = uptake`) for the `unconfirmed` claims of that assistant span. Today `classify_repair` emits only `repaired` or `unknown`; an `accepted` verdict needs a new, conservative classifier (explicit confirmation cues after an assistant statement or question) and abstains otherwise.
+
+### 5.4 Secret redaction (if adopted)
+
+Decision open (§11). If adopted, redaction runs at capture, before the outbox/job enqueue and the `conversations` insert. Anywhere downstream would leave raw secrets in job payloads, `fact_text`, `fact_vec` and the extraction model's input.
+
 ## 6. Read path
 
 Modes (`hybrid_age.retrieval_mode`): `vector` (default, today's served path), `shadow` (serve vector, record hybrid), `hybrid` (serve hybrid).
 
 1. Embed the query once.
-2. Candidate arms, all owner-scoped: turn vectors; claim vectors (`fact_vec`, grounded and current only); entity linking from the query — alias exact and trigram over query n-grams, plus `name_vec` similarity, not capitalisation alone; entities of the top turns via `turn_entity`.
+2. Candidate arms, all owner-scoped: turn vectors; claim vectors (`fact_vec`, grounded and current only); entity linking from the query; entities of the top turns via `turn_entity`. Entity linking extracts and deduplicates the query's 1–3-grams in Python and resolves exact and trigram matches in **one** batched query (`unnest($1::text[])` against `entity_alias` and `entity`); `name_vec` similarity is used only for the top few noun phrases or the full query embedding, never per n-gram.
+   Filtered vector search: each owner is a small share of the rows, and plain HNSW stops after `ef_search` candidates regardless of how many passed the owner filter. Every retrieval transaction sets `SET LOCAL hnsw.iterative_scan = relaxed_order` (pgvector 0.8.6 in the installed image; verified available).
 3. Traverse the graph from linked entities, at most 2 hops, path-constrained: each hop extends only from the previous hop's frontier, returning only claims on a path, with per-node fan-out caps and query-relevance ordering (cosine of `fact_vec` to the query).
 4. Fuse turn, entity, claim and traversal arms with RRF; diversify with MMR over embeddings (not text similarity).
 5. Pack a grounded facts block (claim text, event date, span id) before supporting turns, within the token budget. The block header lists every span id it contains so an agent's citation can be checked. Unconfirmed claims are never in the grounded block.
@@ -155,7 +180,7 @@ Additive columns and tables only. Existing `claims` rows get `owner` from their 
 
 ### 7.4 Retirement (Phase 4)
 
-The pane switches to entities and claims; the co-occurrence writers stop; AGE becomes a rebuildable projection of entities and grounded claims.
+The pane switches to entities and claims; the co-occurrence writers stop. No AGE projection of claims is built unless a concrete Cypher consumer exists (decision open, §11). AGE's existing uses — the episodic Session/Turn flower, code-ingest File/Imports, and the pane's graph views — are unchanged by this design.
 
 ## 8. Phase 0 (implemented)
 
@@ -179,6 +204,8 @@ Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencin
 | Supersession and retraction | never injected as current |
 | Extraction restart / replay / concurrency | no duplicate evidence, no lost jobs |
 | Prefetch latency at 10k turns | p50 ≤ 150 ms, p95 ≤ 300 ms |
+| Filtered recall with many owners (eval owner < 5% of rows) | no drop versus a single-owner database |
+| Supersession under reordering (backfill, retraction, deletion) | current value matches the event-time timeline |
 
 ## 10. Phases
 
@@ -196,7 +223,8 @@ Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencin
 2. Model extraction is allowed in the job worker, never on the prompt path; default `llama3.2:3b`.
 3. Assistant output is stored as evidence and stays `unconfirmed` until a user confirms it.
 4. Prompt-path latency budget: p95 ≤ 300 ms at 10k turns.
-5. Open: write-path secret redaction.
+5. Open: write-path secret redaction (placement fixed in §5.4 if adopted).
+6. Open: whether to keep Apache AGE beyond its existing uses (§7.4); no claims projection is planned without a Cypher consumer.
 
 ## Sources
 
@@ -209,3 +237,4 @@ Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencin
 |---|---|---|---|---|
 | 0.1 | 2026-11-14 | 2026-11-14 | Claude | Research and plan for a typed, owner-scoped graph layer. |
 | 0.2 | 2026-11-14 | 2026-11-14 | Claude | Rewritten after code review: claims as the single authority with evidence rows, owner-composite keys, one durable job lifecycle with fenced atomic publish, event-time supersession, shadow mode, coexistence and rollback. Phase 0 recorded as implemented. |
+| 0.3 | 2026-11-14 | 2026-11-14 | Claude | Spec review: current-claim key on entity ids and excluding historical intervals; full-timeline supersession recompute; `UNIQUE (owner, claim_id)`; job key includes owner; per-session extraction order; two-tier rules→model extraction with a verb table; confirmation through uptake; redaction placement; batched entity linking; iterative HNSW scan; AGE projection deferred. |
