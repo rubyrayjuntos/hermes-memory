@@ -412,6 +412,37 @@ async def delete_spans_on_conn(conn, owner: str, span_ids: Sequence[int]) -> int
     return int(str(status).split()[-1])
 
 
+async def claims_counts_on_conn(conn) -> dict[str, int]:
+    rows = await conn.fetch("SELECT coalesce(status, 'unmigrated') AS s, count(*)::int AS n FROM claims GROUP BY 1")
+    return {r["s"]: int(r["n"]) for r in rows}
+
+
+async def drift_keys(conn, limit: int = 500) -> set[TimelineKey]:
+    """Keys whose stored rows disagree with their evidence (raw-SQL deletes, crashes)."""
+    keys: set[TimelineKey] = set()
+    rows = await conn.fetch(
+        f"""
+        SELECT c.owner, c.subject_id, c.verb, {OBJECT_KEY_SQL} AS object_key FROM claims c
+         WHERE c.status IN ('grounded', 'unconfirmed') AND c.subject_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM claim_evidence e WHERE e.owner = c.owner
+                             AND e.claim_id = c.claim_id AND e.state = 'live')
+        UNION
+        SELECT e.owner, e.subject_id, e.verb, e.object_key FROM claim_evidence e
+          JOIN claims c ON c.owner = e.owner AND c.claim_id = e.claim_id
+         WHERE e.state = 'live' AND c.status = 'orphaned'
+        LIMIT $1
+        """, int(limit))
+    for r in rows:
+        keys.add(timeline_key(r["owner"], int(r["subject_id"]), await verb_row(conn, r["verb"]), r["object_key"]))
+    return keys
+
+
+async def repair_drift_on_conn(conn) -> int:
+    keys = await drift_keys(conn)
+    await rebuild_keys(conn, keys)
+    return len(keys)
+
+
 class StoreClaimsMixin:
     """Pool-holding wrappers over the module functions."""
 
@@ -560,3 +591,12 @@ class StoreClaimsMixin:
                                    info.owner, merged, survivor)
                 await rebuild_keys(conn, await reresolve(conn, info.owner, {merged, survivor}))
                 return True
+
+    async def claims_counts(self) -> dict[str, int]:
+        async with self.pool.acquire() as conn:
+            return await claims_counts_on_conn(conn)
+
+    async def repair_drift(self) -> int:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                return await repair_drift_on_conn(conn)

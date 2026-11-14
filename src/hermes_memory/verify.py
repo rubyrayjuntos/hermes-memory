@@ -245,16 +245,26 @@ async def run_verify(dsn: Optional[str] = None,
         result.add("pipeline-execution", False, repr(exc)[:200])
     finally:
         try:
-            from .store import OUTBOX_MAX_ATTEMPTS
+            from .claims_migration import NAME as CLAIMS_MIGRATION, legacy_check
+            from .store_claims import claims_counts_on_conn, repair_drift_on_conn
+            from .store_jobs import JOB_MAX_ATTEMPTS
 
             row = await conn.fetchrow(
-                "SELECT count(*) FILTER (WHERE attempts < $1)::int AS pending, "
-                "count(*) FILTER (WHERE attempts >= $1)::int AS parked FROM write_outbox",
-                OUTBOX_MAX_ATTEMPTS,
-            )
-            result.notes.append(f"write_outbox pending={row['pending']} parked={row['parked']}")
-        except Exception:
-            result.notes.append("write_outbox counts unavailable (apply V16)")
+                "SELECT count(*) FILTER (WHERE status IN ('pending','leased','retryable') AND attempts < $1)::int "
+                "AS pending, count(*) FILTER (WHERE status = 'failed' OR attempts >= $1)::int AS parked "
+                "FROM durable_job WHERE kind = 'capture'", JOB_MAX_ATTEMPTS)
+            result.notes.append(f"capture jobs pending={row['pending']} parked={row['parked']}")
+            async with conn.transaction():
+                repaired = await repair_drift_on_conn(conn)
+            result.add("claims drift", True, f"rebuilt {repaired} key(s)")
+            result.notes.append(f"claims by status {await claims_counts_on_conn(conn)}")
+            applied = await conn.fetchval("SELECT 1 FROM data_migrations WHERE name = $1", CLAIMS_MIGRATION)
+            check = await legacy_check(conn)
+            result.add("claims migration", bool(applied) and not check["violations"],
+                       f"applied={bool(applied)} violations={len(check['violations'])} "
+                       f"superseded={len(check['superseded'])}")
+        except Exception as exc:
+            result.notes.append(f"claims/jobs checks unavailable ({type(exc).__name__}; apply V18/V19)")
         await conn.close()
 
     return result

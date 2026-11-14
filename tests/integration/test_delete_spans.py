@@ -57,3 +57,15 @@ async def test_deleting_the_equation_span_unmerges(db_pool, store, clean_hermes_
     await store.delete_spans("alice", [eq])
     assert await store.resolve_entity("alice", "Acme Corp") != await store.resolve_entity("alice", "Acme")
     assert await current(db_pool, "alice", "acme corp", "uses") == [("Atlas", "positive")]
+
+
+@pytest.mark.asyncio
+async def test_raw_sql_deletion_is_detected_and_repaired(db_pool, store, clean_hermes_test_db):
+    await store.record_rule_claims(await span(store, "alice", 1), lives("NYC"))
+    newest = await span(store, "alice", 2)
+    await store.record_rule_claims(newest, lives("Austin"))
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM conversations WHERE id = $1", newest)  # bypasses the API
+    assert await store.repair_drift() >= 1
+    assert await current(db_pool, "alice", "raul", "lives_in") == [("NYC", "positive")]
+    assert (await store.claims_counts()).get("grounded", 0) >= 1
