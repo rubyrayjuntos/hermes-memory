@@ -380,10 +380,47 @@ async def unmerge_unjustified(conn, owner: str) -> set[TimelineKey]:
     return await reresolve(conn, owner, affected)
 
 
+async def delete_spans_on_conn(conn, owner: str, span_ids: Sequence[int]) -> int:
+    """Delete one owner's spans and rebuild what they supported (spec §4.2 Deletion).
+
+    Must run inside a transaction. Evidence, alias rows and turn_entity rows
+    cascade; uptakes are removed first (RESTRICT). AGE Turn vertices are not
+    touched here.
+    """
+    owned = [int(r["id"]) for r in await conn.fetch(
+        "SELECT id FROM conversations WHERE agent_identity = $1 AND id = ANY($2::bigint[])",
+        owner, [int(i) for i in span_ids])]
+    if not owned:
+        return 0
+    keys: set[TimelineKey] = set()
+    for r in await conn.fetch(
+            "SELECT DISTINCT subject_id, verb, object_key FROM claim_evidence "
+            "WHERE owner = $1 AND span_id = ANY($2::bigint[])", owner, owned):
+        keys.add(timeline_key(owner, int(r["subject_id"]), await verb_row(conn, r["verb"]), r["object_key"]))
+    # Lock distinct timelines in sorted order before evidence is removed or rewritten.
+    for lock_owner, subject_id, verb in sorted({(k.owner, k.subject_id, k.verb) for k in keys}):
+        await lock_timeline(conn, lock_owner, subject_id, verb)
+    await conn.execute("DELETE FROM uptakes WHERE prior_span_id = ANY($1::bigint[]) "
+                       "OR next_span_id = ANY($1::bigint[])", owned)
+    await conn.execute("UPDATE claims SET span_id = NULL WHERE span_id = ANY($1::bigint[])", owned)
+    await conn.execute("DELETE FROM memory_chunk_nodes WHERE source = 'conversation' "
+                       "AND chunk_id = ANY($1::text[])", [f"conv_{i}" for i in owned])
+    status = await conn.execute("DELETE FROM conversations WHERE agent_identity = $1 AND id = ANY($2::bigint[])",
+                                owner, owned)
+    keys |= await unmerge_unjustified(conn, owner)
+    await rebuild_keys(conn, keys)
+    return int(str(status).split()[-1])
+
+
 class StoreClaimsMixin:
     """Pool-holding wrappers over the module functions."""
 
     pool: object
+
+    async def delete_spans(self, owner: str, span_ids: Sequence[int]) -> int:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                return await delete_spans_on_conn(conn, owner, span_ids)
 
     async def ensure_entity(self, owner: str, surface: str, type_: str = "other") -> int:
         async with self.pool.acquire() as conn:

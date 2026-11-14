@@ -218,27 +218,16 @@ async def run_verify(dsn: Optional[str] = None,
 
         # cleanup synthetic SQL rows + leftover AGE Turn vertices from this
         # run and any prior verify-c5 sessions (graph was surviving DELETE).
-        # V12 uptakes/claims reference conversations with ON DELETE RESTRICT, and
-        # claims.superseded_by is a RESTRICT self-reference: clear those first.
-        synthetic_spans = "SELECT id FROM conversations WHERE session_id LIKE $1"
-        await conn.execute(
-            "UPDATE claims SET superseded_by = NULL WHERE superseded_by IN "
-            f"(SELECT claim_id FROM claims WHERE span_id IN ({synthetic_spans}))",
-            "verify-c5%",
-        )
-        await conn.execute(
-            f"DELETE FROM uptakes WHERE prior_span_id IN ({synthetic_spans}) "
-            f"OR next_span_id IN ({synthetic_spans})",
-            "verify-c5%",
-        )
-        await conn.execute(
-            f"DELETE FROM claims WHERE span_id IN ({synthetic_spans})",
-            "verify-c5%",
-        )
-        await conn.execute(
-            "DELETE FROM conversations WHERE session_id LIKE $1",
-            "verify-c5%",
-        )
+        # Synthetic verify spans go through the deletion API so their evidence,
+        # uptakes and timelines are cleaned up the same way a user deletion is.
+        from .store_claims import delete_spans_on_conn
+
+        for row in await conn.fetch(
+            "SELECT agent_identity, array_agg(id) AS ids FROM conversations "
+            "WHERE session_id LIKE $1 GROUP BY agent_identity", "verify-c5%",
+        ):
+            async with conn.transaction():
+                await delete_spans_on_conn(conn, row["agent_identity"], list(row["ids"]))
         await conn.execute(
             "DELETE FROM memory_entries WHERE agent_identity = 'c5-verify' "
             "AND content LIKE 'c5-verify-memory-row:%'"
