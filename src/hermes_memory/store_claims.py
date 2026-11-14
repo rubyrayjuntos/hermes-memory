@@ -479,6 +479,34 @@ async def write_fact_vectors(conn, rows: Sequence[tuple[int, list[float]]], embe
     return written
 
 
+async def record_rule_claims_on_conn(conn, span_id: int, claims: Sequence[dict],
+                                     extractor: str = RULES_EXTRACTOR, version: str = RULES_VERSION) -> list[int]:
+    """Place one span's claims as evidence and rebuild their timelines on the caller's transaction.
+
+    Distinct timeline locks are taken in sorted (owner, subject_id, verb) order
+    before any evidence is placed. Returns the claim ids the evidence now backs.
+    """
+    info = await span_info(conn, span_id)
+    locks = set()
+    for c in claims:
+        ident = await _claim_lock_identity(conn, info, c)
+        if ident is not None:
+            locks.add(ident)
+    for owner, subject_id, verb in sorted(locks):
+        await lock_timeline(conn, owner, subject_id, verb)
+    added = [await add_evidence(conn, info, span_id, c, extractor=extractor, version=version)
+             for c in claims]
+    kept = [a for a in added if a is not None]
+    if not kept:
+        return []
+    await rebuild_keys(conn, [k for _, k in kept])
+    ev_ids = [e for e, _ in kept]
+    await _write_turn_entities(conn, info.owner, span_id, ev_ids)
+    owner_of = {int(r["id"]): int(r["claim_id"]) for r in await conn.fetch(
+        "SELECT id, claim_id FROM claim_evidence WHERE id = ANY($1::bigint[])", ev_ids)}
+    return [owner_of[e] for e in ev_ids]
+
+
 class StoreClaimsMixin:
     """Pool-holding wrappers over the module functions."""
 
@@ -520,25 +548,7 @@ class StoreClaimsMixin:
     async def _record_rule_claims_once(self, span_id, claims, extractor, version) -> list[int]:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                info = await span_info(conn, span_id)
-                locks = set()
-                for c in claims:
-                    ident = await _claim_lock_identity(conn, info, c)
-                    if ident is not None:
-                        locks.add(ident)
-                for owner, subject_id, verb in sorted(locks):
-                    await lock_timeline(conn, owner, subject_id, verb)
-                added = [await add_evidence(conn, info, span_id, c, extractor=extractor, version=version)
-                         for c in claims]
-                kept = [a for a in added if a is not None]
-                if not kept:
-                    return []
-                await rebuild_keys(conn, [k for _, k in kept])
-                ev_ids = [e for e, _ in kept]
-                await _write_turn_entities(conn, info.owner, span_id, ev_ids)
-                owner_of = {int(r["id"]): int(r["claim_id"]) for r in await conn.fetch(
-                    "SELECT id, claim_id FROM claim_evidence WHERE id = ANY($1::bigint[])", ev_ids)}
-                return [owner_of[e] for e in ev_ids]
+                return await record_rule_claims_on_conn(conn, span_id, claims, extractor, version)
 
     async def record_repair(self, prior_span_id: int, repair_span_id: int, *, deictic: bool,
                             new_claims: Sequence[dict] = ()) -> int:
