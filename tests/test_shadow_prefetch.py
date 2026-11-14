@@ -95,7 +95,7 @@ async def test_schedule_swallows_sync_raise_and_non_awaitable():
 
 
 class FakeEmbedder:
-    async def embed_text(self, text):
+    async def embed_text(self, text, *, as_query: bool = False):
         return [0.1, 0.2, 0.3]
 
 

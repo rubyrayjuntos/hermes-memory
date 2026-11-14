@@ -1,10 +1,9 @@
-"""Tests for hermes-memory-install enhancements (pre-flight checks, model pull, gateway bounce)."""
+"""Tests for hermes-memory-install enhancements (pre-flight checks, embed warm, gateway bounce)."""
 
 import io
 import subprocess
-import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from hermes_memory import install_cli
 
@@ -30,52 +29,21 @@ class TestInstallCliEnhancements(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("Cannot connect to docker daemon", err)
 
-    def test_ensure_ollama_model_already_present(self):
-        fake_response = MagicMock()
-        fake_response.read.return_value = b'{"models": [{"name": "nomic-embed-text:latest"}]}'
-        fake_response.__enter__.return_value = fake_response
-        fake_response.__exit__.return_value = None
-
+    def test_ensure_local_embed_model_warms(self):
         captured = io.StringIO()
-        with patch("urllib.request.urlopen", return_value=fake_response), \
+        with patch("hermes_memory.embed.warm_local_embedder") as warm, \
              patch("sys.stdout", captured):
-            install_cli.ensure_ollama_model("http://localhost:11434/v1", "nomic-embed-text")
+            install_cli.ensure_local_embed_model("nomic-embed-text")
+        warm.assert_called_once_with("nomic-embed-text")
+        self.assertIn("in-process", captured.getvalue())
 
-        out = captured.getvalue()
-        self.assertIn("Embedding model 'nomic-embed-text' is ready in Ollama.", out)
-
-    def test_ensure_ollama_model_auto_pull(self):
-        fake_response = MagicMock()
-        fake_response.read.return_value = b'{"models": []}'
-        fake_response.__enter__.return_value = fake_response
-        fake_response.__exit__.return_value = None
-
-        pulled_commands = []
-
-        def fake_run(cmd, **kwargs):
-            pulled_commands.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, stdout="pulled", stderr="")
-
-        captured = io.StringIO()
-        with patch("urllib.request.urlopen", return_value=fake_response), \
-             patch.object(install_cli.shutil, "which", side_effect=lambda cmd: "/usr/bin/ollama" if cmd == "ollama" else None), \
-             patch.object(install_cli.subprocess, "run", side_effect=fake_run), \
-             patch("sys.stdout", captured):
-            install_cli.ensure_ollama_model("http://localhost:11434/v1", "nomic-embed-text")
-
-        out = captured.getvalue()
-        self.assertIn("Auto-pulling from Ollama", out)
-        self.assertEqual(pulled_commands, [["/usr/bin/ollama", "pull", "nomic-embed-text"]])
-        self.assertIn("Successfully pulled", out)
-
-    def test_ensure_ollama_model_unreachable_is_graceful(self):
-        captured = io.StringIO()
-        with patch("urllib.request.urlopen", side_effect=OSError("connection refused")), \
-             patch("sys.stdout", captured):
-            install_cli.ensure_ollama_model("http://localhost:11434/v1", "nomic-embed-text")
-
-        out = captured.getvalue()
-        self.assertIn("not reachable", out)
+    def test_ensure_local_embed_model_warns_on_failure(self):
+        captured_err = io.StringIO()
+        with patch("hermes_memory.embed.warm_local_embedder", side_effect=RuntimeError("no net")), \
+             patch("sys.stderr", captured_err), \
+             patch("sys.stdout", io.StringIO()):
+            install_cli.ensure_local_embed_model("nomic-embed-text")
+        self.assertIn("WARNING", captured_err.getvalue())
 
     def test_restart_hermes_gateway_success(self):
         restarted_cmd = []
@@ -110,6 +78,8 @@ class TestInstallCliEnhancements(unittest.TestCase):
         self.assertIn("The Hermes Librarian installed successfully!", out)
         self.assertIn("5452/hermes_memory_installed", out)
         self.assertIn("http://127.0.0.1:7890/api/librarian/pane", out)
+        self.assertIn("in-process", out)
+        self.assertIn("no Ollama required", out)
 
 
 if __name__ == "__main__":

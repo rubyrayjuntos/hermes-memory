@@ -469,57 +469,20 @@ def check_docker_daemon() -> tuple[bool, str]:
         return False, str(exc)
 
 
-def ensure_ollama_model(embed_url: str, model_name: str) -> None:
-    """Probe Ollama and auto-pull the embedding model if absent."""
-    import urllib.request
-    import urllib.error
+def ensure_local_embed_model(model_name: str) -> None:
+    """Warm the in-process ONNX embedder (downloads ~100 MB on first run)."""
+    from .embed import warm_local_embedder
 
-    parsed = urlparse(embed_url)
-    host_port = parsed.netloc or "localhost:11434"
-    base_url = f"{parsed.scheme or 'http'}://{host_port}"
-    tags_url = f"{base_url}/api/tags"
-
+    print(f"    Warming in-process embedder '{model_name}' (ONNX; first run may download)…")
     try:
-        req = urllib.request.Request(tags_url, headers={"User-Agent": "hermes-memory-install"})
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            models = [m.get("name", "") for m in data.get("models", [])]
-            base_model = model_name.split(":")[0]
-            if any(m == model_name or m.startswith(f"{base_model}:") for m in models):
-                print(f"    Embedding model '{model_name}' is ready in Ollama.")
-                return
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-        # Ollama not reachable at this URL or not an Ollama endpoint
-        print(f"    Note: Ollama endpoint {base_url} not reachable. Verify Ollama is running if using local embeddings.")
-        return
-
-    print(f"    Embedding model '{model_name}' not found locally. Auto-pulling from Ollama...")
-    ollama_bin = shutil.which("ollama")
-    if ollama_bin:
-        try:
-            res = subprocess.run([ollama_bin, "pull", model_name], capture_output=False)
-            if res.returncode == 0:
-                print(f"    Successfully pulled '{model_name}'.")
-                return
-        except Exception:
-            pass
-
-    # Fallback to HTTP POST /api/pull
-    pull_url = f"{base_url}/api/pull"
-    try:
-        body = json.dumps({"name": model_name, "stream": False}).encode("utf-8")
-        req = urllib.request.Request(
-            pull_url,
-            data=body,
-            headers={"Content-Type": "application/json", "User-Agent": "hermes-memory-install"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=180.0) as resp:
-            if resp.status == 200:
-                print(f"    Successfully pulled '{model_name}' via Ollama API.")
-                return
+        warm_local_embedder(model_name)
+        print(f"    Embedder ready (in-process, 768-d).")
     except Exception as exc:
-        print(f"    WARNING: Auto-pull for '{model_name}' failed: {exc}. Please run 'ollama pull {model_name}' manually.")
+        print(
+            f"    WARNING: could not warm embedder: {exc}. "
+            "First recall will download the model automatically.",
+            file=sys.stderr,
+        )
 
 
 def restart_hermes_gateway(hermes_bin: str) -> None:
@@ -545,7 +508,7 @@ def print_install_summary(target: DbTarget, embed_model: str) -> None:
         "==============================================================\n"
         "  • Plugin:         hybrid-age (activated in Hermes)\n"
         f"  • Database:       PostgreSQL 17 + Apache AGE ({target.port}/{target.db})\n"
-        f"  • Embeddings:     {embed_model}\n"
+        f"  • Embeddings:     {embed_model} (in-process; no Ollama required)\n"
         "  • Live Inspector: http://127.0.0.1:7890/api/librarian/pane\n"
         "\n"
         "  Ready! Start a chat with 'hermes chat' to seed your first facts.\n"
@@ -559,8 +522,16 @@ def main(argv: list[str] | None = None) -> int:
         description="Install a pinned hermes-memory tree into Hermes (not the working clone).",
     )
     parser.add_argument("--dsn", default=None, help="Postgres DSN (must not be the :5450/hermes_memory dev stack unless --reuse-dsn)")
-    parser.add_argument("--embed-url", default=None, help="Ollama API URL")
-    parser.add_argument("--embed-model", default=None, help="Embedding model")
+    parser.add_argument(
+        "--embed-url",
+        default=None,
+        help="Optional OpenAI-compatible embed URL (default: in-process fastembed; no daemon)",
+    )
+    parser.add_argument(
+        "--embed-model",
+        default=None,
+        help="Embedding model stamp (default: nomic-embed-text, 768-d)",
+    )
     parser.add_argument("--graph", default=None, help="AGE graph name")
     parser.add_argument(
         "--ref",
@@ -658,9 +629,18 @@ def main(argv: list[str] | None = None) -> int:
             return os.environ.get(env_name) or default
         return input(f"{label}: ").strip() or default
 
-    embed_url = args.embed_url or _prompt(
-        "HYBRID_AGE_EMBED_URL", "http://localhost:11434/v1", "HYBRID_AGE_EMBED_URL"
-    )
+    if args.embed_url is not None:
+        embed_url = args.embed_url.strip()
+    elif args.yes:
+        # Unset = in-process. An existing HYBRID_AGE_EMBED_URL in the environment
+        # remains an intentional HTTP override (Ollama / OpenAI / etc.).
+        embed_url = (os.environ.get("HYBRID_AGE_EMBED_URL") or "").strip()
+    else:
+        embed_url = _prompt(
+            "HYBRID_AGE_EMBED_URL (empty = in-process fastembed)",
+            "",
+            "HYBRID_AGE_EMBED_URL",
+        ).strip()
     embed_model = args.embed_model or _prompt(
         "HYBRID_AGE_EMBED_MODEL", "nomic-embed-text", "HYBRID_AGE_EMBED_MODEL"
     )
@@ -669,10 +649,11 @@ def main(argv: list[str] | None = None) -> int:
     updates = {
         **password_updates,
         "HYBRID_AGE_DSN": dsn,
-        "HYBRID_AGE_EMBED_URL": embed_url,
         "HYBRID_AGE_EMBED_MODEL": embed_model,
         "HYBRID_AGE_GRAPH": graph,
     }
+    if embed_url:
+        updates["HYBRID_AGE_EMBED_URL"] = embed_url
     parsed = urlparse(dsn)
     skill_dirs = (
         HERMES_HOME / "skills" / "librarian-setup",
@@ -730,7 +711,8 @@ def main(argv: list[str] | None = None) -> int:
             record_owned_path("env_paths", env_path)
             write_install_state(state_path, state)
         os.environ["HYBRID_AGE_DSN"] = dsn
-        os.environ.setdefault("HYBRID_AGE_EMBED_URL", embed_url)
+        if embed_url:
+            os.environ["HYBRID_AGE_EMBED_URL"] = embed_url
         os.environ.setdefault("HYBRID_AGE_EMBED_MODEL", embed_model)
         os.environ.setdefault("HYBRID_AGE_GRAPH", graph)
 
@@ -917,8 +899,11 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception as exc:
                     print(f"    API start failed: {exc}")
 
-                print("[6b/7] Checking embedding model in Ollama…")
-                ensure_ollama_model(embed_url, embed_model)
+                if embed_url:
+                    print(f"[6b/7] Using HTTP embedder at {embed_url} (skipped in-process warm).")
+                else:
+                    print("[6b/7] Warming in-process embedder…")
+                    ensure_local_embed_model(embed_model)
 
             print("[7/7] Running hermes-memory-verify…")
             result = subprocess.run(

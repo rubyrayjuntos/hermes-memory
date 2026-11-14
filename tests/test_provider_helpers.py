@@ -107,7 +107,7 @@ async def test_prefetch_omits_debug_dsl_from_prompt() -> None:
             return []
 
     class Embedder:
-        async def embed_text(self, _text):
+        async def embed_text(self, _text, *, as_query: bool = False):
             return [1.0, 0.0]
 
     provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
@@ -203,7 +203,7 @@ async def test_prefetch_injects_provenance_turn_body_not_cypher() -> None:
             }}
 
     class Embedder:
-        async def embed_text(self, _text):
+        async def embed_text(self, _text, *, as_query: bool = False):
             return [1.0, 0.0]
 
     provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
@@ -310,7 +310,7 @@ async def test_prefetch_does_not_run_the_unrendered_graph_walk() -> None:
             raise AssertionError("prefetch must not start the graph walk")
 
     class Embedder:
-        async def embed_text(self, _text):
+        async def embed_text(self, _text, *, as_query: bool = False):
             return [1.0, 0.0]
 
     provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)

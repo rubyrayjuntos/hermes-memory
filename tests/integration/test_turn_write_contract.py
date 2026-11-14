@@ -29,7 +29,7 @@ class FakeEmbedder:
     def __init__(self, fail: set[str] | None = None) -> None:
         self.fail = set(fail or ())
 
-    async def embed_text(self, text: str):
+    async def embed_text(self, text: str, *, as_query: bool = False):
         if text == "__fail__" or text in self.fail:
             return None
         h = hashlib.sha256(text.encode("utf-8")).digest()

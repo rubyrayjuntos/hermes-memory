@@ -43,8 +43,9 @@ You do **not** need to clone this repository to use the plugin. The package bund
 ### Prerequisites
 
 1. **Docker**: Running locally (for the loopback Postgres + Apache AGE container).
-2. **Local Ollama**: Running locally (`ollama serve` or Ollama desktop app).
-3. **Hermes Agent**: Installed with a working chat model (`hermes model`).
+2. **Hermes Agent**: Installed with a working chat model (`hermes model`).
+
+Embeddings run **in-process** via ONNX (`fastembed` + `nomic-embed-text`, 768-d). Ollama is **not** required. Optional: set `HYBRID_AGE_EMBED_URL` to an OpenAI-compatible HTTP endpoint (Ollama, OpenAI, …) if you prefer a remote embedder.
 
 ### Installation
 
@@ -56,7 +57,7 @@ pip install "git+https://github.com/rubyrayjuntos/hermes-memory" && hermes-memor
 
 The installer automatically:
 - Probes Docker and confirms the daemon is healthy.
-- Checks Ollama and automatically pulls `nomic-embed-text` (768-dim) if missing.
+- Warms the in-process 768-d embedder (downloads the ONNX model on first run, ~100 MB).
 - Provisions the local container on `127.0.0.1:5452` and applies migrations.
 - Configures Hermes Agent (`hybrid-age` provider) and admits dependencies.
 - Starts the inspector API daemon on `127.0.0.1:7890`.
@@ -173,8 +174,8 @@ python scripts/release_gate.py
 | Key | Default | Description |
 | :--- | :--- | :--- |
 | `dsn_env` | `HYBRID_AGE_DSN` | Environment variable containing the Postgres DSN |
-| `embed_url_env` | `HYBRID_AGE_EMBED_URL` | Environment variable for embeddings endpoint |
-| `embed_model` | `nomic-embed-text` | Embedding model name (strictly 768-dim) |
+| `embed_url_env` | `HYBRID_AGE_EMBED_URL` | Optional HTTP embeddings endpoint; unset = in-process fastembed |
+| `embed_model` | `nomic-embed-text` | Embedding model stamp (strictly 768-dim) |
 | `graph` | `hermes_knowledge` | Apache AGE graph name |
 | `vector_k` | `12` | Top-$k$ nearest neighbors for vector recall |
 | `min_similarity` | `0.55` | Cosine similarity cutoff floor |

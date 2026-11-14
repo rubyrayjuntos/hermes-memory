@@ -19,7 +19,7 @@ LABELS = ("RateLimiter", "VectorRouter", "TokenBudget", "QueryPlanner", "MemoryG
 class FakeEmbedder:
     """Deterministic 768-d embedder; manifold property tests never call Ollama."""
 
-    async def embed_text(self, text: str) -> list[float]:
+    async def embed_text(self, text: str, *, as_query: bool = False) -> list[float]:
         digest = hashlib.sha256(text.encode("utf-8")).digest()
         vector = [0.0] * 768
         vector[0] = (digest[0] % 97) / 97.0 or 0.01

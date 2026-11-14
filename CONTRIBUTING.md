@@ -69,7 +69,7 @@ Schema changes follow [plan §3.3](docs/plans/v0.1.md):
 | `src/hermes_memory/provider.py` | `HybridAgeMemoryProvider` (Hermes `MemoryProvider` ABC) |
 | `src/hermes_memory/config.py` | Config resolution: yaml > env > defaults |
 | `src/hermes_memory/config_schema.py` | Powers `hermes memory setup hybrid-age` |
-| `src/hermes_memory/embed.py` | Embedding backend (OpenAI-compatible / Ollama, 768-dim) |
+| `src/hermes_memory/embed.py` | Embedding backend (in-process fastembed default; optional OpenAI-compatible HTTP, 768-dim) |
 | `src/hermes_memory/store.py` | SQL/Cypher data access (savepoints mandatory) |
 | `src/hermes_memory/ingest.py` | Doc/codebase indexing CLI |
 | `src/hermes_memory/verify.py` | Pipeline smoke-check CLI |

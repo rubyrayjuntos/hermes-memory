@@ -809,7 +809,9 @@ class Runtime:
             from .tokens import QUERY_TOKEN_CAP, truncate_tokens
 
             # Same truncation as prefetch, so both pick seeds from the same text.
-            vec = await self.embedder.embed_text(truncate_tokens(q, QUERY_TOKEN_CAP))
+            vec = await self.embedder.embed_text(
+                truncate_tokens(q, QUERY_TOKEN_CAP), as_query=True
+            )
         t_embed = time.perf_counter()
         seeds: list[dict] = []
         if vec:

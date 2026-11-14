@@ -14,8 +14,9 @@ metadata:
 # Librarian Setup
 
 Guide the user through a **real** local stack (Docker Postgres + AGE + pgvector,
-Ollama embeddings, hybrid-age provider). Name every moving part. Do not do it
-for them and call it magic. Hermes names the architecture; they run it. Then
+in-process nomic-embed-text embeddings via fastembed, hybrid-age provider).
+Ollama is not required for vectors. Name every moving part. Do not do it for
+them and call it magic. Hermes names the architecture; they run it. Then
 **they** seed memory in this chat — no Zephyr, no `MEMORY.md` replacement.
 
 ## When to Use

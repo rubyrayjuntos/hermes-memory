@@ -28,7 +28,7 @@ class Embedder:
     def __init__(self):
         self.texts = []
 
-    async def embed_text(self, text):
+    async def embed_text(self, text, *, as_query: bool = False):
         self.texts.append(text)
         return [1.0, 0.0]
 

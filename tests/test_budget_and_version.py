@@ -81,7 +81,7 @@ async def test_missing_embed_columns_log_error_not_debug(caplog) -> None:
             raise Exception('column "embed_model" of relation "conversations" does not exist')
 
     class Emb:
-        async def embed_text(self, text):
+        async def embed_text(self, text, *, as_query: bool = False):
             return [0.0] * 768
 
     provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)

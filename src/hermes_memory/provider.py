@@ -983,7 +983,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 from .tokens import QUERY_TOKEN_CAP, truncate_tokens
 
                 emb = await self.embedder.embed_text(
-                    truncate_tokens(enriched, QUERY_TOKEN_CAP)
+                    truncate_tokens(enriched, QUERY_TOKEN_CAP), as_query=True
                 ) if self.embedder else None
                 t_embed = time.perf_counter()
                 seeds = await self.store.vector_search(
