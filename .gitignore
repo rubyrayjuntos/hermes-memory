@@ -28,6 +28,7 @@ Thumbs.db
 .hypothesis/
 .pytest_cache/
 .worktrees/
+ui/graph-explorer/node_modules/
 
 # lockfile policy undecided — do not commit until decided
 uv.lock

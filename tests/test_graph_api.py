@@ -471,6 +471,15 @@ def test_routes_read_and_mutations():
     assert match_route("DELETE", "/api/librarian/nodes/1")[0] == "not_implemented"
     assert match_route("PATCH", "/api/librarian/nodes/1")[0] == "not_implemented"
     assert match_route("POST", "/api/librarian/nodes/merge")[0] == "not_implemented"
+    assert match_route("GET", "/api/librarian/explorer")[0] == "explorer_pane"
+    assert match_route("GET", "/api/librarian/explorer/owners")[0] == "explorer_owners"
+    assert match_route("GET", "/api/librarian/explorer/snapshot")[0] == (
+        "explorer_snapshot"
+    )
+    assert match_route("GET", "/api/librarian/explorer/assets/index-abc.js") == (
+        "explorer_asset",
+        {"name": "assets/index-abc.js"},
+    )
     assert match_route("GET", "/nope")[0] == "not_found"
 
 

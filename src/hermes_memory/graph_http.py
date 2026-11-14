@@ -90,6 +90,12 @@ class Handler(BaseHTTPRequestHandler):
             if route == "pane_index":
                 self._serve_pane("index.html")
                 return
+            if route == "explorer_pane":
+                self._serve_explorer()
+                return
+            if route == "explorer_asset":
+                self._serve_explorer_asset(params.get("name") or "")
+                return
             if rt is None:
                 self._json(503, {"error": "runtime not ready"})
                 return
@@ -101,6 +107,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "stats":
                 self._json(200, rt.stats())
+                return
+            if route == "explorer_owners":
+                self._json(200, rt.explorer_owners())
+                return
+            if route == "explorer_snapshot":
+                owner = (qs.get("owner") or [""])[0].strip()
+                if not owner:
+                    self._json(400, {"error": "owner query param required"})
+                    return
+                try:
+                    limit = int((qs.get("limit") or ["2000"])[0])
+                except ValueError:
+                    limit = 2000
+                self._json(200, rt.explorer_snapshot(owner, limit=limit))
                 return
             if route == "graph_3d":
                 label = safe_label((qs.get("label") or [""])[0])
@@ -165,3 +185,56 @@ class Handler(BaseHTTPRequestHandler):
             path = pane / "3d.html"
         body = path.read_bytes()
         self._bytes(200, body, "text/html; charset=utf-8")
+
+    def _serve_explorer(self) -> None:
+        """Prefer built SPA under docs/graph/explorer/; fall back to explorer.html."""
+        pane = find_pane_dir()
+        if pane is None:
+            self._json(404, {"error": "pane html not found in repo docs/graph"})
+            return
+        index = pane / "explorer" / "index.html"
+        single = pane / "explorer.html"
+        path = index if index.is_file() else single
+        if not path.is_file():
+            self._json(
+                404,
+                {
+                    "error": "explorer UI not built",
+                    "detail": "expected docs/graph/explorer/index.html or docs/graph/explorer.html",
+                },
+            )
+            return
+        body = path.read_bytes()
+        if path.name == "index.html" and b"<base " not in body.lower():
+            body = body.replace(
+                b"<head>",
+                b'<head><base href="/api/librarian/explorer/">',
+                1,
+            )
+        self._bytes(200, body, "text/html; charset=utf-8")
+
+    def _serve_explorer_asset(self, name: str) -> None:
+        pane = find_pane_dir()
+        if pane is None or not name:
+            self._json(404, {"error": "not found"})
+            return
+        root = (pane / "explorer").resolve()
+        path = (root / name).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            self._json(404, {"error": "not found"})
+            return
+        if not path.is_file():
+            self._json(404, {"error": "not found"})
+            return
+        suffix = path.suffix.lower()
+        ctype = {
+            ".js": "application/javascript; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".woff2": "font/woff2",
+            ".map": "application/json",
+        }.get(suffix, "application/octet-stream")
+        self._bytes(200, path.read_bytes(), ctype)

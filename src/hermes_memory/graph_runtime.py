@@ -1049,6 +1049,15 @@ class Runtime:
             "duplicates": 0,
         }
 
+    def explorer_owners(self) -> Dict[str, Any]:
+        assert self.store is not None
+        owners = self.loop.call(self.store.explorer_owners())
+        return {"owners": owners}
+
+    def explorer_snapshot(self, owner: str, *, limit: int = 2000) -> Dict[str, Any]:
+        assert self.store is not None
+        return self.loop.call(self.store.explorer_snapshot(owner, limit=limit))
+
     def verify_readonly(self) -> Dict[str, Any]:
         """Read-only smoke for the pane badge. Does NOT run hermes-memory-verify
         (that writes synthetic turns)."""

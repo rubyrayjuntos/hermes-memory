@@ -82,8 +82,12 @@ Seed two or three distinct facts in conversation (e.g., your projects, active to
 
 ### Optional: Live Visual Inspector
 
-If you want to visually explore the memory graph in your browser, open:
-[http://127.0.0.1:7890/api/librarian/pane](http://127.0.0.1:7890/api/librarian/pane)
+- **Claims / entities explorer** (owner-scoped graph layer):
+  [http://127.0.0.1:7890/api/librarian/explorer](http://127.0.0.1:7890/api/librarian/explorer)
+- **Noun fountain** (mention topology):
+  [http://127.0.0.1:7890/api/librarian/pane](http://127.0.0.1:7890/api/librarian/pane)
+
+Pin **Graph** in Hermes Desktop via `desktop-plugins/graph-explorer/` (copy into `~/.hermes/desktop-plugins/`).
 
 *(Memory recall works completely autonomously with the visual pane closed).*
 
