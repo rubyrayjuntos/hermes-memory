@@ -358,3 +358,59 @@ class StoreClaimsMixin:
                 owner_of = {int(r["id"]): int(r["claim_id"]) for r in await conn.fetch(
                     "SELECT id, claim_id FROM claim_evidence WHERE id = ANY($1::bigint[])", ev_ids)}
                 return [owner_of[e] for e in ev_ids]
+
+    async def record_repair(self, prior_span_id: int, repair_span_id: int, *, deictic: bool,
+                            new_claims: Sequence[dict] = ()) -> int:
+        """User retract evidence for the prior span's claims this repair contradicts.
+
+        Deictic: every claim the prior span asserted. Otherwise: prior-span
+        claims with the same subject, verb and object as a new claim and the
+        opposite polarity. Same owner only; idempotent by the evidence key.
+        Distinct timeline locks are taken in sorted (owner, subject_id, verb)
+        order before any evidence or placeholder is written.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                info = await span_info(conn, repair_span_id)
+                prior = await span_info(conn, prior_span_id)
+                if info.role != "user" or prior.owner != info.owner:
+                    return 0
+                rows = await conn.fetch(
+                    "SELECT DISTINCT subject_id, verb, object_key, polarity, subject_surface, object_surface "
+                    "FROM claim_evidence WHERE owner = $1 AND span_id = $2 AND state = 'live' AND act = 'assert'",
+                    info.owner, int(prior_span_id))
+                if not deictic:
+                    contradicted = set()
+                    for c in new_claims:
+                        sid = await resolve_entity(conn, info.owner, str(c.get("subject") or ""))
+                        vrec = await verb_row(conn, str(c.get("verb") or ""))
+                        okey = await object_key_for(conn, info.owner, str(c.get("object") or ""))
+                        if sid is None or vrec is None or okey is None:
+                            continue
+                        flipped = "negative" if (c.get("polarity") or "positive") == "positive" else "positive"
+                        contradicted.add((sid, vrec["verb"], okey, flipped))
+                    rows = [r for r in rows if (int(r["subject_id"]), r["verb"], r["object_key"], r["polarity"])
+                            in contradicted]
+                for owner, subject_id, verb in sorted({(info.owner, int(r["subject_id"]), r["verb"])
+                                                       for r in rows}):
+                    await lock_timeline(conn, owner, subject_id, verb)
+                written, keys = 0, []
+                for r in rows:
+                    vrec = await verb_row(conn, r["verb"])
+                    await lock_timeline(conn, info.owner, int(r["subject_id"]), r["verb"])
+                    holder = await placeholder_claim(conn, info.owner, int(r["subject_id"]), r["verb"],
+                                                     r["object_key"], r["polarity"], repair_span_id)
+                    ev = await conn.fetchval(
+                        "INSERT INTO claim_evidence (owner, claim_id, span_id, speaker, act, polarity, "
+                        "subject_surface, object_surface, subject_id, verb, object_key, extractor, "
+                        "extractor_version, event_time) VALUES ($1, $2, $3, 'user', 'retract', $4, $5, $6, $7, "
+                        "$8, $9, $10, $11, $12) ON CONFLICT (owner, span_id, extractor, extractor_version, "
+                        "subject_id, verb, object_key, polarity, act) WHERE state = 'live' DO NOTHING RETURNING id",
+                        info.owner, holder, int(repair_span_id), r["polarity"], r["subject_surface"],
+                        r["object_surface"], int(r["subject_id"]), r["verb"], r["object_key"],
+                        RULES_EXTRACTOR, RULES_VERSION, info.ts)
+                    if ev is not None:
+                        written += 1
+                    keys.append(timeline_key(info.owner, int(r["subject_id"]), vrec, r["object_key"]))
+                await rebuild_keys(conn, keys)
+                return written
