@@ -253,3 +253,15 @@ def test_uninstall_never_restarts_host_gateway_and_completes_without_it(tmp_path
     issued = [command for command, _ in commands]
     assert not any("restart" in command for command in issued)
     assert not install_state_path(tmp_path).exists()
+
+
+def test_noninteractive_uninstall_without_force_refuses_cleanly(tmp_path, state, calls, monkeypatch, capsys):
+    """No terminal and no --force: refuse with guidance, never call input()."""
+    write_install_state(install_state_path(tmp_path), state)
+    commands, runner = calls
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("input() called")))
+    assert main([], home=tmp_path, runner=runner) == 2
+    assert "rerun with --force" in capsys.readouterr().out
+    assert commands == []
+    assert install_state_path(tmp_path).exists()

@@ -128,7 +128,8 @@ class Handler(BaseHTTPRequestHandler):
                 q = (qs.get("q") or [""])[0]
                 k = clamp_limit((qs.get("k") or [8])[0], default=8)
                 hops = clamp_limit((qs.get("hops") or [2])[0], default=2)
-                self._json(200, rt.search(q, k, hops))
+                owner = (qs.get("owner") or [""])[0].strip() or None
+                self._json(200, rt.search(q, k, hops, owner=owner))
                 return
             if route == "noun_hop":
                 nid = parse_noun_id_param(params["noun_id"])

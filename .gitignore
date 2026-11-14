@@ -31,3 +31,6 @@ Thumbs.db
 
 # lockfile policy undecided — do not commit until decided
 uv.lock
+
+# Claude Code agent worktrees
+.claude/worktrees/

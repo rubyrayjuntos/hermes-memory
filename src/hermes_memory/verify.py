@@ -47,6 +47,7 @@ DRAIN_WAIT_S = float(os.environ.get("C5_VERIFY_DRAIN_S", "20"))
 class VerifyResult:
     def __init__(self) -> None:
         self.checks: List[Tuple[str, bool, str]] = []
+        self.notes: List[str] = []  # information lines; not layers
 
     def add(self, name: str, ok: bool, detail: str = "") -> None:
         self.checks.append((name, ok, detail))
@@ -64,6 +65,7 @@ class VerifyResult:
         verdict = "PASS" if self.ok else "FAIL"
         lines.append(f"verify: {verdict} ({sum(o for _, o, _ in self.checks)}"
                      f"/{len(self.checks)} layers)")
+        lines.extend(f"  note: {n}" for n in self.notes)
         return "\n".join(lines)
 
 
@@ -253,6 +255,17 @@ async def run_verify(dsn: Optional[str] = None,
     except Exception as exc:
         result.add("pipeline-execution", False, repr(exc)[:200])
     finally:
+        try:
+            from .store import OUTBOX_MAX_ATTEMPTS
+
+            row = await conn.fetchrow(
+                "SELECT count(*) FILTER (WHERE attempts < $1)::int AS pending, "
+                "count(*) FILTER (WHERE attempts >= $1)::int AS parked FROM write_outbox",
+                OUTBOX_MAX_ATTEMPTS,
+            )
+            result.notes.append(f"write_outbox pending={row['pending']} parked={row['parked']}")
+        except Exception:
+            result.notes.append("write_outbox counts unavailable (apply V16)")
         await conn.close()
 
     return result

@@ -291,3 +291,37 @@ def test_memory_write_snapshots_agent_identity_before_enqueue() -> None:
 
     assert queued[0]["agent_identity"] == "agent-a"
 
+
+
+async def test_prefetch_does_not_run_the_unrendered_graph_walk() -> None:
+    """The walk's paths never reached the prompt; prefetch must not pay for it."""
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    class Store:
+        async def vector_search(self, _literal, _k, *, agent_identity=None):
+            return [{"id": "41", "src": "conversation", "similarity": 0.9, "content": "seed turn about memory",
+                     "embedding": "[1,0]", "session_id": "s1", "ts": "2026-11-14T00:00:00+00:00"}]
+
+        async def passports_for_conversations(self, _ids):
+            raise AssertionError("prefetch must not start the graph walk")
+
+        async def expand_graph(self, *_a, **_k):
+            raise AssertionError("prefetch must not start the graph walk")
+
+    class Embedder:
+        async def embed_text(self, _text):
+            return [1.0, 0.0]
+
+    provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+    provider.store = Store()
+    provider.pool = None
+    provider.embedder = Embedder()
+    provider.config = HybridAgeConfig(embed_dim=2, min_similarity=0.5)
+    provider._agent_identity = "agent-a"
+    provider._last_recall_count = 0
+    provider._recent_topics = []
+    provider._recent_turns = []
+
+    block = await provider._aprefetch("memory")
+    assert "seed turn about memory" in block

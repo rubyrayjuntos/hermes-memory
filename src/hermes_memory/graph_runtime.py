@@ -170,9 +170,17 @@ class Runtime:
             except Exception:
                 logger.warning("drain_status counts unavailable", exc_info=True)
                 drain_status = None
+        outbox: Dict[str, int] | None = None
+        counter = getattr(self.store, "outbox_counts", None)
+        if callable(counter):
+            try:
+                outbox = await counter()
+            except Exception:
+                logger.warning("outbox counts unavailable", exc_info=True)
         return {
             "drain_status": drain_status,
             "unpassported_count": unpassported,
+            "outbox": outbox,
         }
 
     def librarian_health(self) -> Dict[str, Any]:
@@ -774,11 +782,13 @@ class Runtime:
             "bridged_vertices": int(bridged or 0),
         }
 
-    def search(self, q: str, k: int, hops: int) -> Dict[str, Any]:
+    def search(self, q: str, k: int, hops: int, owner: str | None = None) -> Dict[str, Any]:
         assert self.store is not None
-        return self.loop.call(self._asearch(q, k, hops))
+        return self.loop.call(self._asearch(q, k, hops, owner))
 
-    async def _asearch(self, q: str, k: int, hops: int) -> Dict[str, Any]:
+    async def _asearch(self, q: str, k: int, hops: int, owner: str | None = None) -> Dict[str, Any]:
+        """Pane search. With ``owner`` the vector seeds and graph rows are limited to
+        that memory owner; without it the pane is an all-owners operator view."""
         from .embed import vec_to_literal
         from .walk import WalkHypothesis, WalkRow, parse_embedding
 
@@ -786,11 +796,14 @@ class Runtime:
         t0 = time.perf_counter()
         vec = None
         if self.embedder is not None:
-            vec = await self.embedder.embed_text(q[:800])
+            from .tokens import QUERY_TOKEN_CAP, truncate_tokens
+
+            # Same truncation as prefetch, so both pick seeds from the same text.
+            vec = await self.embedder.embed_text(truncate_tokens(q, QUERY_TOKEN_CAP))
         t_embed = time.perf_counter()
         seeds: list[dict] = []
         if vec:
-            seeds = await self.store.vector_search(vec_to_literal(vec), k)
+            seeds = await self.store.vector_search(vec_to_literal(vec), k, agent_identity=owner)
         t_vec = time.perf_counter()
         min_sim = float(getattr(self.cfg, "min_similarity", 0.55))
         ann_n = len(seeds)
@@ -838,6 +851,8 @@ class Runtime:
                 hops=hops,
                 k=k,
             )
+            if owner:
+                walk_rows = await self._owner_rows(walk_rows, owner)
             triples = [
                 WalkRow(
                     tuple(row) + (int(row.audit["hop"]),),
@@ -871,6 +886,20 @@ class Runtime:
             kept_after_beam=len(packed.get("ranked") or []),
         )
         return packed
+
+    async def _owner_rows(self, rows: list, owner: str) -> list:
+        """Keep walk rows with provenance from ``owner``, trimmed to that owner's turns."""
+        from .walk import WalkRow
+
+        assert self.store is not None
+        candidate = {int(t) for r in rows for t in (r.audit.get("provenance_turns") or [])}
+        owned = await self.store.owned_turn_ids(sorted(candidate), owner) if candidate else set()
+        kept = []
+        for r in rows:
+            mine = [int(t) for t in (r.audit.get("provenance_turns") or []) if int(t) in owned]
+            if mine:
+                kept.append(WalkRow(tuple(r), audit={**r.audit, "provenance_turns": mine}))
+        return kept
 
     def noun_hop(self, noun_id: int) -> Dict[str, Any]:
         assert self.store is not None

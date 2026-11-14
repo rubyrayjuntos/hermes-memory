@@ -68,3 +68,16 @@ async def test_replay_queues_claimed_rows_up_to_free_space():
     replayed = [p._write_queue.get_nowait() for _ in range(4)][1:]
     assert [r["_outbox_id"] for r in replayed] == [1, 2, 3]
     assert len(store.stale) == 3  # left for the next replay pass, still durable
+
+
+async def test_replayed_turn_finds_its_previous_turn_in_the_database():
+    class Store:
+        async def latest_turn_id(self, owner, session_id):
+            assert (owner, session_id) == ("alice", "s1")
+            return 40
+
+    p = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+    p._last_turn_id, p._agent_identity = {}, "alice"
+    assert await p._resolve_previous_turn(Store(), "s1", "alice") == 40
+    p._last_turn_id = {"s1": 55}
+    assert await p._resolve_previous_turn(Store(), "s1", "alice") == 55

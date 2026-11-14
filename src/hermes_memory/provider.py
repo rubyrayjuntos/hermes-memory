@@ -611,6 +611,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
             done += 1
         return done
 
+    async def _resolve_previous_turn(self, store: Any, session_id: str, owner: str | None) -> int | None:
+        """Previous turn in this session: the in-memory value, else the database.
+
+        After an outbox replay or a restart the in-memory map is empty; without the
+        database fallback the turn would lose its NEXT link.
+        """
+        prev = self._last_turn_id.get(session_id)
+        if prev is not None:
+            return prev
+        lookup = getattr(store, "latest_turn_id", None)
+        if not callable(lookup) or not owner:
+            return None
+        try:
+            return await lookup(owner, session_id)
+        except Exception:
+            logger.warning("previous turn lookup failed", exc_info=True)
+            return None
+
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
         from .extract_nouns import extract_nouns
@@ -619,7 +637,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         content = item.get("content") or ""
         # Drain overwrites enqueue hint so the second item in one sync_turn
         # sees the first item's id. C reads only this field (no SQL lookup).
-        item["previous_conversation_id"] = self._last_turn_id.get(session_id)
+        item["previous_conversation_id"] = await self._resolve_previous_turn(
+            store, session_id, item.get("agent_identity") or self._agent_identity)
         embed_exc: BaseException | None = None
         try:
             vec = await embedder.embed_text(content)
@@ -932,7 +951,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     if SECRET_RE.search(s["content"] or ""):
                         continue
                     kept_seeds.append(s)
-                paths = await self._expand_paths(kept_seeds, q_vec=emb)
+                # The rendered block (format_span_injection) does not read graph
+                # paths, so walking here cost ~600 ms per prompt for nothing.
+                # The graph layer plan (Task 7) replaces this with a facts block.
+                paths: List[dict] = []
                 t_graph = time.perf_counter()
         except TimeoutError:
             logger.warning("prefetch timeout query=%r", query[:80])
@@ -1377,9 +1399,18 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self.pool = None
 
         task = getattr(self, "_outbox_task", None)
-        if task is not None and self._loop is not None:
+        if task is not None and self._loop is not None and self._loop.is_running():
+            # Cancel and wait on the loop, so the task finishes before the loop stops
+            # (otherwise asyncio reports "Task was destroyed but it is pending").
+            async def _cancel_replay() -> None:
+                task.cancel()
+                try:
+                    await task
+                except BaseException:
+                    pass
+
             try:
-                self._loop.call_soon_threadsafe(task.cancel)
+                asyncio.run_coroutine_threadsafe(_cancel_replay(), self._loop).result(timeout=1.0)
             except Exception:
                 logger.debug("outbox replay cancel failed", exc_info=True)
         if self._loop is not None:

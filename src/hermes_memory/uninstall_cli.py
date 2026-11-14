@@ -5,6 +5,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -109,6 +110,9 @@ def main(argv=None, *, home=None, runner=subprocess.run) -> int:
         return 1
 
     if not args.force:
+        if not sys.stdin.isatty():
+            print("Incomplete: uninstall refused: no terminal to confirm; rerun with --force.")
+            return 2
         answer = input("Disable the provider and uninstall the selected resources? [y/N]: ").strip().lower()
         if answer != "y":
             print("Uninstall cancelled.")

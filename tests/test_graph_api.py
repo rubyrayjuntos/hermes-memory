@@ -627,7 +627,7 @@ async def test_search_builds_hypotheses_only_from_conversation_passports():
             self.hypotheses = None
             self.calls = 0
 
-        async def vector_search(self, _literal, _k):
+        async def vector_search(self, _literal, _k, *, agent_identity=None):
             return [
                 {
                     "id": "41",
@@ -718,7 +718,7 @@ async def test_search_thresholds_before_expand_and_funnel():
             return [1.0, 0.0]
 
     class FakeStore:
-        async def vector_search(self, _literal, _k):
+        async def vector_search(self, _literal, _k, *, agent_identity=None):
             return [
                 {
                     "id": "41",
@@ -844,3 +844,36 @@ def test_embed_stamps_null_row_keeps_hop_unconfirmed():
         {"embed_model": "nomic-embed-text", "embed_dim": 768},
     ])
     assert stamped == ("nomic-embed-text", 768)
+
+
+def test_runtime_health_reports_outbox_pending_and_parked():
+    import asyncio
+
+    from hermes_memory.graph_api import Runtime
+
+    class Loop:
+        def call(self, coro, timeout=30.0):
+            return asyncio.run(coro)
+
+    class Store:
+        async def count_unpassported_turns(self):
+            return 0
+
+        async def outbox_counts(self):
+            return {"pending": 3, "parked": 1}
+
+    runtime = Runtime.__new__(Runtime)
+    runtime.loop, runtime.store, runtime.pool = Loop(), Store(), None
+    payload = runtime.health()
+    assert payload["outbox"] == {"pending": 3, "parked": 1}
+
+
+def test_verify_summary_prints_notes_without_counting_them_as_layers():
+    from hermes_memory.verify import VerifyResult
+
+    r = VerifyResult()
+    r.add("db-connectivity", True)
+    r.notes.append("write_outbox pending=0 parked=0")
+    out = r.summary()
+    assert "verify: PASS (1/1 layers)" in out
+    assert out.rstrip().endswith("note: write_outbox pending=0 parked=0")

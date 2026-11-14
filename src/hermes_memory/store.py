@@ -265,6 +265,9 @@ def hnsw_ef_search_sql(ef: int) -> str:
     return f"SET LOCAL hnsw.ef_search = {clamp_hnsw_ef_search(ef)}"
 
 
+OUTBOX_MAX_ATTEMPTS = 5  # replays before a write_outbox row is parked
+
+
 class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
     """Async data access over the pgvector + AGE schema."""
 
@@ -727,6 +730,16 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 agent_identity, json.dumps(item), claimed_by,
             ))
 
+    async def outbox_counts(self) -> dict[str, int]:
+        """Pending rows (still replayable) and parked rows (failed OUTBOX_MAX_ATTEMPTS times)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT count(*) FILTER (WHERE attempts < $1)::int AS pending, "
+                "count(*) FILTER (WHERE attempts >= $1)::int AS parked FROM write_outbox",
+                OUTBOX_MAX_ATTEMPTS,
+            )
+        return {"pending": int(row["pending"]), "parked": int(row["parked"])}
+
     async def outbox_done(self, outbox_id: int) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM write_outbox WHERE id = $1", int(outbox_id))
@@ -754,7 +767,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
 
     async def outbox_claim_stale(
         self, claimed_by: str, limit: int, *, min_age_s: float = 30.0,
-        stale_claim_s: float = 600.0, max_attempts: int = 5,
+        stale_claim_s: float = 600.0, max_attempts: int = OUTBOX_MAX_ATTEMPTS,
     ) -> list[tuple[int, Dict[str, Any]]]:
         """Claim rows nobody is working on: unclaimed (or claim abandoned) and old
         enough not to be a live enqueue. SKIP LOCKED keeps concurrent processes
@@ -783,6 +796,15 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 item = json.loads(item)
             out.append((int(r["id"]), dict(item)))
         return out
+
+    async def latest_turn_id(self, agent_identity: str, session_id: str) -> int | None:
+        """Most recent stored turn for this owner and session (NEXT fallback)."""
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT max(id) FROM conversations WHERE agent_identity = $1 AND session_id = $2",
+                agent_identity, session_id,
+            )
+        return int(value) if value is not None else None
 
     async def owned_turn_ids(self, ids: Sequence[int], agent_identity: str) -> set[int]:
         """Subset of ``ids`` whose conversation row belongs to ``agent_identity``.
