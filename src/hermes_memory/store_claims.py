@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 import asyncpg
 
@@ -446,7 +446,7 @@ async def repair_drift_on_conn(conn) -> int:
 class StoreClaimsMixin:
     """Pool-holding wrappers over the module functions."""
 
-    pool: object
+    pool: Any
 
     async def delete_spans(self, owner: str, span_ids: Sequence[int]) -> int:
         async with self.pool.acquire() as conn:

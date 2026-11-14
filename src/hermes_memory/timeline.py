@@ -100,6 +100,7 @@ def rebuild(events: Iterable[Event], existing_claim_ids: Iterable[int], *, funct
         same_value = cur is not None and (
             cur.object_key == e.object_key if functional else cur.polarity == e.polarity)
         if same_value:
+            assert cur is not None
             cur.events.append(e)
             continue
         if cur is not None:
