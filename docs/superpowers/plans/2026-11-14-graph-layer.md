@@ -1,5 +1,8 @@
 # Graph Layer (Phases 1–3) Implementation Plan
 
+> **Superseded (2026-11-14).** Do not implement from this plan. The design was rewritten as v0.2 (`docs/superpowers/specs/2026-11-14-graph-layer-design.md`) after code review: `claims` is the single semantic authority with evidence rows, one durable job lifecycle, and shadow-mode retrieval. The "Phase 0 follow-ups" table below is implemented; the Phase 1–3 tasks will be re-derived from v0.2 after it is approved. V17 is now `V17__outbox_idempotency.sql`.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the graph from a co-occurrence index into owner-scoped, typed facts that vector search and graph traversal use together, so multi-hop questions are answered from memory.

@@ -1,136 +1,211 @@
-# Graph layer — research and plan
+# Memory lifecycle and graph layer — design
 
-**Status:** proposal for review. Nothing here is implemented.
+**Status:** v0.2, for review. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
 
-**Supersedes in part:** `2026-09-03-conversation-manifold-design.md` §2 (non-goal "LLM extraction in the drain loop") and §6 (rule-based noun extraction). Everything else in that spec stays: relational semantic graph, AGE episodic flower, passports.
+**Supersedes:** v0.1 of this file (which proposed a separate `fact` table and wrongly said `claims` had no writer), and in `2026-09-03-conversation-manifold-design.md`: §2 non-goal "LLM extraction in the drain loop", §6 noun extraction, §7 walker, §8.2.1 injection.
 
-## 1. Why this exists
+## 1. Problem
 
-The plugin promises vector recall **and** graph traversal. Multi-hop questions ("where is the owner of X based?") are the reason the graph exists. Today the graph does not answer them.
-
-Measured with `scripts/eval_memory.py` (200 facts, 800 chatter turns, 150 questions, one run):
+The plugin promises vector recall and graph traversal. Measured on the eval harness (200 facts, 800 chatter turns, 150 questions):
 
 | Metric | Value |
 |---|---|
-| Recall, single-fact questions | 1.00 |
-| Recall, multi-hop questions | 0.25 |
-| Recall, vector search alone | 0.72 (hybrid 0.73: graph adds ~1 point) |
-| Unrelated projects per injected answer | ~9 |
-| Prefetch latency p50 / p95 | 664 / 816 ms (graph expansion ~600 ms of it) |
-| Entities extracted: owners / projects / cities | 200 / 0 / 0 of 200 |
+| Single-fact recall | 1.00 |
+| Multi-hop recall | 0.25 |
+| Vector-only recall | 0.72 (served context today is effectively vector-only) |
+| Unrelated projects per answer | ~9 |
+| Prefetch latency p50 / p95 | 93 / 110 ms (after removing the unused walk) |
+| Entities minted: owners / projects / cities | 200 / 0 / 0 of 200 |
 
-Root causes, from the code and the live schema:
+The served prompt today is **vector memory with neighbour and claim overlays**. The co-occurrence graph (`noun`, `semantic_edge`, passports) is written but no longer read on the prompt path. Documentation and release claims must say so until §6 is enabled.
 
-1. **One edge type.** Every `semantic_edge` is `verb_type = 'mentions'` (co-occurrence in a turn). Nothing stores "X is owned by Y" or "Y is based in Z".
-2. **Entities the extractor misses do not exist.** Extraction is regex plus a hard-coded project list. Single-word names and places are not minted.
-3. **The walk can only cross existing links.** Expansion moves noun → noun over `mentions` edges, at most two hops, starting only from vector hits that already have a passport.
-4. **Not owner-scoped.** `noun`, `semantic_edge` and passports have no memory-owner column, and `conversations_by_ids` fetches by id only. Graph expansion can inject another profile's turns, although vector search is scoped.
-5. **Typed facts and aliases were designed but never wired.** `claims` (subject, verb, object, polarity, act, valid, superseded_by, span provenance) and `aliases` (surface → canonical id) exist in V12 and have no writer.
+## 2. Principles
 
-## 2. What the research says
+1. **One semantic authority.** `claims` is the only store of facts. Every writer (rule reception, model extraction, repair) produces evidence for claims; nothing else holds facts.
+2. **Owner is part of every key.** Retrieval, neighbours, deduplication, provenance, aliases, entities, evidence and graph identity are keyed by owner, with composite foreign keys so a row cannot reference another owner's row.
+3. **Evidence, not counters.** A claim's state is derived from its evidence rows. Confirmation, retraction, deletion and re-extraction change evidence; the claim's state is recomputed in the same transaction.
+4. **Event time, not processing time.** Ordering and supersession use the turn's capture time (`conversations.ts`, set from `captured_at`).
+5. **One durable job lifecycle.** Write capture and extraction use the same lease-and-fence semantics; results publish atomically with the fence check.
+6. **Relational prompt path.** Postgres tables, BTREE / pg_trgm / HNSW, bounded joins. AGE becomes a rebuildable read-only projection after the relational path is proven.
+7. **Shadow before serve.** Hybrid retrieval runs beside vector retrieval and is compared offline before it is allowed to change the prompt.
 
-**Apache AGE.** The AGE docs have little on hybrid retrieval. The ecosystem pattern is: vector recall in SQL, pass candidate ids into `cypher()` to expand neighbours, fuse the result lists ([Microsoft: pgvector + AGE](https://techcommunity.microsoft.com/t5/microsoft-blog-for-postgresql/combining-pgvector-and-apache-age-knowledge-graph-semantic/ba-p/4508781); [age_search](https://pypi.org/project/age-search/) uses RRF fusion; [langchain-age](https://pypi.org/project/langchain-age/)). Practical cautions for a prompt-time path:
+## 3. Current state this builds on
 
-- AGE creates no indexes on new graphs; BTREE on `id` and GIN on `properties` must be added by hand ([Azure AGE performance](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/generative-ai-age-performance)).
-- GIN is only used when the filter is inside `MATCH (n {k: v})` braces, not in `WHERE` ([apache/age issue 2137](https://mail-archive.com/dev@age.apache.org/msg07346.html)).
-- An open report says the Cypher executor does not use property indexes in 1.7 ([issue 2348](https://mail-archive.com/dev@age.apache.org/msg08099.html)); undirected paths are slow.
-- `cypher()` does not take bind parameters, so values must be escaped ([langchain-age](https://pypi.org/project/langchain-age/)).
+- `claims` (V12–V15): `span_id`, `subject`, `verb`, `object`, `subject_canon`, `object_canon`, `polarity`, `act`, `valid` (live/retracted/unknown), `superseded_by`, `uptake`, `seen_count`; live unique key `(subject_canon, verb, object_canon, polarity)`. Written by `_reception_stage` from user spans via `extract_assertions` ("X is/uses Y"); repairs retract via uptake.
+- `aliases` (V12): `surface_norm` → `canon_id`, globally unique per live surface; written from explicit "aka" equations.
+- `uptakes` (V12): assistant→user reception verdicts.
+- `conversations.claims_status` (V14): pending/ready/none/failed.
+- No owner on `claims`, `aliases`, `noun`, `semantic_edge`, passports.
 
-**Agent-memory graphs.** [Zep / Graphiti](https://arxiv.org/html/2501.13956v1) is the closest match to this plugin:
+## 4. Data model
 
-- An LLM extracts entities from each message (with the previous few messages for context), then resolves them against existing entities using name embeddings plus full-text search, with an LLM deciding duplicates.
-- Facts are edges between resolved entities with a relation type, the fact text, a fact embedding, and `valid_at` / `invalid_at`. A contradicting fact invalidates the old edge instead of deleting it.
-- Retrieval runs cosine search (facts, entity names), full-text search and breadth-first search in parallel, then reranks (RRF, MMR, mention frequency, graph distance, optional cross-encoder). Context is a compact `<FACTS>` block with date ranges plus an `<ENTITIES>` block, about 1.6k tokens.
+### 4.1 Entities
 
-**Multi-hop retrieval.** [HippoRAG 2](https://arxiv.org/html/2502.14802) links query entities to graph nodes and spreads activation (personalized PageRank) across phrase and passage nodes, so bridge facts that are semantically far from the query are still reached. [LightRAG](https://www.manning.com/preview/retrieval-augmented-generation-the-foundational-ideas/chapter-12) splits retrieval into an entity-level path and a vector theme path. The recurring caveat: embedding similarity alone misses multi-hop bridges, and noisy LLM extraction produces noisy graphs ([robust GraphRAG](https://arxiv.org/pdf/2603.14828)).
+```
+entity(owner, id, name, name_norm, type, name_vec vector(768), created_at)
+  PRIMARY KEY (owner, id)
+  UNIQUE (owner, name_norm, type)
+entity_alias(owner, surface_norm, entity_id, source, created_at)
+  PRIMARY KEY (owner, surface_norm, entity_id)
+  FOREIGN KEY (owner, entity_id) REFERENCES entity(owner, id)
+turn_entity(owner, span_id, entity_id, surface, conf)          -- passports to entities
+  FOREIGN KEY (owner, span_id)   REFERENCES conversations(agent_identity, id)
+  FOREIGN KEY (owner, entity_id) REFERENCES entity(owner, id)
+```
 
-## 3. Design
+`type` ∈ person, project, place, org, tool, concept, other. `aliases` migrates into `entity_alias` (§7.3). Composite keys require `UNIQUE (agent_identity, id)` on `conversations`.
 
-### 3.1 Principles
+### 4.2 Claims (evolved) and evidence
 
-- **Vector finds entry points; the graph connects them.** Vector search picks seed turns, facts and entities by meaning. Typed edges supply the bridges that meaning alone misses.
-- **Facts, not co-occurrence.** The unit of graph memory is a typed, provenance-carrying fact.
-- **Every row is owner-scoped and traceable** to the turn (span) it came from.
-- **The prompt path stays relational.** Postgres tables with BTREE, pg_trgm and HNSW indexes, queried with bounded joins or recursive CTEs. AGE stays the episodic flower and becomes an optional mirror for the pane and ad-hoc Cypher, given the index caveats above.
+`claims` gains, additively: `owner`, `subject_id`, `object_id` (entity, nullable when the object is a literal), `fact_text`, `fact_vec vector(768)`, `status`, `valid_from`, `valid_to`. The live key becomes `(owner, subject_canon, verb, object_canon, polarity) WHERE status IN ('grounded','unconfirmed')`.
 
-### 3.2 Data model (extend, do not replace)
+```
+claim_evidence(owner, id, claim_id, span_id, speaker, act, polarity,
+               extractor, extractor_version, confidence, event_time,
+               state, created_at)
+  UNIQUE (owner, span_id, claim_id, extractor, extractor_version)   -- idempotent retries
+  FOREIGN KEY (owner, claim_id) REFERENCES claims(owner, claim_id)
+  FOREIGN KEY (owner, span_id)  REFERENCES conversations(agent_identity, id) ON DELETE CASCADE
+```
 
-| Table | Role | Changes |
+`state` ∈ live, retracted (by repair or explicit user correction), superseded_version (an older extractor version for the same span).
+
+**Claim status is derived** from live evidence, recomputed in the transaction that changes evidence:
+
+| Live evidence | Claim status |
+|---|---|
+| Any user `assert` | `grounded` |
+| Only assistant evidence | `unconfirmed` |
+| User `retract` newer (event time) than the newest `assert` | `retracted` |
+| None (spans deleted, or all evidence retracted/superseded) | `orphaned` (kept, never injected) |
+
+**Supersession** applies to functional relations (`based_in`, `owned_by`, `works_for`, `lives_in`, `role_is`, `status_is`): a grounded claim with a newer event time and a different object sets the older claim's `valid_to` and `superseded_by`. Processing order never decides it; a late backfill cannot supersede a newer fact.
+
+**Confirmation** of an assistant claim by the user adds user evidence; the claim becomes grounded and keeps both evidence rows, so provenance shows who said what.
+
+**Deletion** of a span cascades to its evidence only; the claim's status is recomputed (possibly `orphaned`), never deleted while other evidence supports it.
+
+### 4.3 Graph
+
+The traversable graph is the set of claims with `status = 'grounded'`, `valid_to IS NULL`, and an entity object: edges `subject_id → object_id` labelled `verb`. Literal-object claims are leaf facts. The legacy `noun` / `semantic_edge` co-occurrence graph is not extended.
+
+## 5. Write path
+
+### 5.1 Durable jobs
+
+One job lifecycle for capture and extraction:
+
+```
+durable_job(owner, id, kind, op_id, payload, status, claimed_by, lease_expires_at,
+            fence, attempts, last_error, created_at)
+  status: pending → leased → done | retryable → leased … | failed (after N attempts)
+  UNIQUE (kind, op_id)
+```
+
+- **Claim:** `UPDATE … SET status='leased', claimed_by, lease_expires_at = now()+lease, fence = fence+1 … FOR UPDATE SKIP LOCKED`, only for `pending`, `retryable`, or `leased` with an expired lease.
+- **Heartbeat:** a worker extends `lease_expires_at` while it works (only if its fence is current).
+- **Publish:** results are written in one transaction that first locks the job row and checks `fence` = the worker's fence; if not, the transaction aborts and nothing is published.
+- **Fail:** `retryable` with backoff; `failed` after the limit; failures are visible in health and verify.
+
+The V16/V17 `write_outbox` (op_id-unique, fenced) is the capture instance of this lifecycle; Phase 1 moves it onto `durable_job` with a compatibility migration.
+
+### 5.2 Extraction job
+
+Created for each substantive stored turn (both speakers), keyed `op_id = span_id:extractor_version`.
+
+1. Lease the job; read the turn and up to N previous turns of the same owner and session (by event time).
+2. Extract with the configured extractor: model (Ollama structured JSON) or rules (`extract_assertions` + alias equations, the current reception rules). Model failure → `retryable`; after the limit, fall back to rules and record which extractor produced the evidence.
+3. **Publish atomically** (one transaction, fence-checked): resolve entities (alias exact → trigram + name-vector within owner and type → create), upsert claims by live key, insert evidence (idempotent by its unique key), recompute affected claim status and supersession, write `turn_entity`, mark the job done.
+4. Re-extraction with a new extractor version inserts new evidence and marks the span's older-version evidence `superseded_version` in the same transaction.
+
+Measured on the reference GPU: `llama3.2:3b` ~4 s per turn warm, `qwen2.5` ~24 s. Extraction is a backlog, never on the prompt path; un-extracted turns are still found by vector search.
+
+### 5.3 Reception
+
+The reception stage stops writing claims directly. Its rule extraction becomes the `rules` extractor in §5.2; its repair classification writes `retract` evidence against the prior span's claims; uptake verdicts stay in `uptakes`. One writer path, one lifecycle.
+
+## 6. Read path
+
+Modes (`hybrid_age.retrieval_mode`): `vector` (default, today's served path), `shadow` (serve vector, record hybrid), `hybrid` (serve hybrid).
+
+1. Embed the query once.
+2. Candidate arms, all owner-scoped: turn vectors; claim vectors (`fact_vec`, grounded and current only); entity linking from the query — alias exact and trigram over query n-grams, plus `name_vec` similarity, not capitalisation alone; entities of the top turns via `turn_entity`.
+3. Traverse the graph from linked entities, at most 2 hops, path-constrained: each hop extends only from the previous hop's frontier, returning only claims on a path, with per-node fan-out caps and query-relevance ordering (cosine of `fact_vec` to the query).
+4. Fuse turn, entity, claim and traversal arms with RRF; diversify with MMR over embeddings (not text similarity).
+5. Pack a grounded facts block (claim text, event date, span id) before supporting turns, within the token budget. The block header lists every span id it contains so an agent's citation can be checked. Unconfirmed claims are never in the grounded block.
+6. Shadow mode records, per query: vector ids, hybrid ids, latency, owner, query hash — in `retrieval_shadow` — for offline comparison.
+
+## 7. Coexistence, migration, rollback
+
+### 7.1 Ownership during coexistence
+
+| Data | Writer until cutover | Reader until cutover |
 |---|---|---|
-| `noun` → entity | Canonical entity | Add `owner`, `type` (person, project, place, org, tool, concept, …), `name_vec vector(768)`, optional `summary`. Unique on `(owner, canonical)`, not `label` alone |
-| `aliases` | Surface → entity | Add `owner`; reference the entity id |
-| `claims` | Typed fact edge | Add `owner`, `subject_id`, `object_id` (entity) or `object_text` (literal), `fact_text`, `fact_vec vector(768)`, `valid_at`, `invalid_at`, `extractor`, `confidence`. Keep `span_id`, `act`, `polarity`, `valid`, `superseded_by`, `uptake` |
-| `memory_chunk_nodes` | Turn → entity passport | Add `owner` |
-| `semantic_edge` | Aggregated entity–entity weight | Add `owner`; derive weight from supporting claims; keep `mentions` as a weak edge type |
+| `noun`, `semantic_edge`, passports | manifold drain (unchanged) | pane only |
+| `claims` + `claim_evidence`, entities | extraction jobs (§5.2) | prompt in `shadow`/`hybrid`; pane after Phase 4 |
+| `aliases` | frozen after migration | none |
 
-Indexes: HNSW on `claims.fact_vec` and `noun.name_vec`; pg_trgm GIN on alias surfaces; BTREE on `(owner, subject_id)`, `(owner, object_id)`, `(owner, verb)`.
+### 7.2 Migration
 
-### 3.3 Write path (drain, off the prompt path)
+Additive columns and tables only. Existing `claims` rows get `owner` from their span's `agent_identity`, one evidence row each (`extractor = rules`, version `legacy`), and status recomputed. Existing `aliases` rows get an owner from the earliest span whose text contains both surfaces; rows that cannot be attributed are dropped (they are re-derivable from text).
 
-1. **Extract** entities and relations from each turn as validated JSON: entities with types, facts as (subject, relation, object or literal, fact text), plus act and polarity. Previous 2–4 turns are given as context, as in Graphiti.
-2. **Resolve** each entity: exact alias match, then trigram plus name-embedding candidates within the owner, then merge above a threshold. Record a new alias for each new surface.
-3. **Upsert facts**: same (subject, relation, object) adds support and provenance; a contradiction sets `invalid_at` / `superseded_by` on the old fact instead of deleting it.
-4. **Embed** fact text and new entity names in batches.
-5. **Assistant turns** produce `unconfirmed` facts only. They are never injected as facts unless a user turn confirms them. This addresses the self-reinforcing attribution seen in live testing.
+### 7.3 Rollback
 
-The current in-memory queue (256 items, 5 s shutdown drain) loses writes under bursts. Extraction must run from a durable stage (`drain_status` already exists) so work survives shutdown and can be retried and re-run when the extractor changes.
+`retrieval_mode = vector` restores today's prompt exactly; disabling extraction stops new evidence. New tables are additive and can be left in place.
 
-### 3.4 Read path (prompt time)
+### 7.4 Retirement (Phase 4)
 
-1. Embed the query (~20 ms measured).
-2. Generate candidates in parallel, each owner-scoped:
-   - turn vectors (existing arm),
-   - fact vectors (`claims.fact_vec`),
-   - entity linking: query surfaces → aliases (exact, trigram) and `name_vec` → seed entities; also the entities of the top turn seeds via passports.
-3. **Traverse** typed facts from the seed entities for at most 2 hops with fan-out caps, live facts only, scoring each step by edge confidence × cosine(fact_vec, query) so expansion follows the question instead of drifting. A few iterations of spreading activation over this small subgraph (HippoRAG-style) is an optional upgrade.
-4. **Fuse** with RRF across the turn, fact and graph lists; MMR to remove near-duplicates, including the duplicate neighbour spans seen today.
-5. **Pack** a compact facts block first (subject – relation – object, date, span id, grounded or unconfirmed), then the supporting turns that fit the budget. Every item carries its span id, and the block lists the ids it contains, so an agent's citation can be checked against what it was actually given.
+The pane switches to entities and claims; the co-occurrence writers stop; AGE becomes a rebuildable projection of entities and grounded claims.
 
-## 4. Acceptance gates (eval harness)
+## 8. Phase 0 (implemented)
 
-`scripts/eval_memory.py` grows to measure the graph directly. Proposed targets; adjust before Phase 1 starts:
+- Owner scoping: graph-path provenance, neighbours (`PARTITION BY owner, session`), turn dedupe, `previous_turn`, `conversations_by_ids`, pane `/search` (optional owner).
+- Durable capture: V16 `write_outbox`; V17 op_id uniqueness on outbox and conversations with `ON CONFLICT`; fenced leases; event-time previous-turn links.
+- Prefetch no longer runs the unused walk.
+- Health and verify report outbox pending and parked counts.
+- Evidence: cross-owner integration tests with a shared session id fail on the previous code; six concurrent writes of one op store one row; a stale worker cannot settle a reclaimed row; 300-turn burst with immediate shutdown persists every row after replay.
+
+Open from Phase 0: heartbeats (leases currently expire at 10 minutes with fencing only); write-path secret redaction (decision pending).
+
+## 9. Acceptance gates (eval harness, before `hybrid` becomes default)
 
 | Gate | Target |
 |---|---|
-| Entity coverage on the eval corpus (projects, people, places) | ≥ 0.95 |
-| Fact recall against ground-truth relations | ≥ 0.90 |
-| Multi-hop recall | ≥ 0.80 (today 0.25) |
+| Multi-hop recall (true two-hop questions) | ≥ 0.80 (today 0.25) |
 | Single-fact recall | ≥ 0.95 |
-| Hybrid minus vector-only, multi-hop | Clearly positive; otherwise the graph is not earning its cost |
-| Unrelated projects per answer | ≤ 2 (today ~9) |
+| Hybrid minus vector-only on multi-hop | clearly positive |
+| Unrelated context per answer | ≤ 2 |
+| Cross-owner leakage (vector, graph, neighbours, evidence) | 0 |
+| Supersession and retraction | never injected as current |
+| Extraction restart / replay / concurrency | no duplicate evidence, no lost jobs |
 | Prefetch latency at 10k turns | p50 ≤ 150 ms, p95 ≤ 300 ms |
-| Cross-profile leakage | 0 rows from another owner, in vector and graph paths |
-| Supersession | A contradicted fact is never injected as current |
 
-Later, for external comparison: LongMemEval or LoCoMo.
-
-## 5. Phases
+## 10. Phases
 
 | Phase | Work | Gate |
 |---|---|---|
-| 0 | Owner scoping on graph tables and turn fetches; durable extraction stage; remove duplicate neighbour spans; extend the harness with entity, fact, leakage and scale metrics | No cross-profile rows; no burst loss |
-| 1 | Entity layer: extractor interface (model-based, rules as fallback), entity types, resolution via aliases + trigram + embeddings | Entity coverage |
-| 2 | Fact layer: typed relations into `claims`, fact embeddings, supersession | Fact recall, supersession |
-| 3 | Hybrid retrieval: entity linking, fact arm, bounded typed traversal, RRF + MMR, packed block with provenance | Multi-hop, noise, latency |
-| 4 | AGE mirror for the pane and Cypher; retire the co-mention-only walk | Pane reads the new graph |
-| 5 | Scale and robustness: 10k / 50k turns, re-extraction, backfill of existing history | Latency at scale |
+| 1 | `durable_job`; owner + composite keys on claims and aliases; entities; `claim_evidence`; migration of existing rows; reception moved onto evidence | Migration idempotent; reception behaviour unchanged by tests |
+| 2 | Extraction job (rules then model), atomic fenced publish, re-extraction versions | Restart / replay / concurrency / cross-owner tests; fact recall ≥ 0.90 |
+| 3 | Retrieval arms, path-constrained traversal, RRF + MMR, facts block; `shadow` mode | Gates in §9 measured in shadow |
+| 4 | `hybrid` default after gates; pane on entities/claims; retire co-occurrence writers; AGE projection | Pane parity; rollback rehearsed |
+| 5 | 10k / 50k-turn scale, backfill of existing history | Latency gates at scale |
 
-## 6. Decisions needed
+## 11. Decisions recorded
 
-1. **Extraction engine.** Recommended: a local model through Ollama with JSON-schema output, rules as fallback. This reverses the manifold spec's non-goal. Alternative: improved rules only, which is cheaper but will not produce typed relations reliably.
-2. **Prompt-path engine.** Recommended: relational tables (as today). Alternative: AGE Cypher, subject to the index caveats in §2.
-3. **Assistant output.** Recommended: stored as unconfirmed facts, never injected as facts until a user confirms.
-4. **Latency budget** for prefetch at 10k turns (proposed p95 ≤ 300 ms).
+1. `claims` is the single semantic authority (user decision, 2026-11-14).
+2. Model extraction is allowed in the job worker, never on the prompt path; default `llama3.2:3b`.
+3. Assistant output is stored as evidence and stays `unconfirmed` until a user confirms it.
+4. Prompt-path latency budget: p95 ≤ 300 ms at 10k turns.
+5. Open: write-path secret redaction.
 
-## 7. Risks
+## Sources
 
-- Model extraction is slower than regex. It must stay off the prompt path and run from a durable stage.
-- Extraction noise creates noisy graphs. Resolution thresholds, confidence on facts, and the eval gates are the guard.
-- Existing history needs re-extraction; Phase 5 covers backfill.
-- The synthetic eval is English and templated. Real-conversation sampling is needed before release claims.
+- [Combining pgvector and Apache AGE (Microsoft)](https://techcommunity.microsoft.com/t5/microsoft-blog-for-postgresql/combining-pgvector-and-apache-age-knowledge-graph-semantic/ba-p/4508781); [Azure: AGE performance](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/generative-ai-age-performance); AGE issues [2137](https://mail-archive.com/dev@age.apache.org/msg07346.html), [2348](https://mail-archive.com/dev@age.apache.org/msg08099.html).
+- [Zep: A Temporal Knowledge Graph Architecture for Agent Memory](https://arxiv.org/html/2501.13956v1); [HippoRAG 2](https://arxiv.org/html/2502.14802); [Robust GraphRAG](https://arxiv.org/pdf/2603.14828).
 
 ## Changelog
 
 | Version | Created | Modified | Author | Notes |
 |---|---|---|---|---|
-| 0.1 | 2026-11-14 | 2026-11-14 | Claude | Research and plan for a typed, owner-scoped graph layer working with vector retrieval. |
+| 0.1 | 2026-11-14 | 2026-11-14 | Claude | Research and plan for a typed, owner-scoped graph layer. |
+| 0.2 | 2026-11-14 | 2026-11-14 | Claude | Rewritten after code review: claims as the single authority with evidence rows, owner-composite keys, one durable job lifecycle with fenced atomic publish, event-time supersession, shadow mode, coexistence and rollback. Phase 0 recorded as implemented. |
