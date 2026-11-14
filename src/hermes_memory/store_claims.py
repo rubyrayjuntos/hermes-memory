@@ -215,6 +215,25 @@ async def add_evidence(conn, info: SpanInfo, span_id: int, claim: dict, *, act: 
     return int(ev_id), timeline_key(info.owner, subject_id, vrec, object_key)
 
 
+async def _claim_lock_identity(conn, info: SpanInfo, claim: dict) -> Optional[tuple]:
+    """The (owner, subject_id, verb) `add_evidence` would lock for this claim, or None if it skips.
+
+    Mirrors the skip rules of `add_evidence` so the batch can lock in sorted order first.
+    """
+    if _SPEAKERS.get(info.role) is None:
+        return None
+    subject = str(claim.get("subject") or "")
+    if is_abstained(subject):
+        return None
+    vrec = await verb_row(conn, str(claim.get("verb") or ""))
+    if vrec is None:
+        return None
+    if await object_key_for(conn, info.owner, str(claim.get("object") or "")) is None:
+        return None
+    subject_id = await ensure_entity(conn, info.owner, subject)
+    return (info.owner, int(subject_id), vrec["verb"])
+
+
 async def rebuild_key(conn, key: TimelineKey) -> None:
     vrec = await verb_row(conn, key.verb)
     await lock_timeline(conn, key.owner, key.subject_id, key.verb)
@@ -303,9 +322,11 @@ class StoreClaimsMixin:
         """Publish one span's extracted claims as evidence and rebuild their timelines.
 
         One transaction (spec §5.2 step 3, Phase 1 inline form). Abstained
-        surfaces and unknown verbs are skipped; a re-run adds nothing. Two spans
-        naming the same keys in opposite order can deadlock on the timeline
-        locks; Postgres aborts one and it is retried.
+        surfaces and unknown verbs are skipped; a re-run adds nothing. Before
+        any evidence is placed, the distinct timeline locks for the batch are
+        taken in sorted (owner, subject_id, verb) order, so two spans naming
+        the same keys in opposite order do not deadlock. The retry on a
+        Postgres deadlock abort is only a backstop, not the ordering mechanism.
         """
         for attempt in range(3):
             try:
@@ -319,6 +340,13 @@ class StoreClaimsMixin:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 info = await span_info(conn, span_id)
+                locks = set()
+                for c in claims:
+                    ident = await _claim_lock_identity(conn, info, c)
+                    if ident is not None:
+                        locks.add(ident)
+                for owner, subject_id, verb in sorted(locks):
+                    await lock_timeline(conn, owner, subject_id, verb)
                 added = [await add_evidence(conn, info, span_id, c, extractor=extractor, version=version)
                          for c in claims]
                 kept = [a for a in added if a is not None]
