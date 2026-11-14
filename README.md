@@ -40,6 +40,11 @@ each layer (`MEMORY.md`, sessions, this provider) and you run it. Load skill
 `librarian-setup`. You handle the secret bits, then **you** seed three facts
 in chat. Those turns are the first real graph.
 
+Before you start, know what each part needs:
+
+- **Memory** needs only a local Ollama with `nomic-embed-text`. It does not use any hosted model or credits.
+- **Chat turns** need a configured and authorized chat model in Hermes (`hermes model`). Without one, turns fail before memory is written, and the memory provider cannot be exercised end to end.
+
 No clone is needed. Install the release from GitHub with pip, then run the
 installer that ships with it:
 

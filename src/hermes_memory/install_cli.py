@@ -55,6 +55,9 @@ CONFIG_PATHS = (
     HERMES_HOME / "profiles" / "librarian" / "config.yaml",
 )
 VERSION_FILENAME = ".hermes-memory-version"
+# CLI entry points: they import the package by absolute name, which fails inside the
+# plugin copy when Hermes loads every module, and nothing in the provider imports them.
+PLUGIN_EXCLUDED_MODULES = ("install_cli.py", "uninstall_cli.py")
 PIN_FILE = "HERMES_PIN.json"  # read by hermes_build_info.py when the archive has no .git
 INSTALLED_COMPOSE_PROJECT = "hermes-memory-installed"
 INSTALLED_CONTAINER = "hermes-memory-postgres-installed"
@@ -164,7 +167,7 @@ def copy_plugin_tree(src_pkg: Path, plugin_dir: Path) -> None:
     shutil.copytree(
         src_pkg,
         plugin_dir,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "_bundle"),
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "_bundle", *PLUGIN_EXCLUDED_MODULES),
     )
 
 

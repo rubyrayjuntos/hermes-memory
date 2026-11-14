@@ -204,9 +204,29 @@ file requires `HERMES_PG_PASSWORD`; uninstall called a nonexistent
 had no isolated-target mode. Each fix has a regression test where the test
 suite can express it; the verify cleanup fix is covered only by the live run.
 
+## Install, dependency and memory-scope evidence (2026-11-14)
+
+The snapshot table above predates this work. Rows below are current evidence for
+the install path, not Open/Met changes.
+
+| Area | Evidence | Level |
+|---|---|---|
+| No-clone install (`pip install git+...@<tag-or-commit>`, `hermes-memory-install`) | Live reinstall from a wheel, verify 7/7 with embeddings; `--keep-db` uninstall and reinstall without a password in the environment | 5 (automated) |
+| Plugin dependencies admitted by Hermes (`plugin.yaml` `pip_dependencies`) | Gateway-shaped provider load passes; gateway logs `activated` with no `no provider instance found` after restart | 5 (automated) |
+| Shared memory per profile (`hybrid_age.memory_scope`, default `shared`) | Cross-session recall through the provider; completed Grok turn stored both sides; new session recalled it | 5 (automated) |
+| Source distribution and checkout provenance | sdist -> wheel keeps the pinned commit; dirty builds stay refused | 4 (automated) |
+
+Not evidence of Met for any user-facing row. Level 6 needs a human-observed
+transcript (`DEFINITION_OF_DONE.md`). Remaining release blockers:
+
+- No human-observed transcript of a clean install on a machine without a prior Hermes runtime.
+- No release tag that contains the bundled installer. `v0.1.0` predates it, so the pip install path has nothing to install until a tag is cut (`D-PROD-4`).
+- `OC-MVP-3` and `OC-MVP-4` remain Open and need level-6 artifacts.
+
 ## Document changelog
 
 | Version | Created | Modified | Author | Notes |
 |---------|---------|----------|--------|-------|
 | 1.1 | 2026-09-05 | 2026-11-13 | Codex | Add disposable release-gate readiness and explicit live isolation blocker; no criteria status changes. |
 | 1.2 | 2026-09-05 | 2026-11-13 | Claude | Record the automated isolated lifecycle run and its defect fixes; no criteria status changes. |
+| 1.3 | 2026-09-05 | 2026-11-14 | Claude | Add current install, dependency and memory-scope evidence and list remaining release blockers; no status changes. |

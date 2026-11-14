@@ -146,3 +146,17 @@ def test_pin_file_keeps_dirty_state_so_an_sdist_from_a_dirty_tree_is_still_refus
 
     (tmp_path / build_meta.PIN_FILE).write_text(json.dumps({"sha": "c" * 40, "ref": "x", "dirty": True}), encoding="utf-8")
     assert build_meta.build_info(tmp_path)["dirty"] is True
+
+
+def test_plugin_copy_excludes_cli_modules_that_fail_to_import_inside_hermes(tmp_path):
+    """Hermes execs every module in the plugin directory. The CLI modules import hermes_memory by
+    absolute name, which is absent there, so they are excluded from the copy."""
+    src = tmp_path / "pkg"
+    src.mkdir()
+    for name in ("__init__.py", "provider.py", "install_cli.py", "uninstall_cli.py"):
+        (src / name).write_text("# x\n", encoding="utf-8")
+    dest = tmp_path / "plugin" / "hybrid-age"
+    install_cli.copy_plugin_tree(src, dest)
+    copied = {p.name for p in dest.iterdir()}
+    assert {"__init__.py", "provider.py"} <= copied
+    assert "install_cli.py" not in copied and "uninstall_cli.py" not in copied
