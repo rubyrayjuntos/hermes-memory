@@ -18,3 +18,13 @@ def test_unknown_verb_and_pronoun_subject_are_dropped():
         {"subject": "it", "verb": "uses", "object": "Postgres", "polarity": "positive"},
     ]}
     assert grounded_claims(raw, "Acme uses Postgres. it uses Postgres.", [], VERBS) == []
+
+
+def test_invalid_polarity_drops_that_claim_only():
+    raw = {"claims": [
+        {"subject": "Acme", "verb": "uses", "object": "Oracle", "polarity": "maybe"},
+        {"subject": "Acme", "verb": "uses", "object": "Postgres", "polarity": "positive"},
+    ]}
+    kept = grounded_claims(raw, "Acme uses Postgres and Oracle.", [], VERBS)
+    assert [c["object"] for c in kept] == ["Postgres"]
+    assert kept[0]["polarity"] == "positive"

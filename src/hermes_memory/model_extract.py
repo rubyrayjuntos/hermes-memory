@@ -57,8 +57,8 @@ def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str
         if not _occurs(subj_n, corpus) or not _occurs(obj_n, corpus):
             continue
         polarity = item.get("polarity") or "positive"
-        if not isinstance(polarity, str):
-            return []
+        if polarity not in ("positive", "negative"):
+            continue
         out.append({
             "subject": subject,
             "verb": verb,
