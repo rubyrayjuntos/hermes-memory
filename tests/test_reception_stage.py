@@ -12,11 +12,11 @@ class FakeStore:
         self.pending = []
         self._ids = iter(range(1000, 2000))
 
-    async def insert_alias(self, surface: str, canon: str, source: str) -> bool:
-        self.aliases.append((surface, canon, source))
+    async def record_alias_equation(self, span_id: int, canon: str, surface: str) -> bool:
+        self.aliases.append((surface, canon, "user_span"))
         return True
 
-    async def insert_claims(self, span_id: int, claims: list) -> list:
+    async def record_rule_claims(self, span_id: int, claims: list) -> list:
         self.claim_inserts.append((span_id, claims))
         return [next(self._ids) for _ in claims]
 
@@ -28,10 +28,10 @@ class FakeStore:
     async def write_uptake(self, prior_id: int, next_id: int, value: str) -> None:
         self.uptakes.append((prior_id, next_id, value))
 
-    async def retract_on_repair(
-        self, prior_id: int, next_id: int, text: str, claims: list
+    async def record_repair(
+        self, prior_id: int, next_id: int, *, deictic: bool, new_claims=()
     ) -> int:
-        self.retractions.append((prior_id, next_id, text, claims))
+        self.retractions.append((prior_id, next_id, deictic, list(new_claims)))
         return 1
 
     async def stamp_claims_status(self, conv_id: int, status: str) -> None:
@@ -64,6 +64,12 @@ async def test_user_repair_flow():
     assert store.claim_inserts[0][0] == 11
     subjects = [c["subject"] for c in store.claim_inserts[0][1]]
     assert "Tokyo Eye" in subjects
+
+
+async def test_deictic_repair_without_new_claims_is_flagged_deictic():
+    store = FakeStore(prior={"id": 10, "content": "Nightingale uses Atlas."})
+    await make_provider()._reception_stage(store, 11, "s", "user", "No, not that.")
+    assert store.retractions == [(10, 11, True, [])]
 
 
 async def test_user_plain_flow_no_retract():

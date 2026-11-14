@@ -548,13 +548,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
         """Alias-on-write, user-span claims, uptake, and repair retraction.
 
         Never raises (caller guards too). Returns the claims_status stamp:
-        ready|none. Assistant spans yield no claims and no aliases: model
-        speech stays unconfirmed until uptake says otherwise.
+        ready|none. Assistant spans yield no claims here; model speech is
+        evidence only through extraction jobs (Phase 2).
         """
         from .reception import (
             classify_repair,
             extract_alias_equations,
             extract_assertions,
+            is_deictic_repair,
         )
 
         async def _stamp(status: str) -> str:
@@ -569,7 +570,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         wrote = False
         for surface, canon in extract_alias_equations(content):
             try:
-                if await store.insert_alias(surface, canon, "user_span"):
+                if await store.record_alias_equation(conv_id, canon, surface):
                     wrote = True
             except Exception:
                 logger.warning("alias write failed", exc_info=True)
@@ -589,25 +590,20 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 wrote = True
             except Exception:
                 logger.warning("uptake write failed", exc_info=True)
-        new_claims: list[dict] = []
+        parsed: list[dict] = []
         try:
             parsed = extract_assertions(content)
-            if parsed:
-                # Runs after write_uptake so insert_claims inherits this turn's
-                # verdict immediately instead of theoretically.
-                ids = await store.insert_claims(conv_id, parsed)
-                if ids:
-                    wrote = True
-                for claim, cid in zip(parsed, ids):
-                    claim["claim_id"] = cid
-                new_claims = parsed
+            if parsed and await store.record_rule_claims(conv_id, parsed):
+                wrote = True
         except Exception:
-            logger.warning("claim insert failed", exc_info=True)
+            logger.warning("claim write failed", exc_info=True)
         if prior is not None and verdict == "repaired":
             try:
-                await store.retract_on_repair(
-                    int(prior["id"]), conv_id, content, new_claims
-                )
+                deictic = not parsed and is_deictic_repair(content)
+                if await store.record_repair(
+                    int(prior["id"]), conv_id, deictic=deictic, new_claims=parsed
+                ):
+                    wrote = True
             except Exception:
                 logger.warning("retract failed", exc_info=True)
         return await _stamp("ready" if wrote else "none")

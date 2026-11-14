@@ -59,3 +59,16 @@ async def test_repeated_repair_is_idempotent(db_pool, store, clean_hermes_test_d
     await store.record_repair(a, u, deictic=True)
     async with db_pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM claim_evidence WHERE act = 'retract'") == 1
+
+
+@pytest.mark.asyncio
+async def test_span_overlays_read_status(store, clean_hermes_test_db):
+    u = await span(store, "alice", 1)
+    await store.record_rule_claims(u, [ATLAS])
+    a = await span(store, "alice", 2, role="assistant")
+    await store.record_rule_claims(a, [{"subject": "Nightingale", "verb": "uses", "object": "Borealis"}])
+    fix = await span(store, "alice", 3)
+    await store.record_repair(a, fix, deictic=True)
+    overlays = await store.span_overlays([u, a])
+    assert overlays[u]["live_claims"] == 1
+    assert overlays[a]["retracted"] == [{"subject": "Nightingale", "verb": "uses", "object": "Borealis"}]
