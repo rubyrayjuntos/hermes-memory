@@ -219,6 +219,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
             hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
         )
         await self.store.require_schema_head()
+        try:
+            from .claims_migration import migrate_legacy_claims
+
+            migrated = await migrate_legacy_claims(self.store)
+            if not migrated.get("skipped"):
+                logger.info("claims data migration applied: %s", migrated)
+        except Exception:
+            logger.warning("claims data migration failed; legacy claims stay provisional", exc_info=True)
         async with pool.acquire() as conn:
             await self.store.load_age(conn)
         # Reap reception overlays orphaned by a crash (claims_status='pending').
