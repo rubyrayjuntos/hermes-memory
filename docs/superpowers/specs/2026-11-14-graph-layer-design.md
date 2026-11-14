@@ -1,6 +1,6 @@
 # Memory lifecycle and graph layer — design
 
-**Status:** v0.5, for approval. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
+**Status:** v0.5.1, approved 2026-11-14. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
 
 **Supersedes:** v0.1 of this file (which proposed a separate `fact` table and wrongly said `claims` had no writer), and in `2026-09-03-conversation-manifold-design.md`: §2 non-goal "LLM extraction in the drain loop", §6 noun extraction, §7 walker, §8.2.1 injection.
 
@@ -88,26 +88,28 @@ This merges "Acme" and "Acme Corp" once they resolve to one entity, and keeps `p
 **Verb table.**
 
 ```
-verb(verb PRIMARY KEY, functional bool NOT NULL, phrase text NOT NULL, created_at)
+verb(verb PRIMARY KEY, functional bool NOT NULL, phrase text NOT NULL, neg_phrase text NOT NULL, created_at)
 verb_synonym(phrase_norm PRIMARY KEY, verb REFERENCES verb)
 ```
 
-`phrase` renders `fact_text` ("works for"). Seeded by migration with the rules verbs (`is`, `uses`; non-functional), the functional set (`based_in`, `owned_by`, `works_for`, `lives_in`, `role_is`, `status_is`) and common non-functional verbs. Verbs are added only by migration; the model's structured output is an enum of the table, so an unknown verb cannot be written. Changing a verb's `functional` flag rebuilds every key with that verb in the same migration.
+`phrase` and `neg_phrase` render `fact_text` ("works for" / "does not work for"). Seeded by migration with the rules verbs (`is`, `uses`; non-functional), the functional set (`based_in`, `owned_by`, `works_for`, `lives_in`, `role_is`, `status_is`) and common non-functional verbs. Verbs are added only by migration; the model's structured output is an enum of the table, so an unknown verb cannot be written. Changing a verb's `functional` flag rebuilds every key with that verb in the same migration.
 
 **Evidence.**
 
 ```
 claim_evidence(owner, id, claim_id, span_id, speaker, act, polarity,
-               subject_surface, object_surface,
+               subject_surface, object_surface, subject_id, verb, object_key,
                extractor, extractor_version, confidence, event_time,
                state, created_at)
-  UNIQUE (owner, span_id, claim_id, extractor, extractor_version)   -- idempotent retries; (owner, span_id)
-                                                                     -- prefix serves the delete cascade
+  UNIQUE (owner, span_id, extractor, extractor_version,
+          subject_id, verb, object_key, polarity, act) WHERE state = 'live'
+                                     -- idempotent retries on the resolved event, which survives
+                                     -- re-pointing; the (owner, span_id) prefix serves the delete cascade
   FOREIGN KEY (owner, claim_id) REFERENCES claims(owner, claim_id)
   FOREIGN KEY (owner, span_id)  REFERENCES conversations(agent_identity, id) ON DELETE CASCADE
 ```
 
-- `speaker`, `act`, `polarity` and the surfaces are those of this evidence event, not the claim's. Storing the surfaces lets merges and alias retractions re-resolve evidence and rebuild claims without re-running extraction.
+- `speaker`, `act`, `polarity` and the surfaces are those of this evidence event, not the claim's. `subject_id`, `verb` and `object_key` (`e:<id>` or `l:<canon>`) cache the event's resolution and select its timeline. Storing the surfaces lets merges and alias retractions re-resolve evidence (updating the cache) and rebuild claims without re-running extraction; if re-resolution makes two live rows of one span identical, the newer becomes `superseded_version`.
 - `act` ∈ `assert`, `retract`. A `retract` is written by repair handling (§5.3) and targets the claim it corrects.
 - `state` ∈ `live`, `withdrawn` (removed by a repair of the span it came from), `superseded_version` (replaced by another extraction of the same span, §5.2). "Withdrawn" is not "retracted": withdrawing removes one piece of support, while a `retract` act is evidence in its own right.
 
@@ -123,7 +125,8 @@ Rebuild:
 1. Collect the key's live **user** evidence events, ordered by event time (ties by span id).
 2. **Corrections.** Each `retract` event cancels the `assert` events it targets (same object and polarity) whose event time is at or before the retract's. Cancelled asserts are ignored. A later assert of the same value is not cancelled.
 3. **Intervals.** Walk the remaining asserts in order. For a functional key, a positive assert of a different object opens a new interval; consecutive asserts of the same object extend the current one; a negative assert of the current object ("I no longer live in Austin") closes it with no current value. For a non-functional key, each change of polarity opens a new interval. `valid_from` is the interval's first event time; `valid_to` is the next interval's start or the closing event time; the last open interval has `valid_to = NULL`.
-4. **Rows.** Map each interval to a claim row, reusing the row that already holds the most of that interval's evidence (ties: lowest `claim_id`), creating rows for new intervals, and setting `superseded_by` along the chain. Re-point each evidence row to its interval's row. Rows left with no interval and no other evidence become `orphaned`.
+4. **Other events.** A negative functional assert that closes nothing ("I don't live in Paris" while Paris is not current) becomes a point row: `grounded`, `valid_to = valid_from`, never current. A non-cancelled assistant assert attaches to the interval of the same value whose range contains its event time, else to the latest interval of that value, else to one `unconfirmed` row per value. Cancelled asserts and the retracts that cancelled them attach to one `retracted` row per value.
+5. **Rows.** Map each planned row (intervals first, in time order) to a claim row, reusing the unused row that already holds the most of its evidence (ties: lowest `claim_id`), creating rows otherwise, and setting `superseded_by` along the interval chain. Re-point each evidence row to its planned row. Existing rows left without a planned row become `orphaned`; rows that never had any evidence (a writer's placeholder) are deleted.
 
 Consequences, all testable: NYC → Austin → NYC is three intervals and two NYC rows; a late backfill lands in the interval its event time belongs to; repairing the newest value restores the previous interval as current; repairing a middle value merges its neighbours when they hold the same object; deleting a span removes its events and the rebuild follows. Contradictory polarity is no longer abstained as today's `unknown`: the newer user statement is current. Timelines per key are short, so the rebuild is cheap.
 
@@ -176,7 +179,7 @@ Created for each substantive stored turn of either speaker: `user` or `assistant
 
 1. Lease the job; read the turn and the 4 previous turns of the same owner and session by event time, each truncated to 1,000 characters.
 2. Extract in two tiers. The `rules` extractor (`extract_assertions` + alias equations) runs first and publishes immediately, so simple assertions are searchable at once. The `model` extractor (Ollama structured JSON, `llama3.2:3b`, verbs constrained to the verb table, the grounding check of §4.1) runs as a later job for the same span. Model failure → `retryable`; after the limit the `rules` evidence stands.
-3. **Publish atomically** (one transaction, fence-checked): resolve entities (live alias exact → trigram similarity ≥ 0.6 **and** name-vector cosine ≥ 0.85 within owner and type → create), insert evidence (idempotent by its unique key), rebuild affected timelines, build `fact_text` from the template `"{subject name} {verb phrase} {object name or literal}"` and embed it with the configured embedding model (stamping `embed_model`), write `turn_entity`, mark the job done.
+3. **Publish atomically** (one transaction, fence-checked; in Phase 1 the inline reception stage publishes the `rules` tier with the same transaction shape but without a job, and leaves `fact_vec` NULL for Phase 2 to fill): resolve entities (live alias exact → trigram similarity ≥ 0.6 **and** name-vector cosine ≥ 0.85 within owner and type → create), insert evidence (idempotent by its unique key), rebuild affected timelines, build `fact_text` from the template `"{subject name} {verb phrase} {object name or literal}"` and embed it with the configured embedding model (stamping `embed_model`), write `turn_entity`, mark the job done.
 4. **Supersession across tiers is per claim.** Model evidence marks a `rules` evidence row of the same span `superseded_version` only when both resolve to the same timeline key and value. A rules claim the model did not produce keeps its rules evidence; a model claim the rules did not produce is added.
 5. **Re-extraction with a new version of the same extractor replaces per span**: all older-version evidence of that extractor for the span becomes `superseded_version`. A version bump is a deliberate, eval-gated change, so it may remove wrong claims. Before rollout, the re-extraction run writes a diff report: claims that lose all live evidence, and claims added. The report is part of the version's gate.
 6. `fact_text` and `fact_vec` are rebuilt when a subject or object entity is renamed or merged, and re-embedded by the existing re-embed path when the embedding model changes.
@@ -240,14 +243,15 @@ Modes (`hybrid_age.retrieval_mode`): `vector` (default, today's served path), `s
 Additive tables and columns, except the `claims.span_id` constraint relaxation (§4.2). Steps, idempotent:
 
 1. **Owners.** Each claim gets `owner` from its span's `agent_identity`. Every claim has a span today (`span_id NOT NULL`), so none are unowned.
-2. **Entities.** Subjects and entity-like objects are resolved within the owner. A claim whose subject or object abstains under §4.1 is kept as `orphaned` with its evidence (not injected, counted in verify).
+2. **Entities.** Subjects and entity-like objects are resolved within the owner. A claim whose subject or object abstains under §4.1 is kept as `orphaned` without evidence (not injected, counted in verify).
 3. **Evidence** (`extractor = rules`, version `legacy`, speaker `user`, event time of `span_id`, which today is the latest saying; earlier sayings were never recorded):
    - `valid = live` → one `assert`.
-   - `valid = retracted` → one `assert` plus one `retract`: on the superseding claim's span when `superseded_by` is set, otherwise on the repairing user span from `uptakes` (`value = 'repaired'`), otherwise on the claim's own span with event time one microsecond after the assert.
+   - `valid = retracted` with `superseded_by` pointing at a row of the same value (a V15 de-duplication of repeated sayings) → one `assert`; it was a real saying.
+   - Any other `valid = retracted` → one `assert` plus one `retract`: on the superseding claim's span when `superseded_by` is set and that span has the same owner, otherwise on the repairing user span from `uptakes` (`value = 'repaired'`, same owner), otherwise on the claim's own span with event time one microsecond after the assert.
    - `valid = unknown` → one `assert`. The timeline rebuild then resolves the contradiction by event time (§5.3 change).
 4. **Rebuild** every timeline key. `seen_count` and `claims.uptake` are left as frozen history.
 5. **Aliases.** If the database has exactly one owner (the default `shared` scope), live `aliases` rows are copied into `entity_alias` with `source = migration`. Otherwise they are not copied; the extraction jobs re-derive them from the original "aka" equations when history is backfilled (Phase 5). No owner inference by text search.
-6. **Check** in `verify`: every `valid = live` claim from before the migration is grounded and current afterwards, except listed `unknown`-contradiction resolutions; every `retracted` one is not current.
+6. **Check** in `verify`, per value `(owner, subject_id, verb, object_key, polarity)` using the pre-migration `valid` kept in `claims.legacy_valid`: a value with any legacy `live` row has a grounded current row, unless a newer opposite-polarity or other-object statement superseded it (listed); a value whose legacy rows were all `retracted` and not de-duplications has no grounded current row.
 
 ### 7.3 Rollback
 
@@ -328,3 +332,4 @@ All measured by `scripts/eval_memory.py` on its planted corpus, automatically (n
 | 0.3 | 2026-11-14 | 2026-11-14 | Claude | Spec review: current-claim key on entity ids and excluding historical intervals; full-timeline supersession recompute; `UNIQUE (owner, claim_id)`; job key includes owner; per-session extraction order; two-tier rules→model extraction with a verb table; confirmation through uptake; redaction placement; batched entity linking; iterative HNSW scan; AGE projection deferred. |
 | 0.4 | 2026-11-14 | 2026-11-14 | Claude | Functional timelines rebuilt from user-assert evidence events into interval rows; prefixed expression unique index; session order per extractor tier; entity subject required; evidence state `withdrawn` (distinct from claim `retracted`); ambiguous alias rows dropped in migration. Decisions: keep AGE; redaction as Phase 6. |
 | 0.5 | 2026-11-14 | 2026-11-14 | Claude | Spec review: pronoun/generic abstention and a per-owner `self` entity; retract defined as a correction event in the rebuild; polarity timelines for non-functional keys; migration preserves retracted/unknown state; per-claim tier supersession, per-span version replacement with diff report; separate rollback and load-shedding switches; `aliases` legacy and read-only; owner = `agent_identity`; `status` replaces `valid`; `claims.span_id` RESTRICT removed and a delete API; `op_id` with extractor and job kinds; leases, backoff, session-order index, priority, id-only payloads; entity race handling; verb table schema, `fact_text`, substantive turn, context window; initial read-path values, per-arm latency, async sampled shadow with HMAC query key; gate definitions and leakage matrix. |
+| 0.5.1 | 2026-11-14 | 2026-11-14 | Claude | Approved. Implementation clarifications while planning Phase 1: evidence caches its resolved key and the idempotency key uses it; `neg_phrase`; point rows for negatives that close nothing; assistant attachment rule; placeholder rows deleted; V15 de-duplications migrate as plain asserts; migration check per value; Phase 1 rules publish inline with `fact_vec` NULL. |
