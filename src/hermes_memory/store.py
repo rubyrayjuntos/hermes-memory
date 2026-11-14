@@ -387,10 +387,11 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                     """
                     SELECT id FROM conversations
                      WHERE session_id = $1 AND role = $2 AND md5(content) = $3
+                       AND agent_identity = $4
                        AND ts > now() - interval '10 minutes'
                      ORDER BY id DESC LIMIT 1
                     """,
-                    session_id, role, content_hash,
+                    session_id, role, content_hash, agent_identity,
                 )
             if dup is not None:
                 logger.info(
@@ -823,8 +824,14 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             )
         return {int(r["id"]) for r in rows}
 
-    async def conversations_by_ids(self, ids: Sequence[int]) -> list[dict]:
-        """Turn bodies for injection extras. Empty input → no round trip."""
+    async def conversations_by_ids(
+        self, ids: Sequence[int], agent_identity: str | None = None,
+    ) -> list[dict]:
+        """Turn bodies for injection extras. Empty input → no round trip.
+
+        With ``agent_identity`` only that owner's rows are returned. ``None`` is the
+        all-owners operator view (the pane's noun hop).
+        """
         if not ids:
             return []
         wanted = []
@@ -847,8 +854,9 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                        drain_status, embed_model, embed_dim
                   FROM conversations
                  WHERE id = ANY($1::bigint[])
+                   AND ($2::text IS NULL OR agent_identity = $2)
                 """,
-                wanted,
+                wanted, agent_identity,
             )
         return [dict(r) for r in rows]
 
@@ -880,11 +888,13 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                          LAG(id) OVER w AS prev_id,
                          LEAD(id) OVER w AS next_id
                     FROM conversations
-                   WHERE session_id IN (
-                         SELECT DISTINCT session_id FROM conversations
+                   WHERE (agent_identity, session_id) IN (
+                         SELECT DISTINCT agent_identity, session_id FROM conversations
                           WHERE id = ANY($1::bigint[])
                          )
-                  WINDOW w AS (PARTITION BY session_id ORDER BY ts, id)
+                  -- Owner is part of the sequence: two owners can share a session id
+                  -- (turns without one fall back to "default").
+                  WINDOW w AS (PARTITION BY agent_identity, session_id ORDER BY ts, id)
                 )
                 SELECT o.id AS turn_id, o.role AS self_role,
                        p.id AS prev_id, p.role AS prev_role,
@@ -940,6 +950,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 """
                 SELECT id, content FROM conversations
                  WHERE session_id = $1 AND role = $2
+                   AND agent_identity = (SELECT agent_identity FROM conversations WHERE id = $3)
                    AND (ts, id) < (SELECT ts, id FROM conversations WHERE id = $3)
                  ORDER BY ts DESC, id DESC LIMIT 1
                 """,
