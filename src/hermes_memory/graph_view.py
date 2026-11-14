@@ -748,6 +748,21 @@ def match_route(method: str, path: str) -> Tuple[str, Dict[str, str]]:
         return "pane", {}
     if method == "GET" and path in ("/index.html",):
         return "pane_index", {}
+    if method == "GET" and path in (
+        "/explorer.html",
+        "/explorer",
+        "/api/librarian/explorer",
+        "/api/librarian/explorer/",
+    ):
+        return "explorer_pane", {}
+    if method == "GET" and path in ("/api/librarian/explorer/owners",):
+        return "explorer_owners", {}
+    if method == "GET" and path in ("/api/librarian/explorer/snapshot",):
+        return "explorer_snapshot", {}
+    if method == "GET" and path.startswith("/api/librarian/explorer/"):
+        rest = path[len("/api/librarian/explorer/") :]
+        if rest and ".." not in rest and not rest.startswith("/"):
+            return "explorer_asset", {"name": rest}
     if method == "POST" and path == "/api/librarian/nodes/merge":
         return "not_implemented", {}
     parts = path.split("/")

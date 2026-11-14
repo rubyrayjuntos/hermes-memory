@@ -38,6 +38,7 @@ from .schema_guard import expected_versions_for_head_check, missing_versions
 from .store_claims import StoreClaimsMixin
 from .store_concepts import StoreConceptsMixin
 from .store_expand import StoreExpandMixin
+from .store_explorer import StoreExplorerMixin
 from .store_jobs import StoreJobsMixin
 from .store_merge import StoreMergeMixin
 from .store_vec import _cosine_similarity, _parse_pgvector  # noqa: F401
@@ -270,7 +271,8 @@ def hnsw_ef_search_sql(ef: int) -> str:
 OUTBOX_MAX_ATTEMPTS = 5  # replays before a write_outbox row is parked
 
 
-class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMixin, StoreJobsMixin):
+class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMixin,
+            StoreJobsMixin, StoreExplorerMixin):
     """Async data access over the pgvector + AGE schema."""
 
     def __init__(
