@@ -303,6 +303,75 @@ async def _write_turn_entities(conn, owner: str, span_id: int, evidence_ids: Seq
                 "ON CONFLICT DO NOTHING", owner, int(span_id), entity_id, surface)
 
 
+async def upsert_alias(conn, owner: str, surface_norm: str, entity_id: int, source: str,
+                       span_id: Optional[int], event_time: Optional[datetime]) -> None:
+    await conn.execute(
+        "INSERT INTO entity_alias (owner, surface_norm, entity_id, source, span_id, event_time) "
+        "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (owner, surface_norm, entity_id) DO UPDATE "
+        "SET state = 'live', source = EXCLUDED.source, span_id = EXCLUDED.span_id, "
+        "event_time = EXCLUDED.event_time",
+        owner, surface_norm, int(entity_id), source, span_id, event_time)
+
+
+async def reresolve(conn, owner: str, entity_ids: set[int]) -> set[TimelineKey]:
+    """Re-resolve live evidence touching these entities from its stored surfaces.
+
+    Resolution is computed first for every row; the distinct timeline locks of
+    the rows that will move are then taken in sorted (owner, subject_id, verb)
+    order, and only after that are placeholders and evidence updated.
+    """
+    keys: set[TimelineKey] = set()
+    rows = await conn.fetch(
+        "SELECT id, span_id, extractor, extractor_version, subject_id, verb, object_key, polarity, act, "
+        "subject_surface, object_surface FROM claim_evidence WHERE owner = $1 AND state = 'live' "
+        "AND (subject_id = ANY($2::bigint[]) OR object_key = ANY($3::text[]))",
+        owner, list(entity_ids), [f"e:{i}" for i in entity_ids])
+    moves = []
+    for r in rows:
+        vrec = await verb_row(conn, r["verb"])
+        keys.add(timeline_key(owner, int(r["subject_id"]), vrec, r["object_key"]))
+        new_sub = await resolve_entity(conn, owner, r["subject_surface"]) or int(r["subject_id"])
+        new_obj = r["object_key"]
+        if new_obj.startswith("e:"):
+            o = await resolve_entity(conn, owner, r["object_surface"])
+            if o is not None:
+                new_obj = f"e:{o}"
+        if (new_sub, new_obj) == (int(r["subject_id"]), r["object_key"]):
+            continue
+        moves.append((r, vrec, new_sub, new_obj))
+    for lock_owner, subject_id, verb in sorted({(owner, new_sub, r["verb"]) for r, _, new_sub, _ in moves}):
+        await lock_timeline(conn, lock_owner, subject_id, verb)
+    for r, vrec, new_sub, new_obj in moves:
+        clash = await conn.fetchval(
+            "SELECT id FROM claim_evidence WHERE owner = $1 AND span_id = $2 AND extractor = $3 "
+            "AND extractor_version = $4 AND subject_id = $5 AND verb = $6 AND object_key = $7 "
+            "AND polarity = $8 AND act = $9 AND state = 'live' AND id <> $10",
+            owner, r["span_id"], r["extractor"], r["extractor_version"], new_sub, r["verb"], new_obj,
+            r["polarity"], r["act"], r["id"])
+        if clash is not None:
+            await conn.execute("UPDATE claim_evidence SET state = 'superseded_version' WHERE id = $1", r["id"])
+        else:
+            await lock_timeline(conn, owner, new_sub, r["verb"])
+            holder = await placeholder_claim(conn, owner, new_sub, r["verb"], new_obj, r["polarity"], r["span_id"])
+            await conn.execute(
+                "UPDATE claim_evidence SET subject_id = $2, object_key = $3, claim_id = $4 WHERE id = $1",
+                r["id"], new_sub, new_obj, holder)
+        keys.add(timeline_key(owner, new_sub, vrec, new_obj))
+    return keys
+
+
+async def unmerge_unjustified(conn, owner: str) -> set[TimelineKey]:
+    rows = await conn.fetch(
+        "SELECT e.id, e.merged_into FROM entity e WHERE e.owner = $1 AND e.merged_into IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM entity_alias a WHERE a.owner = e.owner AND a.entity_id = e.merged_into "
+        "AND a.surface_norm = e.name_norm AND a.state = 'live' AND a.source IN ('equation', 'manual'))", owner)
+    keys: set[TimelineKey] = set()
+    for r in rows:
+        await conn.execute("UPDATE entity SET merged_into = NULL WHERE owner = $1 AND id = $2", owner, r["id"])
+        keys |= await reresolve(conn, owner, {int(r["id"]), int(r["merged_into"])})
+    return keys
+
+
 class StoreClaimsMixin:
     """Pool-holding wrappers over the module functions."""
 
@@ -414,3 +483,35 @@ class StoreClaimsMixin:
                     keys.append(timeline_key(info.owner, int(r["subject_id"]), vrec, r["object_key"]))
                 await rebuild_keys(conn, keys)
                 return written
+
+    async def record_alias_equation(self, span_id: int, canon_surface: str, alias_surface: str) -> bool:
+        """Explicit user "X aka Y" (spec §4.1). Attach Y to X; merge when Y names another entity.
+
+        The newer entity merges into the older. The merge is justified by a live
+        equation row (merged.name_norm -> survivor); restating an equation moves
+        that row to the newer span, so deleting the newer span un-merges.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                info = await span_info(conn, span_id)
+                if info.role != "user" or is_abstained(canon_surface) or is_abstained(alias_surface):
+                    return False
+                canon_id = await ensure_entity(conn, info.owner, canon_surface)
+                other = await resolve_entity(conn, info.owner, alias_surface)
+                await upsert_alias(conn, info.owner, normalize_name(alias_surface), canon_id, "equation",
+                                   span_id, info.ts)
+                if other is None or other == canon_id:
+                    return True
+                types = {r["id"]: r["type"] for r in await conn.fetch(
+                    "SELECT id, type FROM entity WHERE owner = $1 AND id = ANY($2::bigint[])",
+                    info.owner, [canon_id, other])}
+                if "self" in types.values():
+                    return True
+                survivor, merged = sorted((canon_id, other))
+                merged_norm = await conn.fetchval(
+                    "SELECT name_norm FROM entity WHERE owner = $1 AND id = $2", info.owner, merged)
+                await upsert_alias(conn, info.owner, merged_norm, survivor, "equation", span_id, info.ts)
+                await conn.execute("UPDATE entity SET merged_into = $3 WHERE owner = $1 AND id = $2",
+                                   info.owner, merged, survivor)
+                await rebuild_keys(conn, await reresolve(conn, info.owner, {merged, survivor}))
+                return True
