@@ -862,10 +862,18 @@ def test_runtime_health_reports_outbox_pending_and_parked():
         async def outbox_counts(self):
             return {"pending": 3, "parked": 1}
 
+        async def claims_counts(self):
+            return {"grounded": 3, "orphaned": 1}
+
+        async def job_counts(self):
+            return {"capture": {"pending": 2}}
+
     runtime = Runtime.__new__(Runtime)
     runtime.loop, runtime.store, runtime.pool = Loop(), Store(), None
     payload = runtime.health()
     assert payload["outbox"] == {"pending": 3, "parked": 1}
+    assert payload["claims"] == {"grounded": 3, "orphaned": 1}
+    assert payload["jobs"] == {"capture": {"pending": 2}}
 
 
 def test_verify_summary_prints_notes_without_counting_them_as_layers():

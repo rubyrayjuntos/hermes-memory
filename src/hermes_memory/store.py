@@ -35,8 +35,10 @@ from .age_cypher import (  # noqa: F401 — re-export public + test aliases
 )
 from .embed import vec_to_literal
 from .schema_guard import expected_versions_for_head_check, missing_versions
+from .store_claims import StoreClaimsMixin
 from .store_concepts import StoreConceptsMixin
 from .store_expand import StoreExpandMixin
+from .store_jobs import StoreJobsMixin
 from .store_merge import StoreMergeMixin
 from .store_vec import _cosine_similarity, _parse_pgvector  # noqa: F401
 
@@ -268,7 +270,7 @@ def hnsw_ef_search_sql(ef: int) -> str:
 OUTBOX_MAX_ATTEMPTS = 5  # replays before a write_outbox row is parked
 
 
-class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
+class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMixin, StoreJobsMixin):
     """Async data access over the pgvector + AGE schema."""
 
     def __init__(
@@ -352,6 +354,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         metadata: Dict[str, Any] | None = None,
         *,
         include_inserted: bool = False,
+        ts: str | None = None,
     ) -> Optional[int] | tuple[int, bool]:
         """Insert a turn and return its id (RETURNING id) for graph linkage.
 
@@ -366,19 +369,6 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         assert_embedding_compatible(vec_literal, self.embed_dim)
         import hashlib
 
-        outbox_id = (metadata or {}).get("outbox_id")
-        if outbox_id:
-            # Replay of an outbox row whose turn already landed: return that row.
-            async with self.pool.acquire() as conn:
-                existing = await conn.fetchval(
-                    "SELECT id FROM conversations WHERE metadata->>'outbox_id' = $1 "
-                    "ORDER BY id LIMIT 1",
-                    str(outbox_id),
-                )
-            if existing is not None:
-                turn_id = int(existing)
-                return (turn_id, False) if include_inserted else turn_id
-
         dup = None
         if len(content or "") >= 80:
             content_hash = hashlib.md5((content or "").encode("utf-8")).hexdigest()
@@ -387,10 +377,11 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                     """
                     SELECT id FROM conversations
                      WHERE session_id = $1 AND role = $2 AND md5(content) = $3
+                       AND agent_identity = $4
                        AND ts > now() - interval '10 minutes'
                      ORDER BY id DESC LIMIT 1
                     """,
-                    session_id, role, content_hash,
+                    session_id, role, content_hash, agent_identity,
                 )
             if dup is not None:
                 logger.info(
@@ -403,8 +394,10 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 """
                 INSERT INTO conversations
                     (session_id, agent_identity, role, content, embedding, metadata,
-                     embed_model, embed_dim)
-                VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, $7, $8)
+                     embed_model, embed_dim, ts)
+                VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, $7, $8,
+                        coalesce($9::text::timestamptz, now()))
+                ON CONFLICT ((metadata->>'op_id')) WHERE metadata ? 'op_id' DO NOTHING
                 RETURNING id
                 """,
                 session_id,
@@ -415,7 +408,18 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 json.dumps(metadata or {}),
                 self.embed_model,
                 self.embed_dim,
+                ts,
             )
+            op_id = (metadata or {}).get("op_id")
+            if row is None and op_id:
+                # This captured write already landed (replay, late outbox commit, or a
+                # worker whose lease expired): return the stored row, never a second one.
+                existing = await conn.fetchval(
+                    "SELECT id FROM conversations WHERE metadata->>'op_id' = $1", str(op_id))
+                if existing is None:
+                    return None
+                turn_id = int(existing)
+                return (turn_id, False) if include_inserted else turn_id
             if not row or row["id"] is None:
                 return None
             turn_id = int(row["id"])
@@ -719,90 +723,17 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             )
         return [dict(r) for r in rows]
 
-    # -- durable write outbox (V16) -------------------------------------------------
+    async def previous_turn_before(self, agent_identity: str, session_id: str, ts: str) -> int | None:
+        """Latest stored turn for this owner and session captured before ``ts``.
 
-    async def outbox_add(self, agent_identity: str, item: Dict[str, Any], claimed_by: str) -> int:
-        """Record a pending write, claimed by this process, and return its id."""
-        async with self.pool.acquire() as conn:
-            return int(await conn.fetchval(
-                "INSERT INTO write_outbox (agent_identity, item, claimed_by, claimed_at) "
-                "VALUES ($1, $2::jsonb, $3, now()) RETURNING id",
-                agent_identity, json.dumps(item), claimed_by,
-            ))
-
-    async def outbox_counts(self) -> dict[str, int]:
-        """Pending rows (still replayable) and parked rows (failed OUTBOX_MAX_ATTEMPTS times)."""
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT count(*) FILTER (WHERE attempts < $1)::int AS pending, "
-                "count(*) FILTER (WHERE attempts >= $1)::int AS parked FROM write_outbox",
-                OUTBOX_MAX_ATTEMPTS,
-            )
-        return {"pending": int(row["pending"]), "parked": int(row["parked"])}
-
-    async def outbox_done(self, outbox_id: int) -> None:
-        async with self.pool.acquire() as conn:
-            await conn.execute("DELETE FROM write_outbox WHERE id = $1", int(outbox_id))
-
-    async def outbox_unclaim(self, outbox_id: int, error: str | None = None) -> None:
-        """Hand a row back for replay (full queue, failed write)."""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL, "
-                "last_error = coalesce($2, last_error) WHERE id = $1",
-                int(outbox_id), error,
-            )
-
-    async def outbox_release(self, claimed_by: str) -> int:
-        """Release every claim held by one process (shutdown)."""
-        async with self.pool.acquire() as conn:
-            status = await conn.execute(
-                "UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL WHERE claimed_by = $1",
-                claimed_by,
-            )
-        try:
-            return int(str(status).split()[-1])
-        except (ValueError, IndexError):
-            return 0
-
-    async def outbox_claim_stale(
-        self, claimed_by: str, limit: int, *, min_age_s: float = 30.0,
-        stale_claim_s: float = 600.0, max_attempts: int = OUTBOX_MAX_ATTEMPTS,
-    ) -> list[tuple[int, Dict[str, Any]]]:
-        """Claim rows nobody is working on: unclaimed (or claim abandoned) and old
-        enough not to be a live enqueue. SKIP LOCKED keeps concurrent processes
-        from claiming the same row. Rows past max_attempts stay parked."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                UPDATE write_outbox o
-                   SET claimed_by = $1, claimed_at = now(), attempts = o.attempts + 1
-                 WHERE o.id IN (
-                       SELECT id FROM write_outbox
-                        WHERE (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => $3))
-                          AND created_at < now() - make_interval(secs => $4)
-                          AND attempts < $5
-                        ORDER BY id
-                        LIMIT $2
-                        FOR UPDATE SKIP LOCKED)
-                RETURNING o.id, o.item
-                """,
-                claimed_by, int(limit), float(stale_claim_s), float(min_age_s), int(max_attempts),
-            )
-        out: list[tuple[int, Dict[str, Any]]] = []
-        for r in rows:
-            item = r["item"]
-            if isinstance(item, str):
-                item = json.loads(item)
-            out.append((int(r["id"]), dict(item)))
-        return out
-
-    async def latest_turn_id(self, agent_identity: str, session_id: str) -> int | None:
-        """Most recent stored turn for this owner and session (NEXT fallback)."""
+        Event time, not insertion order: a replayed older turn links to the turn
+        that preceded it, not to whatever landed last.
+        """
         async with self.pool.acquire() as conn:
             value = await conn.fetchval(
-                "SELECT max(id) FROM conversations WHERE agent_identity = $1 AND session_id = $2",
-                agent_identity, session_id,
+                "SELECT id FROM conversations WHERE agent_identity = $1 AND session_id = $2 "
+                "AND ts < $3::text::timestamptz ORDER BY ts DESC, id DESC LIMIT 1",
+                agent_identity, session_id, ts,
             )
         return int(value) if value is not None else None
 
@@ -823,8 +754,14 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             )
         return {int(r["id"]) for r in rows}
 
-    async def conversations_by_ids(self, ids: Sequence[int]) -> list[dict]:
-        """Turn bodies for injection extras. Empty input → no round trip."""
+    async def conversations_by_ids(
+        self, ids: Sequence[int], agent_identity: str | None = None,
+    ) -> list[dict]:
+        """Turn bodies for injection extras. Empty input → no round trip.
+
+        With ``agent_identity`` only that owner's rows are returned. ``None`` is the
+        all-owners operator view (the pane's noun hop).
+        """
         if not ids:
             return []
         wanted = []
@@ -847,8 +784,9 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                        drain_status, embed_model, embed_dim
                   FROM conversations
                  WHERE id = ANY($1::bigint[])
+                   AND ($2::text IS NULL OR agent_identity = $2)
                 """,
-                wanted,
+                wanted, agent_identity,
             )
         return [dict(r) for r in rows]
 
@@ -880,11 +818,13 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                          LAG(id) OVER w AS prev_id,
                          LEAD(id) OVER w AS next_id
                     FROM conversations
-                   WHERE session_id IN (
-                         SELECT DISTINCT session_id FROM conversations
+                   WHERE (agent_identity, session_id) IN (
+                         SELECT DISTINCT agent_identity, session_id FROM conversations
                           WHERE id = ANY($1::bigint[])
                          )
-                  WINDOW w AS (PARTITION BY session_id ORDER BY ts, id)
+                  -- Owner is part of the sequence: two owners can share a session id
+                  -- (turns without one fall back to "default").
+                  WINDOW w AS (PARTITION BY agent_identity, session_id ORDER BY ts, id)
                 )
                 SELECT o.id AS turn_id, o.role AS self_role,
                        p.id AS prev_id, p.role AS prev_role,
@@ -940,84 +880,13 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 """
                 SELECT id, content FROM conversations
                  WHERE session_id = $1 AND role = $2
+                   AND agent_identity = (SELECT agent_identity FROM conversations WHERE id = $3)
                    AND (ts, id) < (SELECT ts, id FROM conversations WHERE id = $3)
                  ORDER BY ts DESC, id DESC LIMIT 1
                 """,
                 session_id, role, int(conv_id),
             )
         return dict(row) if row is not None else None
-
-    async def insert_alias(self, surface_norm: str, canon_id: str, source: str) -> bool:
-        """Explicit-equation alias only. True if a new live mapping won.
-
-        Refuses self-maps and cycles: if canon_id resolves transitively back
-        to surface_norm, the row would corrupt the dictionary (A→B→A), so the
-        span stays unaliased and the collision is logged for manual review.
-        Renaming is a retract of the old alias + a new live mapping, never an
-        overwrite (partial unique index enforces one live canon per surface).
-        """
-        if surface_norm == canon_id:
-            return False
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT surface_norm, canon_id FROM aliases WHERE valid = 'live'"
-            )
-            amap = {r["surface_norm"]: r["canon_id"] for r in rows}
-            cur, chain = canon_id, [surface_norm]
-            for _ in range(8):
-                nxt = amap.get(cur)
-                if nxt is None:
-                    break
-                if nxt in chain:
-                    logger.warning(
-                        "alias cycle refused %s -> %s (chain %s)",
-                        surface_norm, canon_id, chain,
-                    )
-                    return False
-                chain.append(cur)
-                cur = nxt
-            row = await conn.fetchrow(
-                """
-                INSERT INTO aliases (surface_norm, canon_id, source)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (surface_norm) WHERE valid = 'live' DO NOTHING
-                RETURNING alias_id
-                """,
-                surface_norm, canon_id, source,
-            )
-        return row is not None
-
-    async def alias_map(self) -> dict[str, str]:
-        """Live alias map: surface_norm → canon_id. Small table, one SELECT."""
-        amap, _ = await self.alias_graph()
-        return amap
-
-    async def alias_graph(
-        self,
-    ) -> tuple[dict[str, str], dict[str, tuple]]:
-        """Live alias dictionary plus canon-birth metadata.
-
-        meta[canon] = (first_seen, min_alias_id): earliest live row that
-        ESTABLISHED the slug as a canon_id (not merely touched it as a
-        surface). Survivor elections (never lex-smallest: lex promotes
-        nicknames like "te" over "tokyo eye") prefer the oldest canon birth —
-        canons are born as equation left-hand sides, so oldest-birth is
-        earliest-LHS — then drop slugs under 4 chars when a longer live
-        alias exists in the same component.
-        """
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT surface_norm, canon_id, created_at, alias_id
-                     FROM aliases WHERE valid = 'live'"""
-            )
-        amap: dict[str, str] = {}
-        meta: dict[str, tuple] = {}
-        for r in rows:
-            amap[r["surface_norm"]] = r["canon_id"]
-            key = (r["created_at"], int(r["alias_id"]))
-            if r["canon_id"] not in meta or key < meta[r["canon_id"]]:
-                meta[r["canon_id"]] = key
-        return amap, meta
 
     @staticmethod
     def _graph(rows) -> tuple[dict[str, str], dict[str, tuple]]:
@@ -1069,99 +938,10 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             cur = nxt
         return cur, False
 
-    @staticmethod
-    def _canon(
-        text: str, amap: dict[str, str], meta: dict[str, tuple] | None = None
-    ) -> str:
-        return Store._resolve(text, amap, meta)[0]
-
-    async def insert_claims(self, span_id: int, claims: Sequence[dict]) -> list[int]:
-        """Insert user-span claims; inherit the span's own verdict if classified.
-
-        One live row per proposition: the partial unique key
-        (subject_canon, verb, object_canon, polarity) WHERE valid='live'
-        merges repeats (span_id moves to the latest saying, seen_count bumps).
-        A live opposite-polarity row with a non-repaired verdict abstains —
-        the new row goes in as valid='unknown', never a second live truth.
-        Same subject+verb with a different object, or a different verb, is a
-        second row: objects stay opaque, never fused, never fuzzy-matched.
-        """
-        if not claims:
-            return []
-        async with self.pool.acquire() as conn:
-            uptake = await conn.fetchval(
-                """SELECT value FROM uptakes
-                    WHERE prior_span_id = $1 OR next_span_id = $1
-                    ORDER BY created_at DESC LIMIT 1""",
-                int(span_id),
-            )
-            verdict = uptake or "unknown"
-            amap, meta = Store._graph(await conn.fetch(
-                """SELECT surface_norm, canon_id, created_at, alias_id
-                     FROM aliases WHERE valid = 'live'"""
-            ))
-            ids: list[int] = []
-            for c in claims:
-                sub = self._canon(c["subject"], amap, meta)
-                obj = self._canon(c["object"], amap, meta)
-                verb = c["verb"]
-                pol = c.get("polarity", "positive")
-                opp = await conn.fetchval(
-                    """SELECT claim_id FROM claims
-                        WHERE valid = 'live' AND span_id <> $4
-                          AND subject_canon = $1 AND lower(verb) = lower($2)
-                          AND object_canon = $3 AND polarity <> $5
-                        LIMIT 1""",
-                    sub, verb, obj, int(span_id), pol,
-                )
-                if opp is not None and verdict != "repaired":
-                    # Abstain: keep the audit trail, keep it out of the live set.
-                    prior_row = await conn.fetchval(
-                        """SELECT claim_id FROM claims
-                            WHERE span_id = $1 AND subject_canon = $2
-                              AND lower(verb) = lower($3) AND object_canon = $4
-                              AND polarity = $5
-                            LIMIT 1""",
-                        int(span_id), sub, verb, obj, pol,
-                    )
-                    if prior_row is not None:
-                        ids.append(int(prior_row))
-                        continue
-                    cid = await conn.fetchval(
-                        """
-                        INSERT INTO claims
-                            (span_id, subject, verb, object, polarity, act,
-                             uptake, subject_canon, object_canon, valid)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'unknown')
-                        RETURNING claim_id
-                        """,
-                        int(span_id), c["subject"], verb, c["object"], pol,
-                        c.get("act", "assert"), verdict, sub, obj,
-                    )
-                    ids.append(int(cid))
-                    continue
-                cid = await conn.fetchval(
-                    """
-                    INSERT INTO claims
-                        (span_id, subject, verb, object, polarity, act, uptake,
-                         subject_canon, object_canon)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    ON CONFLICT (subject_canon, verb, object_canon, polarity)
-                        WHERE valid = 'live'
-                    DO UPDATE SET span_id = EXCLUDED.span_id,
-                                  seen_count = claims.seen_count + 1
-                    RETURNING claim_id
-                    """,
-                    int(span_id), c["subject"], verb, c["object"], pol,
-                    c.get("act", "assert"), verdict, sub, obj,
-                )
-                ids.append(int(cid))
-        return ids
-
     async def write_uptake(
         self, prior_span_id: int, next_span_id: int, value: str
     ) -> None:
-        """Write reception once; copy onto the prior span's claims (no downgrade).
+        """Write reception once (no downgrade).
 
         A later pass may only upgrade unknown → repaired, never the reverse
         without a new user span.
@@ -1183,78 +963,6 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                           AND value = 'unknown'""",
                     int(prior_span_id), int(next_span_id),
                 )
-            row = await conn.fetchrow(
-                """SELECT value FROM uptakes
-                    WHERE prior_span_id = $1 AND next_span_id = $2""",
-                int(prior_span_id), int(next_span_id),
-            )
-            if row is not None:
-                await conn.execute(
-                    """UPDATE claims SET uptake = $1
-                        WHERE span_id = $2 AND uptake = 'unknown'""",
-                    row["value"], int(prior_span_id),
-                )
-
-    async def retract_on_repair(
-        self, prior_span_id: int, next_span_id: int,
-        next_text: str, new_claims: Sequence[dict],
-    ) -> int:
-        """Retract live claims contradicted by a repaired user turn. Returns count.
-
-        Polarity-opposite match on normalized (subject, verb, object), excluding
-        the repairing span itself. Deictic repairs with no new assertion retract
-        the prior span's live claims with a NULL superseder. Never deletes.
-        """
-        from .reception import is_deictic_repair
-
-        retracted = 0
-        async with self.pool.acquire() as conn:
-            amap, meta = Store._graph(await conn.fetch(
-                """SELECT surface_norm, canon_id, created_at, alias_id
-                     FROM aliases WHERE valid = 'live'"""
-            ))
-            if new_claims:
-                for c in new_claims:
-                    if c.get("act") != "assert" or not c.get("claim_id"):
-                        continue
-                    # Resolve through the CURRENT map on both sides: aliases
-                    # are retroactive (a later "TE = Tokyo Eye" unifies
-                    # history). Stored canon columns are the write-time cache.
-                    new_sub = self._canon(c["subject"], amap, meta)
-                    new_obj = self._canon(c["object"], amap, meta)
-                    cands = await conn.fetch(
-                        """SELECT claim_id, subject, object FROM claims
-                            WHERE valid = 'live' AND span_id <> $1
-                              AND lower(verb) = lower($2)
-                              AND polarity <> $3""",
-                        int(next_span_id), c["verb"],
-                        c.get("polarity", "positive"),
-                    )
-                    for r in cands:
-                        if (self._canon(r["subject"], amap, meta) != new_sub
-                                or self._canon(r["object"], amap, meta) != new_obj):
-                            continue
-                        res = await conn.execute(
-                            """UPDATE claims SET valid = 'retracted',
-                                      superseded_by = $1
-                                WHERE claim_id = $2 AND valid = 'live'""",
-                            int(c["claim_id"]), int(r["claim_id"]),
-                        )
-                        try:
-                            retracted += int(str(res).split()[-1])
-                        except (ValueError, IndexError):
-                            pass
-            elif is_deictic_repair(next_text):
-                res = await conn.execute(
-                    """UPDATE claims SET valid = 'retracted'
-                        WHERE span_id = $1 AND valid = 'live'""",
-                    int(prior_span_id),
-                )
-                try:
-                    retracted += int(str(res).split()[-1])
-                except (ValueError, IndexError):
-                    pass
-        return retracted
 
     async def span_overlays(self, ids: Sequence[int]) -> dict[int, dict]:
         """Per-hit overlay for packing: uptake verdict (as prior span),
@@ -1283,16 +991,22 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             ):
                 out[int(r["prior_span_id"])]["uptake"] = r["value"]
             for r in await conn.fetch(
-                """SELECT span_id,
-                          count(*) FILTER (WHERE valid = 'live') AS live
-                     FROM claims WHERE span_id = ANY($1::bigint[])
-                     GROUP BY span_id""",
+                """SELECT e.span_id,
+                          count(DISTINCT c.claim_id) FILTER (
+                              WHERE c.status = 'grounded' AND c.valid_to IS NULL) AS live
+                     FROM claim_evidence e
+                     JOIN claims c ON c.owner = e.owner AND c.claim_id = e.claim_id
+                    WHERE e.span_id = ANY($1::bigint[]) AND e.state = 'live' AND e.act = 'assert'
+                    GROUP BY e.span_id""",
                 wanted,
             ):
                 out[int(r["span_id"])]["live_claims"] = int(r["live"])
             for r in await conn.fetch(
-                """SELECT span_id, subject, verb, object FROM claims
-                    WHERE span_id = ANY($1::bigint[]) AND valid = 'retracted'
+                """SELECT DISTINCT e.span_id, c.claim_id, c.subject, c.verb, c.object
+                     FROM claim_evidence e
+                     JOIN claims c ON c.owner = e.owner AND c.claim_id = e.claim_id
+                    WHERE e.span_id = ANY($1::bigint[]) AND c.status = 'retracted'
+                    ORDER BY e.span_id, c.claim_id
                     LIMIT 12""",
                 wanted,
             ):

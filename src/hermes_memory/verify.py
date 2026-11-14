@@ -218,27 +218,16 @@ async def run_verify(dsn: Optional[str] = None,
 
         # cleanup synthetic SQL rows + leftover AGE Turn vertices from this
         # run and any prior verify-c5 sessions (graph was surviving DELETE).
-        # V12 uptakes/claims reference conversations with ON DELETE RESTRICT, and
-        # claims.superseded_by is a RESTRICT self-reference: clear those first.
-        synthetic_spans = "SELECT id FROM conversations WHERE session_id LIKE $1"
-        await conn.execute(
-            "UPDATE claims SET superseded_by = NULL WHERE superseded_by IN "
-            f"(SELECT claim_id FROM claims WHERE span_id IN ({synthetic_spans}))",
-            "verify-c5%",
-        )
-        await conn.execute(
-            f"DELETE FROM uptakes WHERE prior_span_id IN ({synthetic_spans}) "
-            f"OR next_span_id IN ({synthetic_spans})",
-            "verify-c5%",
-        )
-        await conn.execute(
-            f"DELETE FROM claims WHERE span_id IN ({synthetic_spans})",
-            "verify-c5%",
-        )
-        await conn.execute(
-            "DELETE FROM conversations WHERE session_id LIKE $1",
-            "verify-c5%",
-        )
+        # Synthetic verify spans go through the deletion API so their evidence,
+        # uptakes and timelines are cleaned up the same way a user deletion is.
+        from .store_claims import delete_spans_on_conn
+
+        for row in await conn.fetch(
+            "SELECT agent_identity, array_agg(id) AS ids FROM conversations "
+            "WHERE session_id LIKE $1 GROUP BY agent_identity", "verify-c5%",
+        ):
+            async with conn.transaction():
+                await delete_spans_on_conn(conn, row["agent_identity"], list(row["ids"]))
         await conn.execute(
             "DELETE FROM memory_entries WHERE agent_identity = 'c5-verify' "
             "AND content LIKE 'c5-verify-memory-row:%'"
@@ -256,16 +245,26 @@ async def run_verify(dsn: Optional[str] = None,
         result.add("pipeline-execution", False, repr(exc)[:200])
     finally:
         try:
-            from .store import OUTBOX_MAX_ATTEMPTS
+            from .claims_migration import NAME as CLAIMS_MIGRATION, legacy_check
+            from .store_claims import claims_counts_on_conn, repair_drift_on_conn
+            from .store_jobs import JOB_MAX_ATTEMPTS
 
             row = await conn.fetchrow(
-                "SELECT count(*) FILTER (WHERE attempts < $1)::int AS pending, "
-                "count(*) FILTER (WHERE attempts >= $1)::int AS parked FROM write_outbox",
-                OUTBOX_MAX_ATTEMPTS,
-            )
-            result.notes.append(f"write_outbox pending={row['pending']} parked={row['parked']}")
-        except Exception:
-            result.notes.append("write_outbox counts unavailable (apply V16)")
+                "SELECT count(*) FILTER (WHERE status IN ('pending','leased','retryable') AND attempts < $1)::int "
+                "AS pending, count(*) FILTER (WHERE status = 'failed' OR attempts >= $1)::int AS parked "
+                "FROM durable_job WHERE kind = 'capture'", JOB_MAX_ATTEMPTS)
+            result.notes.append(f"capture jobs pending={row['pending']} parked={row['parked']}")
+            async with conn.transaction():
+                repaired = await repair_drift_on_conn(conn)
+            result.add("claims drift", True, f"rebuilt {repaired} key(s)")
+            result.notes.append(f"claims by status {await claims_counts_on_conn(conn)}")
+            applied = await conn.fetchval("SELECT 1 FROM data_migrations WHERE name = $1", CLAIMS_MIGRATION)
+            check = await legacy_check(conn)
+            result.add("claims migration", bool(applied) and not check["violations"],
+                       f"applied={bool(applied)} violations={len(check['violations'])} "
+                       f"superseded={len(check['superseded'])}")
+        except Exception as exc:
+            result.notes.append(f"claims/jobs checks unavailable ({type(exc).__name__}; apply V18/V19)")
         await conn.close()
 
     return result

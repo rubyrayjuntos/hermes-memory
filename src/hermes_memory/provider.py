@@ -42,6 +42,7 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
     should_purge_concept,
 )
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config, resolve_agent_identity
+from . import extraction_worker
 from .embed import Embedder, vec_to_literal
 from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
@@ -68,6 +69,10 @@ def _is_missing_embed_version_schema(exc: BaseException) -> bool:
 
 
 class HybridAgeMemoryProvider(MemoryProvider):
+    # Optional shadow-retrieval hook: async (query, vector_ids, latency_ms) -> None.
+    # None in the default mode; prefetch only schedules it after the string is built.
+    _shadow_hook = None
+
     def __init__(self, config: Optional[HybridAgeConfig] = None) -> None:
         self.config = config or load_config()
         self.pool = None
@@ -83,6 +88,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._dropped_writes = 0
         self._outbox_owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self._outbox_task: Optional[asyncio.Task] = None
+        # Own task, separate from prefetch and the write drain (spec §5.2).
+        self._extraction_task: Optional[asyncio.Task] = None
+        # Optional `model(turn, context) -> dict`; without it only the rules tier runs.
+        self._extraction_model = None
         self._primary_context = True  # writes allowed until told otherwise
         # Session context — rolling window of recent topics/turns for query enrichment
         self._recent_topics: List[str] = []
@@ -219,6 +228,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
             hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
         )
         await self.store.require_schema_head()
+        try:
+            from .claims_migration import migrate_legacy_claims
+
+            migrated = await migrate_legacy_claims(self.store)
+            if not migrated.get("skipped"):
+                logger.info("claims data migration applied: %s", migrated)
+        except Exception:
+            logger.warning("claims data migration failed; legacy claims stay provisional", exc_info=True)
         async with pool.acquire() as conn:
             await self.store.load_age(conn)
         # Reap reception overlays orphaned by a crash (claims_status='pending').
@@ -232,6 +249,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # Strong reference so the drain loop is never garbage-collected mid-flight.
         self._drain_task = asyncio.create_task(self._awrite_drain())
         self._outbox_task = asyncio.create_task(self._outbox_replay_loop())
+        self._extraction_task = asyncio.create_task(extraction_worker.extraction_loop(self))
 
     # -- turn capture (non-blocking enqueue) --------------------------------------
 
@@ -302,6 +320,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
         if self._loop is None or self._write_queue is None:
             return
+        # Captured once, here: the op_id makes every later write of this item
+        # idempotent in the database, and captured_at is the turn's event time.
+        item.setdefault("op_id", uuid.uuid4().hex)
+        item.setdefault("captured_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
         self._record_outbox(item)
         try:
             fut = asyncio.run_coroutine_threadsafe(self._put_nowait(item), self._loop)
@@ -312,7 +334,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 except asyncio.QueueFull:
                     if item.get("_outbox_id") is not None:
                         # Durable: hand the row back so replay writes it later.
-                        self._defer_outbox(item["_outbox_id"], "queue full")
+                        self._defer_outbox(item["_outbox_id"], item["_fence"], "queue full")
                         logger.info("hybrid-age write queue full; deferred outbox id=%s", item["_outbox_id"])
                         return
                     self._dropped_writes += 1
@@ -355,18 +377,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
         payload = {k: v for k, v in item.items() if not str(k).startswith("_")}
         owner = item.get("agent_identity") or self._agent_identity or "default"
         try:
-            item["_outbox_id"] = self._run(
-                store.outbox_add(owner, payload, self._outbox_owner), timeout=OUTBOX_ADD_TIMEOUT_S
+            recorded = self._run(
+                store.outbox_add(owner, payload, self._outbox_owner, item["op_id"]),
+                timeout=OUTBOX_ADD_TIMEOUT_S,
             )
         except Exception:
+            # A timed-out record may still commit later. That is safe: the row carries
+            # this item's op_id, so its replay lands on the same conversation row.
             logger.warning("outbox record failed; write kept in memory only", exc_info=True)
+            return
+        if recorded is not None:
+            item["_outbox_id"], item["_fence"] = recorded
 
-    def _defer_outbox(self, outbox_id: int, reason: str) -> None:
+    def _defer_outbox(self, outbox_id: int, fence: int, reason: str) -> None:
         store, loop = self.store, self._loop
         if store is None or loop is None:
             return
         try:
-            asyncio.run_coroutine_threadsafe(store.outbox_unclaim(outbox_id, reason), loop)
+            asyncio.run_coroutine_threadsafe(store.outbox_unclaim(outbox_id, fence, reason), loop)
         except Exception:
             logger.debug("outbox defer failed", exc_info=True)
 
@@ -375,11 +403,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
         outbox_id = item.get("_outbox_id")
         if outbox_id is None or self.store is None:
             return
+        fence = int(item.get("_fence") or 0)
         try:
+            # Fenced: if this worker's lease expired and another claimed the row, these
+            # are no-ops; the other worker settles it (its write is idempotent by op_id).
             if item.get("_persisted"):
-                await self.store.outbox_done(outbox_id)
+                await self.store.outbox_done(outbox_id, fence)
             else:
-                await self.store.outbox_unclaim(outbox_id, "write not persisted")
+                await self.store.outbox_unclaim(outbox_id, fence, "write not persisted")
         except Exception:
             logger.warning("outbox settle failed id=%s", outbox_id, exc_info=True)
 
@@ -393,13 +424,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return 0
         rows = await store.outbox_claim_stale(self._outbox_owner, min(limit, free))
         queued = 0
-        for outbox_id, payload in rows:
-            payload["_outbox_id"] = outbox_id
+        for outbox_id, fence, payload in rows:
+            payload["_outbox_id"], payload["_fence"], payload["_replayed"] = outbox_id, fence, True
             try:
                 q.put_nowait(payload)
                 queued += 1
             except asyncio.QueueFull:
-                await store.outbox_unclaim(outbox_id, "queue full on replay")
+                await store.outbox_unclaim(outbox_id, fence, "queue full on replay")
         if queued:
             logger.info("hybrid-age outbox replay queued=%d", queued)
         return queued
@@ -527,13 +558,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
         """Alias-on-write, user-span claims, uptake, and repair retraction.
 
         Never raises (caller guards too). Returns the claims_status stamp:
-        ready|none. Assistant spans yield no claims and no aliases: model
-        speech stays unconfirmed until uptake says otherwise.
+        ready|none. Assistant spans yield no claims here; model speech is
+        evidence only through extraction jobs (Phase 2).
         """
         from .reception import (
             classify_repair,
             extract_alias_equations,
             extract_assertions,
+            is_deictic_repair,
         )
 
         async def _stamp(status: str) -> str:
@@ -548,7 +580,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         wrote = False
         for surface, canon in extract_alias_equations(content):
             try:
-                if await store.insert_alias(surface, canon, "user_span"):
+                if await store.record_alias_equation(conv_id, canon, surface):
                     wrote = True
             except Exception:
                 logger.warning("alias write failed", exc_info=True)
@@ -568,25 +600,20 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 wrote = True
             except Exception:
                 logger.warning("uptake write failed", exc_info=True)
-        new_claims: list[dict] = []
+        parsed: list[dict] = []
         try:
             parsed = extract_assertions(content)
-            if parsed:
-                # Runs after write_uptake so insert_claims inherits this turn's
-                # verdict immediately instead of theoretically.
-                ids = await store.insert_claims(conv_id, parsed)
-                if ids:
-                    wrote = True
-                for claim, cid in zip(parsed, ids):
-                    claim["claim_id"] = cid
-                new_claims = parsed
+            if parsed and await store.record_rule_claims(conv_id, parsed):
+                wrote = True
         except Exception:
-            logger.warning("claim insert failed", exc_info=True)
+            logger.warning("claim write failed", exc_info=True)
         if prior is not None and verdict == "repaired":
             try:
-                await store.retract_on_repair(
-                    int(prior["id"]), conv_id, content, new_claims
-                )
+                deictic = not parsed and is_deictic_repair(content)
+                if await store.record_repair(
+                    int(prior["id"]), conv_id, deictic=deictic, new_claims=parsed
+                ):
+                    wrote = True
             except Exception:
                 logger.warning("retract failed", exc_info=True)
         return await _stamp("ready" if wrote else "none")
@@ -611,23 +638,46 @@ class HybridAgeMemoryProvider(MemoryProvider):
             done += 1
         return done
 
-    async def _resolve_previous_turn(self, store: Any, session_id: str, owner: str | None) -> int | None:
-        """Previous turn in this session: the in-memory value, else the database.
+    async def _resolve_previous_turn(self, store: Any, item: dict, session_id: str,
+                                     owner: str | None) -> int | None:
+        """The turn that preceded this one in time.
 
-        After an outbox replay or a restart the in-memory map is empty; without the
-        database fallback the turn would lose its NEXT link.
+        Live items arrive in capture order, so the in-memory value is right for them.
+        A replayed item may be older than turns already written, so it uses its own
+        capture time: the latest stored turn captured before it.
         """
-        prev = self._last_turn_id.get(session_id)
-        if prev is not None:
-            return prev
-        lookup = getattr(store, "latest_turn_id", None)
-        if not callable(lookup) or not owner:
+        if not item.get("_replayed"):
+            prev = self._last_turn_id.get(session_id)
+            if prev is not None:
+                return prev
+        lookup = getattr(store, "previous_turn_before", None)
+        captured_at = item.get("captured_at")
+        if not callable(lookup) or not owner or not captured_at:
             return None
         try:
-            return await lookup(owner, session_id)
+            return await lookup(owner, session_id, captured_at)
         except Exception:
             logger.warning("previous turn lookup failed", exc_info=True)
             return None
+
+    async def _enqueue_extraction_jobs(self, store: Any, conv_id: int, item: dict) -> None:
+        """Enqueue id-only extraction jobs for a newly inserted turn. Never raises."""
+        job_add = getattr(store, "job_add", None)
+        if not callable(job_add):
+            return
+        try:
+            from .extraction_jobs import job_specs
+
+            owner = item.get("agent_identity") or self._agent_identity
+            for kind, op_id, payload in job_specs(int(conv_id)):
+                await job_add(
+                    owner, kind, op_id, payload,
+                    session_id=item.get("session_id"),
+                    event_time=item.get("captured_at"),
+                    priority=0,
+                )
+        except Exception:
+            logger.warning("extraction job enqueue failed", exc_info=True)
 
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
@@ -638,7 +688,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # Drain overwrites enqueue hint so the second item in one sync_turn
         # sees the first item's id. C reads only this field (no SQL lookup).
         item["previous_conversation_id"] = await self._resolve_previous_turn(
-            store, session_id, item.get("agent_identity") or self._agent_identity)
+            store, item, session_id, item.get("agent_identity") or self._agent_identity)
         embed_exc: BaseException | None = None
         try:
             vec = await embedder.embed_text(content)
@@ -663,9 +713,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 item.get("role") or "user", content, vec_literal,
                 metadata={
                     "kind": classify_session_kind(session_id),
-                    **({"outbox_id": str(item["_outbox_id"])} if item.get("_outbox_id") is not None else {}),
+                    **({"op_id": str(item["op_id"])} if item.get("op_id") else {}),
                 },
                 include_inserted=True,
+                ts=item.get("captured_at"),
             )
         except Exception as exc:
             if _is_missing_embed_version_schema(exc):
@@ -705,7 +756,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             conv_id, inserted_new = int(inserted_turn), True
         if not inserted_new:
             return
-        self._last_turn_id[session_id] = int(conv_id)
+        if not item.get("_replayed"):
+            self._last_turn_id[session_id] = int(conv_id)
         degraded = False
         await self._stamp_drain(
             store,
@@ -720,6 +772,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             )
         except Exception:
             logger.warning("reception stage failed", exc_info=True)
+
+        await self._enqueue_extraction_jobs(store, int(conv_id), item)
 
         vertex_id = None
         try:
@@ -1121,6 +1175,22 @@ class HybridAgeMemoryProvider(MemoryProvider):
             (t_embed - t0) * 1000, (t_vec - t_embed) * 1000,
             (t_graph - t_vec) * 1000, (time.perf_counter() - t0) * 1000,
         )
+        if self._shadow_hook is not None:
+            try:
+                from .shadow import schedule_shadow
+
+                schedule_shadow(
+                    self._shadow_hook,
+                    query,
+                    [s.get("id") for s in selected],
+                    {
+                        "embed": round((t_embed - t0) * 1000, 1),
+                        "vector": round((t_vec - t_embed) * 1000, 1),
+                        "total": round((time.perf_counter() - t0) * 1000, 1),
+                    },
+                )
+            except Exception:
+                logger.warning("shadow hook not scheduled", exc_info=True)
         return block
 
     def _enrich_query(self, query: str) -> str:
@@ -1398,21 +1468,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 logger.debug("pool close on shutdown failed", exc_info=True)
         self.pool = None
 
-        task = getattr(self, "_outbox_task", None)
-        if task is not None and self._loop is not None and self._loop.is_running():
-            # Cancel and wait on the loop, so the task finishes before the loop stops
-            # (otherwise asyncio reports "Task was destroyed but it is pending").
-            async def _cancel_replay() -> None:
-                task.cancel()
-                try:
-                    await task
-                except BaseException:
-                    pass
+        # Cancel and wait on the loop so tasks finish before it stops (otherwise asyncio
+        # reports "Task was destroyed but it is pending"). The drain is cancelled only
+        # when it did not finish: its queued and in-flight writes are in the outbox
+        # with released claims, and replay is idempotent by op_id.
+        tasks = [getattr(self, "_outbox_task", None), getattr(self, "_extraction_task", None)]
+        if not drained:
+            tasks.append(getattr(self, "_drain_task", None))
+        pending = [t for t in tasks if t is not None and not t.done()]
+        if pending and self._loop is not None and self._loop.is_running():
+            async def _cancel_tasks() -> None:
+                for t in pending:
+                    t.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
 
             try:
-                asyncio.run_coroutine_threadsafe(_cancel_replay(), self._loop).result(timeout=1.0)
+                asyncio.run_coroutine_threadsafe(_cancel_tasks(), self._loop).result(timeout=1.0)
             except Exception:
-                logger.debug("outbox replay cancel failed", exc_info=True)
+                logger.debug("task cancel on shutdown failed", exc_info=True)
         if self._loop is not None:
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)

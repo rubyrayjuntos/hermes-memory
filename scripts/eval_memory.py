@@ -271,7 +271,7 @@ async def run_durability(args) -> dict:
             break
         await asyncio.sleep(2)
     recovered_s = time.perf_counter() - t0
-    leftover = await conn.fetchval("select count(*) from write_outbox where agent_identity=$1", identity)
+    leftover = await conn.fetchval("select count(*) from durable_job where kind = 'capture' and owner = $1", identity)
     dupes = await conn.fetchval(
         "select count(*) - count(distinct (role, content)) from conversations where agent_identity=$1", identity)
     await conn.close()

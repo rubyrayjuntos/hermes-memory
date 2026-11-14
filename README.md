@@ -28,6 +28,8 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 | `hermes-memory-install` / `verify` / `upgrade` / `uninstall` | Coverage under `hermes backup` (export Postgres yourself) |
 | Loopback only (`127.0.0.1:5450` and `:7890`) | Drop-in for every gateway/wrapper without the CLI |
 
+The served prompt is vector memory with neighbour and claim overlays. Graph traversal is not yet on the prompt path.
+
 Vector finds nearby chunks; the graph is the walk. Fountain is optional grammar — recall must work with the pane closed.
 
 **Deferred:** similarity-inferred graph edges (real ~38× lift over chance, ~1% absolute precision) — not building; see the [wiki experiment](https://github.com/rubyrayjuntos/hermes-memory/wiki/Experiment-Similarity-Inferred-Edges).
@@ -200,7 +202,7 @@ The memory core spans **three coordinated layers**:
 | **Vector + Graph** | `memory_entries` (pgvector HNSW, 768-dim nomic-embed-text), SQL `noun` / `semantic_edge`, and the AGE `hermes_knowledge` Session/Turn flower | Ingest walks codebase → SHA-256 chunks → embed → File/Module/Dependency with `IMPORTS` edges. Conversation recall walks SQL `mentions`; AGE preserves `NEXT` / `IN_SESSION`. |
 | **Inspector** | Optional Garden pane at `http://127.0.0.1:7890/api/librarian/pane` (`docs/graph/fountain.html`). Drag to orbit Noun nodes; threads are `mentions` (co-occurrence in mention order). Session and turn are properties. Not required for recall. | `hermes-memory-api` (loopback-only). CORS reflects loopback/`null` origins only. |
 
-**Walk** (`expand_graph`): `composite = 0.4 * seed_similarity + 0.4 * (source_alignment * target_alignment) * provenance_boost + 0.2 * decay`; `score = composite * (magnitude / 8)`. The same bounded two-hop walker feeds prefetch and pane search.
+**Walk** (`expand_graph`): `composite = 0.4 * seed_similarity + 0.4 * (source_alignment * target_alignment) * provenance_boost + 0.2 * decay`; `score = composite * (magnitude / 8)`. The bounded two-hop walker is pane search. It is not on the prompt path.
 
 **Verify**: `hermes-memory-verify` checks database connectivity, conversation writes, the memory mirror, and prefetch output. The API health surface reports bridge and integrity counts.
 

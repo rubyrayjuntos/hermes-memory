@@ -177,10 +177,20 @@ class Runtime:
                 outbox = await counter()
             except Exception:
                 logger.warning("outbox counts unavailable", exc_info=True)
+        extra: Dict[str, Any] = {}
+        for key, name in (("claims", "claims_counts"), ("jobs", "job_counts")):
+            fn = getattr(self.store, name, None)
+            if callable(fn):
+                try:
+                    extra[key] = await fn()
+                except Exception:
+                    logger.warning("%s counts unavailable", key, exc_info=True)
+                    extra[key] = None
         return {
             "drain_status": drain_status,
             "unpassported_count": unpassported,
             "outbox": outbox,
+            **extra,
         }
 
     def librarian_health(self) -> Dict[str, Any]:

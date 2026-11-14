@@ -9,11 +9,16 @@ versioning follows [SemVer](https://semver.org/).
 `main` and branch work since tag `v0.9.0`.
 
 ### Added
+- Entities with alias equations and merges; span deletion API that rebuilds what the spans supported.
+- Health and verify report claims by status, job counts, drift repair and the legacy migration check.
 - Retrieval eval harness for the provider (`scripts/eval_memory.py`, PR #90).
 - Durable write outbox (V16 `write_outbox`): `sync_turn` / `on_memory_write` record each write before queuing it; a full queue defers to the outbox instead of dropping; leftover rows replay at start and every 30 s with `SKIP LOCKED` claims; shutdown releases claims; replays carry `outbox_id` into row metadata so a turn is not written twice. V16 is in the installed head check.
 - Harness metrics: entity coverage, cross-owner leakage, and a burst/shutdown/replay durability mode (`--durability N`).
 
 ### Changed
+- Claims are owner-scoped and derived from evidence (`claim_evidence`); `status` replaces `valid`, which is now a read-only mirror. Contradictory statements resolve to the newer one instead of being held back.
+- Functional facts (lives in, works for, based in, …) keep an event-time history; corrections restore the previous value.
+- Write capture uses the new `durable_job` table; `write_outbox` is no longer written.
 - Graph expansion is owner-scoped: a path is kept only if one of its provenance turns belongs to this memory owner, and its provenance is trimmed to those turns (`Store.owned_turn_ids`).
 
 ## [0.9.0] - 2026-11-14

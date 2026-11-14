@@ -12,12 +12,12 @@ from typing import Protocol
 
 
 class ReceptionStore(Protocol):
-    """Minimal store seam for the reception stage (aliases/uptake/claims)."""
+    """Store seam for the reception stage: evidence writers, uptake, catch-up."""
 
-    async def insert_alias(
-        self, surface_norm: str, canon_id: str, source: str
+    async def record_alias_equation(
+        self, span_id: int, canon_surface: str, alias_surface: str
     ) -> bool: ...
-    async def insert_claims(
+    async def record_rule_claims(
         self, span_id: int, claims: Sequence[dict]
     ) -> list[int]: ...
     async def previous_turn(
@@ -26,9 +26,9 @@ class ReceptionStore(Protocol):
     async def write_uptake(
         self, prior_span_id: int, next_span_id: int, value: str
     ) -> None: ...
-    async def retract_on_repair(
-        self, prior_span_id: int, next_span_id: int,
-        next_text: str, new_claims: Sequence[dict],
+    async def record_repair(
+        self, prior_span_id: int, repair_span_id: int, *, deictic: bool,
+        new_claims: Sequence[dict] = (),
     ) -> int: ...
     async def stamp_claims_status(self, conv_id: int, status: str) -> None: ...
     async def fetch_pending_reception(self, limit: int) -> list[dict]: ...
