@@ -262,7 +262,7 @@ class BenchHarness:
         self.graph_name = graph_name
         self.pool: Optional[asyncpg.Pool] = None
         self.store: Optional[Store] = None
-        self._embed_cache: Dict[str, Optional[List[float]]] = {}
+        self._embed_cache: Dict[tuple[str, bool], Optional[List[float]]] = {}
 
     async def connect(self) -> None:
         self.pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=4)
@@ -277,10 +277,13 @@ class BenchHarness:
         if self.pool:
             await self.pool.close()
 
-    async def _embed(self, text: str) -> Optional[List[float]]:
-        if text not in self._embed_cache:
-            self._embed_cache[text] = await self.embedder.embed_text(text[:800])
-        return self._embed_cache[text]
+    async def _embed(self, text: str, *, as_query: bool = False) -> Optional[List[float]]:
+        key = (text, as_query)
+        if key not in self._embed_cache:
+            self._embed_cache[key] = await self.embedder.embed_text(
+                text[:800], as_query=as_query
+            )
+        return self._embed_cache[key]
 
     async def recall(self, query: str, cfg: BenchConfig) -> tuple[str, List[str]]:
         """Run the full recall pipeline; returns (injected block, raw pool texts).
@@ -288,7 +291,7 @@ class BenchHarness:
         Seeds rank by ANN similarity. Graph hops, when present, rank by
         ``beam_score`` (slot 6). No parallel w_sim/w_recency/w_graph mixer.
         """
-        emb = await self._embed(query)
+        emb = await self._embed(query, as_query=True)
         if not emb or self.store is None:
             return "", []
 

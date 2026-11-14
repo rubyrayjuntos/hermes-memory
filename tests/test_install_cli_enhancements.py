@@ -37,6 +37,27 @@ class TestInstallCliEnhancements(unittest.TestCase):
         warm.assert_called_once_with("nomic-embed-text")
         self.assertIn("in-process", captured.getvalue())
 
+    def test_merge_env_file_clears_prior_embed_url_when_local(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text(
+                "HYBRID_AGE_DSN=postgres://x\n"
+                "HYBRID_AGE_EMBED_URL=http://127.0.0.1:11434/v1\n"
+                "HYBRID_AGE_EMBED_MODEL=nomic-embed-text\n",
+                encoding="utf-8",
+            )
+            install_cli.merge_env_file(path, {
+                "HYBRID_AGE_DSN": "postgres://x",
+                "HYBRID_AGE_EMBED_URL": "",
+                "HYBRID_AGE_EMBED_MODEL": "nomic-embed-text",
+            })
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("HYBRID_AGE_EMBED_URL=\n", text)
+            self.assertNotIn("11434", text)
+
     def test_ensure_local_embed_model_warns_on_failure(self):
         captured_err = io.StringIO()
         with patch("hermes_memory.embed.warm_local_embedder", side_effect=RuntimeError("no net")), \

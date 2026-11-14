@@ -632,9 +632,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.embed_url is not None:
         embed_url = args.embed_url.strip()
     elif args.yes:
-        # Unset = in-process. An existing HYBRID_AGE_EMBED_URL in the environment
-        # remains an intentional HTTP override (Ollama / OpenAI / etc.).
-        embed_url = (os.environ.get("HYBRID_AGE_EMBED_URL") or "").strip()
+        # Default install is in-process. Do not inherit a leftover Ollama URL from
+        # the process environment; pass --embed-url for an HTTP override.
+        embed_url = ""
     else:
         embed_url = _prompt(
             "HYBRID_AGE_EMBED_URL (empty = in-process fastembed)",
@@ -649,11 +649,11 @@ def main(argv: list[str] | None = None) -> int:
     updates = {
         **password_updates,
         "HYBRID_AGE_DSN": dsn,
+        # Always persist: empty clears a prior Ollama/OpenAI endpoint on reinstall.
+        "HYBRID_AGE_EMBED_URL": embed_url,
         "HYBRID_AGE_EMBED_MODEL": embed_model,
         "HYBRID_AGE_GRAPH": graph,
     }
-    if embed_url:
-        updates["HYBRID_AGE_EMBED_URL"] = embed_url
     parsed = urlparse(dsn)
     skill_dirs = (
         HERMES_HOME / "skills" / "librarian-setup",
@@ -713,6 +713,9 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["HYBRID_AGE_DSN"] = dsn
         if embed_url:
             os.environ["HYBRID_AGE_EMBED_URL"] = embed_url
+        else:
+            # Drop an inherited override so verify / warm use in-process.
+            os.environ.pop("HYBRID_AGE_EMBED_URL", None)
         os.environ.setdefault("HYBRID_AGE_EMBED_MODEL", embed_model)
         os.environ.setdefault("HYBRID_AGE_GRAPH", graph)
 
