@@ -13,6 +13,7 @@ from pathlib import Path
 
 from setuptools import setup
 from setuptools.command.build_py import build_py as _build_py
+from setuptools.command.sdist import sdist as _sdist
 
 ROOT = Path(__file__).resolve().parent
 
@@ -21,6 +22,7 @@ _spec = importlib.util.spec_from_file_location("hermes_build_info", ROOT / "herm
 _build_info_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_build_info_module)
 build_info = _build_info_module.build_info
+PIN_FILE = _build_info_module.PIN_FILE
 BUNDLE = ROOT / "src" / "hermes_memory" / "_bundle"
 SOURCES = ("docker", "sql/migrations", "scripts/migrate.py", "skills/librarian-setup")
 
@@ -40,4 +42,13 @@ class build_py(_build_py):
         super().run()
 
 
-setup(cmdclass={"build_py": build_py})
+class sdist(_sdist):
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        # The sdist has no .git, so record the commit it was made from for the wheel build.
+        info = build_info(ROOT)
+        if info["sha"] != "unknown":
+            (Path(base_dir) / PIN_FILE).write_text(json.dumps({"sha": info["sha"], "ref": info["ref"]}), encoding="utf-8")
+
+
+setup(cmdclass={"build_py": build_py, "sdist": sdist})

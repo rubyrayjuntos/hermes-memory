@@ -1,0 +1,8 @@
+# Source distribution must rebuild the wheel: the build helper, the bundled install
+# assets (copied by setup.py), and the plugin manifest.
+include setup.py hermes_build_info.py
+include scripts/migrate.py
+recursive-include docker *
+recursive-include sql/migrations *.sql
+recursive-include skills/librarian-setup *
+include src/hermes_memory/plugin.yaml
