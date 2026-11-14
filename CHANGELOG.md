@@ -20,6 +20,7 @@ versioning follows [SemVer](https://semver.org/).
 - Functional facts (lives in, works for, based in, …) keep an event-time history; corrections restore the previous value.
 - Write capture uses the new `durable_job` table; `write_outbox` is no longer written.
 - Graph expansion is owner-scoped: a path is kept only if one of its provenance turns belongs to this memory owner, and its provenance is trimmed to those turns (`Store.owned_turn_ids`).
+- Embeddings default to in-process fastembed/ONNX (`nomic-embed-text`, 768-d). Ollama is no longer a prerequisite; `hermes-memory-install` warms the local model instead of probing/pulling Ollama. Set `HYBRID_AGE_EMBED_URL` only for an optional HTTP override. Upgrading installs: remove a leftover `HYBRID_AGE_EMBED_URL=…11434…` from `.env` to switch off Ollama.
 
 ## [0.9.0] - 2026-11-14
 

@@ -28,7 +28,7 @@ GOLDEN = json.loads(
 
 
 class FakeEmbedder:
-    async def embed_text(self, text: str):
+    async def embed_text(self, text: str, *, as_query: bool = False):
         h = hashlib.sha256(text.encode("utf-8")).digest()
         vec = [0.0] * 768
         vec[0] = ((h[0] % 97) / 97.0) or 0.01

@@ -98,13 +98,14 @@ async def run_verify(dsn: Optional[str] = None,
 
     if must_embed:
         vec = await Embedder(cfg.embed_url, cfg.embed_model, cfg.embed_dim).embed_text(
-            "nomic embed ping"
+            "nomic embed ping", as_query=True
         )
         ok = vec is not None and len(vec) == cfg.embed_dim
+        backend = cfg.embed_url.strip() or "in-process"
         result.add(
-            "ollama embed 768-d",
+            "embed 768-d",
             ok,
-            f"url={cfg.embed_url} model={cfg.embed_model} dim={len(vec) if vec else 0}",
+            f"backend={backend} model={cfg.embed_model} dim={len(vec) if vec else 0}",
         )
         if not ok:
             return result

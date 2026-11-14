@@ -1,49 +1,118 @@
 """hermes_memory.embed — embedding client with the 768-dim invariant.
 
-``embed_text()`` returns a list of floats of exactly the configured dimension
-(default 768, matching ``vector(768)`` columns) or ``None``. It NEVER returns
-a wrong-dimension vector — callers can rely on ``vec is not None`` implying
-dimensionality.
+Default backend is in-process ``fastembed`` (ONNX ``nomic-ai/nomic-embed-text-v1.5``,
+768-d). No Ollama daemon is required. Set ``HYBRID_AGE_EMBED_URL`` to an
+OpenAI-compatible HTTP endpoint (Ollama, OpenAI, etc.) to override.
+
+``embed_text()`` / ``embed_texts()`` return vectors of exactly the configured
+dimension (default 768) or ``None``. They NEVER return a wrong-dimension
+vector — callers can rely on ``vec is not None`` implying dimensionality.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import List, Optional, Sequence
 
-from openai import AsyncOpenAI
-
 logger = logging.getLogger("hybrid_age.embed")
+
+# Stamp written to embed_model columns / trust_nomic_768 policy.
+STAMP_MODEL = "nomic-embed-text"
+# fastembed / Hugging Face id for the in-process ONNX model (768-d).
+LOCAL_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5"
+_LOCAL_ALIASES = {
+    "",
+    "nomic-embed-text",
+    "nomic-embed-text:latest",
+    "nomic-embed-text-v1.5",
+    LOCAL_MODEL_ID,
+}
+
+
+def is_local_embed_url(url: Optional[str]) -> bool:
+    """True when embeddings should run in-process (no HTTP client)."""
+    u = (url or "").strip().lower()
+    return u in ("", "local", "inprocess", "fastembed", "-")
+
+
+def resolve_local_model_id(model: str) -> str:
+    """Map config / Ollama-style names onto the fastembed model id."""
+    key = (model or "").strip()
+    if key.lower() in {a.lower() for a in _LOCAL_ALIASES} or not key:
+        return LOCAL_MODEL_ID
+    return key
 
 
 class Embedder:
-    """OpenAI-compatible embedding client (Ollama serves /v1 natively)."""
+    """768-d embedder: in-process fastembed by default, optional OpenAI-compatible HTTP."""
 
-    def __init__(self, url: str, model: str, dim: int = 768):
-        self.url = url
-        self.model = model
+    def __init__(self, url: Optional[str], model: str, dim: int = 768):
+        self.url = (url or "").strip()
+        self.model = model or STAMP_MODEL
         self.dim = dim
-        self.client = AsyncOpenAI(base_url=url, api_key=os.environ.get("HYBRID_AGE_EMBED_KEY", "ollama"))
+        self._local = is_local_embed_url(self.url)
+        self._fe = None  # lazy TextEmbedding
+        self.client = None
+        if not self._local:
+            from openai import AsyncOpenAI
 
-    async def embed_text(self, text: str) -> Optional[List[float]]:
+            self.client = AsyncOpenAI(
+                base_url=self.url,
+                api_key=os.environ.get("HYBRID_AGE_EMBED_KEY", "ollama"),
+            )
+
+    def _nomic_prefix(self, text: str, *, as_query: bool) -> str:
+        """nomic-embed-text-v1.5 requires search_query / search_document prefixes."""
+        if self._local and resolve_local_model_id(self.model) == LOCAL_MODEL_ID:
+            kind = "search_query: " if as_query else "search_document: "
+            if text.startswith("search_query:") or text.startswith("search_document:"):
+                return text
+            return kind + text
+        return text
+
+    def _ensure_fastembed(self):
+        if self._fe is not None:
+            return self._fe
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as exc:
+            raise RuntimeError(
+                "in-process embeddings require the 'fastembed' package "
+                "(pip install hermes-memory / fastembed)"
+            ) from exc
+        model_id = resolve_local_model_id(self.model)
+        logger.info("loading in-process embedder model=%s", model_id)
+        self._fe = TextEmbedding(model_name=model_id)
+        return self._fe
+
+    def _embed_local_sync(self, texts: Sequence[str]) -> List[Optional[List[float]]]:
+        model = self._ensure_fastembed()
+        # fastembed yields one vector per input in order.
+        vectors = list(model.embed(list(texts)))
+        out: List[Optional[List[float]]] = []
+        for vec in vectors:
+            arr = list(vec)
+            if len(arr) != self.dim:
+                logger.warning(
+                    "embedding dim mismatch: got %s expected %s — dropping",
+                    len(arr), self.dim,
+                )
+                out.append(None)
+            else:
+                out.append(arr)
+        return out
+
+    async def embed_text(self, text: str, *, as_query: bool = False) -> Optional[List[float]]:
         """Embed text; return None on any failure or dimension mismatch."""
         if not text or not text.strip():
             return None
-        try:
-            resp = await self.client.embeddings.create(model=self.model, input=text)
-            vec = resp.data[0].embedding
-        except Exception:
-            logger.warning("embed failed", exc_info=True)
-            return None
-        if not vec or len(vec) != self.dim:
-            logger.warning(
-                "embedding dim mismatch: got %s expected %s — dropping",
-                len(vec) if vec else 0, self.dim,
-            )
-            return None
-        return list(vec)
+        results = await self.embed_texts([text], as_query=as_query)
+        return results[0] if results else None
 
-    async def embed_texts(self, texts: Sequence[str]) -> List[Optional[List[float]]]:
+    async def embed_texts(
+        self, texts: Sequence[str], *, as_query: bool = False
+    ) -> List[Optional[List[float]]]:
         """Batch embed; one result per input (None on empty/failure/dim mismatch)."""
         if not texts:
             return []
@@ -52,17 +121,44 @@ class Embedder:
         index_map: List[int] = []
         for i, text in enumerate(texts):
             if text and str(text).strip():
-                payload.append(str(text))
+                payload.append(self._nomic_prefix(str(text), as_query=as_query))
                 index_map.append(i)
         if not payload:
             return out
+
+        if self._local:
+            try:
+                vectors = await asyncio.to_thread(self._embed_local_sync, payload)
+            except Exception:
+                logger.warning("local embed failed", exc_info=True)
+                return out
+            for orig_i, vec in zip(index_map, vectors):
+                out[orig_i] = vec
+            return out
+
+        assert self.client is not None
         try:
             resp = await self.client.embeddings.create(model=self.model, input=payload)
         except Exception:
             logger.debug("embed batch failed; falling back per item", exc_info=True)
-            for orig_i in index_map:
-                out[orig_i] = await self.embed_text(str(texts[orig_i]))
+            for j, orig_i in enumerate(index_map):
+                try:
+                    resp_one = await self.client.embeddings.create(
+                        model=self.model, input=payload[j]
+                    )
+                    vec = list(resp_one.data[0].embedding)
+                except Exception:
+                    logger.warning("embed failed", exc_info=True)
+                    continue
+                if len(vec) != self.dim:
+                    logger.warning(
+                        "embedding dim mismatch: got %s expected %s — dropping",
+                        len(vec), self.dim,
+                    )
+                    continue
+                out[orig_i] = vec
             return out
+
         data = list(resp.data)
         if len(data) == len(payload):
             pairs = list(zip(index_map, data))
@@ -86,6 +182,16 @@ class Embedder:
                 continue
             out[orig_i] = vec
         return out
+
+
+def warm_local_embedder(model: str = STAMP_MODEL, dim: int = 768) -> None:
+    """Download/cache the ONNX model (install-time / first-run warm)."""
+    emb = Embedder(url="", model=model, dim=dim)
+    emb._ensure_fastembed()
+    # One short embed forces weights into memory and validates dim.
+    vecs = emb._embed_local_sync([emb._nomic_prefix("warmup", as_query=False)])
+    if not vecs or vecs[0] is None:
+        raise RuntimeError("in-process embedder warm-up produced no vector")
 
 
 def vec_to_literal(vec: List[float]) -> str:

@@ -209,7 +209,9 @@ async def run(args) -> dict:
 
         # Ablation: raw vector top-k over the same store, before graph expansion and budget.
         # Run on the provider's own loop: its pool/connections are bound to that loop.
-        emb = prov._run(prov.embedder.embed_text(text), timeout=args.prefetch_timeout)
+        emb = prov._run(
+            prov.embedder.embed_text(text, as_query=True), timeout=args.prefetch_timeout
+        )
         seeds = prov._run(prov.store.vector_search(vec_to_literal(emb), cfg.vector_k, agent_identity=identity),
                           timeout=args.prefetch_timeout)
         raw = " ".join(str(s.get("content") or "") for s in seeds)

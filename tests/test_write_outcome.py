@@ -82,7 +82,7 @@ async def test_awrite_turn_insert_failure_records_writes_failed():
             raise RuntimeError("insert_turn exploded")
 
     class StubEmbedder:
-        async def embed_text(self, _text):
+        async def embed_text(self, _text, *, as_query: bool = False):
             return [0.0] * 768
 
     LEDGER.reset()
@@ -113,7 +113,7 @@ async def test_awrite_turn_flower_failure_is_graph_degraded():
             return []
 
     class StubEmbedder:
-        async def embed_text(self, _text):
+        async def embed_text(self, _text, *, as_query: bool = False):
             return [0.0] * 768
 
     LEDGER.reset()

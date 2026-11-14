@@ -5,6 +5,7 @@ Config surface per docs/plans/v0.1.md §3.2:
     # ~/.hermes/config.yaml
     hybrid_age:
       dsn_env: HYBRID_AGE_DSN            # secret/endpoint -> env only
+      # embed_url_env optional — unset = in-process fastembed (no Ollama)
       embed_url_env: HYBRID_AGE_EMBED_URL
       embed_model: nomic-embed-text      # behavior knobs -> yaml
       graph: hermes_knowledge
@@ -34,7 +35,8 @@ class HybridAgeConfig:
     """Resolved runtime configuration for the hybrid-age provider."""
 
     dsn: str = _DEFAULT_DSN
-    embed_url: str = "http://localhost:11434/v1"
+    # Empty = in-process fastembed (default). Set HYBRID_AGE_EMBED_URL for HTTP override.
+    embed_url: str = ""
     embed_model: str = "nomic-embed-text"
     graph: str = "hermes_knowledge"
     vector_k: int = 12
@@ -227,15 +229,19 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "embed_url",
-        "description": "OpenAI-compatible embeddings endpoint (Ollama serves http://localhost:11434/v1)",
+        "description": (
+            "Optional OpenAI-compatible embeddings endpoint. Leave unset for "
+            "in-process fastembed (nomic-embed-text, 768-d). Examples: "
+            "http://localhost:11434/v1 (Ollama) or https://api.openai.com/v1"
+        ),
         "secret": False,
         "required": False,
-        "default": "http://localhost:11434/v1",
+        "default": "",
         "env_var": "HYBRID_AGE_EMBED_URL",
     },
     {
         "key": "embed_model",
-        "description": "Embedding model name (must produce 768-dim vectors)",
+        "description": "Embedding model name (must produce 768-dim vectors; default nomic-embed-text)",
         "secret": False,
         "required": False,
         "default": "nomic-embed-text",

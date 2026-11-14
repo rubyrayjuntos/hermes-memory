@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.store, pytest.mark.integration]
 
 
 class StubEmbedder:
-    async def embed_text(self, _text):
+    async def embed_text(self, _text, *, as_query: bool = False):
         return [0.0] * 768
 
 

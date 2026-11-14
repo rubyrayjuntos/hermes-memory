@@ -35,11 +35,13 @@ A claim in §6 is a **proposal**, not a requirement, until it has a row in
 - Postgres 17 + `pgvector` + Apache AGE on one DSN. AGE holds `Session`/`Turn`/`NEXT` flower
   structure; the semantic graph (`noun`, `semantic_edge`, `mentions`) lives in plain Postgres
   tables, not AGE — this split is deliberate and is not being reopened (see §6).
-- Embeddings: `nomic-embed-text`, 768-dim, invariant. `embed_model`/`embed_dim` columns on
-  `conversations`, `memory_entries`, `doc_chunks` (landed V10); writes stamp them; wrong-dim
-  writes raise. Legacy rows without a stamp are treated as nomic/768 by explicit policy
-  (`trust_nomic_768`), not backfilled, not excluded — documented in `schema_guard`, the
-  `vector_search` docstring, README, and AGENTS.md.
+- Embeddings: `nomic-embed-text`, 768-dim, invariant. Default backend is in-process
+  fastembed/ONNX (no Ollama daemon); `HYBRID_AGE_EMBED_URL` opts into an OpenAI-compatible
+  HTTP endpoint. `embed_model`/`embed_dim` columns on `conversations`, `memory_entries`,
+  `doc_chunks` (landed V10); writes stamp them; wrong-dim writes raise. Legacy rows without
+  a stamp are treated as nomic/768 by explicit policy (`trust_nomic_768`), not backfilled,
+  not excluded — documented in `schema_guard`, the `vector_search` docstring, README, and
+  AGENTS.md.
 - Package: `hermes_memory`. Key modules: `provider.py` (Hermes `MemoryProvider` ABC),
   `store.py` (+ mixins, `store_claims.py`, `store_jobs.py`, SQL/Cypher access),
   `walk.py` (`beam_score`, graph expansion), `claim_walk.py` (bounded 2-hop typed facts traversal),
@@ -63,7 +65,7 @@ _enqueue_write({...})
     ▼
 Background drain on a dedicated asyncio loop thread
     │
-    ├─► embeddings.create(nomic-embed-text) → 768-dim vector or NULL (never wrong-dim)
+    ├─► embed(nomic-embed-text) → 768-dim vector or NULL (never wrong-dim; in-process by default)
     ├─► INSERT conversations / memory_entries (stamped embed_model/embed_dim)
     ├─► Session/Turn flower MERGE (AGE)
     ├─► extract_nouns + noun passports

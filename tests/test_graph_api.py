@@ -619,7 +619,7 @@ async def test_search_builds_hypotheses_only_from_conversation_passports():
     from hermes_memory.walk import WalkRow
 
     class FakeEmbedder:
-        async def embed_text(self, _text):
+        async def embed_text(self, _text, *, as_query: bool = False):
             return [1.0, 0.0]
 
     class FakeStore:
@@ -714,7 +714,7 @@ async def test_search_thresholds_before_expand_and_funnel():
     from hermes_memory.graph_api import Runtime
 
     class FakeEmbedder:
-        async def embed_text(self, _text):
+        async def embed_text(self, _text, *, as_query: bool = False):
             return [1.0, 0.0]
 
     class FakeStore:

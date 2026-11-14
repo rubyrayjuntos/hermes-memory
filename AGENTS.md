@@ -4,7 +4,7 @@ This file is auto-loaded by OpenCode for every agent and command in this repo. I
 
 ## What this repo is
 
-**The Hermes Librarian — `hermes-memory`** — a Postgres + Apache AGE + pgvector hybrid memory provider for Hermes Agent (`hybrid-age` provider). It provides durable vector semantic recall and graph topology traversal with prompt-context injection, running on `apache/age:release_PG17_1.6.0` + pgvector at `127.0.0.1:5450` via Ollama `nomic-embed-text` (768-dim).
+**The Hermes Librarian — `hermes-memory`** — a Postgres + Apache AGE + pgvector hybrid memory provider for Hermes Agent (`hybrid-age` provider). It provides durable vector semantic recall and graph topology traversal with prompt-context injection, running on `apache/age:release_PG17_1.6.0` + pgvector at `127.0.0.1:5450` with in-process `nomic-embed-text` embeddings (768-dim via fastembed/ONNX; optional `HYBRID_AGE_EMBED_URL` for HTTP/Ollama/OpenAI).
 
 Key files an agent should read for context:
 - `docs/specs/HERMES_MEMORY_SPEC.md` — narrative: what the machine is and why (NOW contracts, destination deltas). Do not quote §6 as `main`.
@@ -32,7 +32,7 @@ Key files an agent should read for context:
 - Legacy NULL `embed_model`/`embed_dim` is an explicit policy (`trust_nomic_768`): unstamped rows stay in ANN and are treated as nomic-embed-text/768. Do not treat NULL as the live config default when adding a second model.
 - AGE property syntax is `{key: 'value'}` (no JSON quotes); pre-declare labels via `create_vlabel`/`create_elabel` on a separate autocommit connection
 - `memory_entries` dedup is on `(agent_identity, target, md5(content))` — not on raw content; update via `metadata->>'file_path'` + `UPDATE`
-- Ollama `nomic-embed-text` is 768-dim; never mix dimensions; chunk safely (<6K chars) with shrinking retries
+- Embeddings are `nomic-embed-text` 768-dim (in-process fastembed by default); never mix dimensions; chunk safely (<6K chars) with shrinking retries
 - Use `MERGE` not `CREATE` for graph vertices/edges; bridge table `memory_chunk_nodes` links `memory_entries` chunks to AGE vertices
 
 ## SECURITY — applies to every agent
