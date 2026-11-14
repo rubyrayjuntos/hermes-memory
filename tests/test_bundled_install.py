@@ -138,3 +138,11 @@ def test_build_provenance_uses_the_pinned_commit_when_there_is_no_git(tmp_path):
     bare = tmp_path / "bare"
     bare.mkdir()
     assert build_meta.build_info(bare)["sha"] == "unknown"
+
+
+def test_pin_file_keeps_dirty_state_so_an_sdist_from_a_dirty_tree_is_still_refused(tmp_path):
+    """Codex P2: a dirty checkout's sdist must not become a clean-looking wheel."""
+    import hermes_build_info as build_meta
+
+    (tmp_path / build_meta.PIN_FILE).write_text(json.dumps({"sha": "c" * 40, "ref": "x", "dirty": True}), encoding="utf-8")
+    assert build_meta.build_info(tmp_path)["dirty"] is True

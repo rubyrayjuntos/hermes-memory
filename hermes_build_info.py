@@ -30,7 +30,8 @@ def build_info(root: Path) -> dict:
         if pin.is_file():
             data = json.loads(pin.read_text(encoding="utf-8"))
             pinned = str(data["sha"])
-            return {"sha": pinned, "ref": str(data.get("ref") or pinned[:12]), "dirty": False}
+            return {"sha": pinned, "ref": str(data.get("ref") or pinned[:12]),
+                    "dirty": bool(data.get("dirty", False))}
         return {"sha": "unknown", "ref": "unknown", "dirty": False}
     exact_tag = _git(root, "describe", "--tags", "--exact-match", "HEAD")
     dirty = bool(_git(root, "status", "--porcelain", "--untracked-files=no"))

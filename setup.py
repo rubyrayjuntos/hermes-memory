@@ -48,7 +48,8 @@ class sdist(_sdist):
         # The sdist has no .git, so record the commit it was made from for the wheel build.
         info = build_info(ROOT)
         if info["sha"] != "unknown":
-            (Path(base_dir) / PIN_FILE).write_text(json.dumps({"sha": info["sha"], "ref": info["ref"]}), encoding="utf-8")
+            record = {"sha": info["sha"], "ref": info["ref"], "dirty": info["dirty"]}
+            (Path(base_dir) / PIN_FILE).write_text(json.dumps(record), encoding="utf-8")
 
 
 setup(cmdclass={"build_py": build_py, "sdist": sdist})
