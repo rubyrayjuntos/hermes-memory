@@ -443,6 +443,42 @@ async def repair_drift_on_conn(conn) -> int:
     return len(keys)
 
 
+FACT_VEC_DIM = 768
+
+
+async def claims_missing_vectors(conn, owner: str, claim_ids: Sequence[int]) -> list[tuple[int, str]]:
+    """(claim_id, fact_text) for this owner's grounded current claims that still lack a vector."""
+    if not claim_ids:
+        return []
+    rows = await conn.fetch(
+        "SELECT claim_id, fact_text FROM claims WHERE owner = $1 AND claim_id = ANY($2::bigint[]) "
+        "AND status = 'grounded' AND valid_to IS NULL AND fact_text IS NOT NULL AND fact_vec IS NULL "
+        "ORDER BY claim_id", owner, [int(i) for i in claim_ids])
+    return [(int(r["claim_id"]), r["fact_text"]) for r in rows]
+
+
+async def write_fact_vectors(conn, rows: Sequence[tuple[int, list[float]]], embed_model: str) -> int:
+    """Store fact vectors and stamp embed_model; returns how many claims were updated.
+
+    Every vector is length-checked before any write. Only rows still eligible
+    (grounded, current, text present, vector empty) are touched, so a claim that
+    was superseded after its text was read keeps a null vector. Never writes `valid`.
+    """
+    for claim_id, vec in rows:
+        if len(vec) != FACT_VEC_DIM:
+            raise ValueError(f"fact vector for claim {claim_id} has {len(vec)} dimensions, expected {FACT_VEC_DIM}")
+    from .embed import vec_to_literal
+    written = 0
+    async with conn.transaction():
+        for claim_id, vec in rows:
+            status = await conn.execute(
+                "UPDATE claims SET fact_vec = $2::vector, embed_model = $3 WHERE claim_id = $1 "
+                "AND status = 'grounded' AND valid_to IS NULL AND fact_text IS NOT NULL AND fact_vec IS NULL",
+                int(claim_id), vec_to_literal(vec), embed_model)
+            written += int(str(status).split()[-1])
+    return written
+
+
 class StoreClaimsMixin:
     """Pool-holding wrappers over the module functions."""
 
