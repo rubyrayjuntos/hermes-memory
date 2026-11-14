@@ -339,7 +339,13 @@ async def reresolve(conn, owner: str, entity_ids: set[int]) -> set[TimelineKey]:
         if (new_sub, new_obj) == (int(r["subject_id"]), r["object_key"]):
             continue
         moves.append((r, vrec, new_sub, new_obj))
-    for lock_owner, subject_id, verb in sorted({(owner, new_sub, r["verb"]) for r, _, new_sub, _ in moves}):
+    # A move takes evidence off the old subject's timeline and puts it on the new one,
+    # so both are locked here, in one sorted acquisition, before any update.
+    lock_set = set()
+    for r, _, new_sub, _ in moves:
+        lock_set.add((owner, int(r["subject_id"]), r["verb"]))
+        lock_set.add((owner, new_sub, r["verb"]))
+    for lock_owner, subject_id, verb in sorted(lock_set):
         await lock_timeline(conn, lock_owner, subject_id, verb)
     for r, vrec, new_sub, new_obj in moves:
         clash = await conn.fetchval(
@@ -365,11 +371,13 @@ async def unmerge_unjustified(conn, owner: str) -> set[TimelineKey]:
         "SELECT e.id, e.merged_into FROM entity e WHERE e.owner = $1 AND e.merged_into IS NOT NULL "
         "AND NOT EXISTS (SELECT 1 FROM entity_alias a WHERE a.owner = e.owner AND a.entity_id = e.merged_into "
         "AND a.surface_norm = e.name_norm AND a.state = 'live' AND a.source IN ('equation', 'manual'))", owner)
-    keys: set[TimelineKey] = set()
+    if not rows:
+        return set()
+    affected: set[int] = set()
     for r in rows:
         await conn.execute("UPDATE entity SET merged_into = NULL WHERE owner = $1 AND id = $2", owner, r["id"])
-        keys |= await reresolve(conn, owner, {int(r["id"]), int(r["merged_into"])})
-    return keys
+        affected |= {int(r["id"]), int(r["merged_into"])}
+    return await reresolve(conn, owner, affected)
 
 
 class StoreClaimsMixin:
