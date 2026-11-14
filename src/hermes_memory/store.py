@@ -38,6 +38,7 @@ from .schema_guard import expected_versions_for_head_check, missing_versions
 from .store_claims import StoreClaimsMixin
 from .store_concepts import StoreConceptsMixin
 from .store_expand import StoreExpandMixin
+from .store_jobs import StoreJobsMixin
 from .store_merge import StoreMergeMixin
 from .store_vec import _cosine_similarity, _parse_pgvector  # noqa: F401
 
@@ -269,7 +270,7 @@ def hnsw_ef_search_sql(ef: int) -> str:
 OUTBOX_MAX_ATTEMPTS = 5  # replays before a write_outbox row is parked
 
 
-class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMixin):
+class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMixin, StoreJobsMixin):
     """Async data access over the pgvector + AGE schema."""
 
     def __init__(
@@ -721,99 +722,6 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMi
                 keys,
             )
         return [dict(r) for r in rows]
-
-    # -- durable write outbox (V16) -------------------------------------------------
-
-    async def outbox_add(
-        self, agent_identity: str, item: Dict[str, Any], claimed_by: str, op_id: str,
-    ) -> tuple[int, int] | None:
-        """Record a captured write, claimed by this process, and return (id, fence).
-
-        op_id is unique: a retried or late-committing record returns the existing row.
-        None means the row was already settled (done) by another path.
-        """
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "INSERT INTO write_outbox (agent_identity, item, claimed_by, claimed_at, op_id, fence) "
-                "VALUES ($1, $2::jsonb, $3, now(), $4, 1) "
-                "ON CONFLICT (op_id) WHERE op_id IS NOT NULL DO NOTHING RETURNING id, fence",
-                agent_identity, json.dumps(item), claimed_by, op_id,
-            )
-            if row is None:
-                row = await conn.fetchrow("SELECT id, fence FROM write_outbox WHERE op_id = $1", op_id)
-        return (int(row["id"]), int(row["fence"])) if row is not None else None
-
-    async def outbox_counts(self) -> dict[str, int]:
-        """Pending rows (still replayable) and parked rows (failed OUTBOX_MAX_ATTEMPTS times)."""
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT count(*) FILTER (WHERE attempts < $1)::int AS pending, "
-                "count(*) FILTER (WHERE attempts >= $1)::int AS parked FROM write_outbox",
-                OUTBOX_MAX_ATTEMPTS,
-            )
-        return {"pending": int(row["pending"]), "parked": int(row["parked"])}
-
-    async def outbox_done(self, outbox_id: int, fence: int) -> bool:
-        """Delete a settled row. Only the current lease holder (fence) may do so."""
-        async with self.pool.acquire() as conn:
-            status = await conn.execute(
-                "DELETE FROM write_outbox WHERE id = $1 AND fence = $2", int(outbox_id), int(fence))
-        return str(status).endswith(" 1")
-
-    async def outbox_unclaim(self, outbox_id: int, fence: int, error: str | None = None) -> bool:
-        """Hand a row back for replay (full queue, failed write). Fenced like done."""
-        async with self.pool.acquire() as conn:
-            status = await conn.execute(
-                "UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL, "
-                "last_error = coalesce($3, last_error) WHERE id = $1 AND fence = $2",
-                int(outbox_id), int(fence), error,
-            )
-        return str(status).endswith(" 1")
-
-    async def outbox_release(self, claimed_by: str) -> int:
-        """Release every claim held by one process (shutdown)."""
-        async with self.pool.acquire() as conn:
-            status = await conn.execute(
-                "UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL WHERE claimed_by = $1",
-                claimed_by,
-            )
-        try:
-            return int(str(status).split()[-1])
-        except (ValueError, IndexError):
-            return 0
-
-    async def outbox_claim_stale(
-        self, claimed_by: str, limit: int, *, min_age_s: float = 30.0,
-        stale_claim_s: float = 600.0, max_attempts: int = OUTBOX_MAX_ATTEMPTS,
-    ) -> list[tuple[int, int, Dict[str, Any]]]:
-        """Claim rows nobody is working on: unclaimed (or claim abandoned) and old
-        enough not to be a live enqueue. SKIP LOCKED keeps concurrent processes
-        from claiming the same row. Rows past max_attempts stay parked."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                UPDATE write_outbox o
-                   SET claimed_by = $1, claimed_at = now(), attempts = o.attempts + 1,
-                       fence = o.fence + 1
-                 WHERE o.id IN (
-                       SELECT id FROM write_outbox
-                        WHERE (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => $3))
-                          AND created_at < now() - make_interval(secs => $4)
-                          AND attempts < $5
-                        ORDER BY id
-                        LIMIT $2
-                        FOR UPDATE SKIP LOCKED)
-                RETURNING o.id, o.fence, o.item
-                """,
-                claimed_by, int(limit), float(stale_claim_s), float(min_age_s), int(max_attempts),
-            )
-        out: list[tuple[int, int, Dict[str, Any]]] = []
-        for r in rows:
-            item = r["item"]
-            if isinstance(item, str):
-                item = json.loads(item)
-            out.append((int(r["id"]), int(r["fence"]), dict(item)))
-        return out
 
     async def previous_turn_before(self, agent_identity: str, session_id: str, ts: str) -> int | None:
         """Latest stored turn for this owner and session captured before ``ts``.

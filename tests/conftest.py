@@ -204,7 +204,7 @@ async def clean_hermes_test_db(db_pool):
             TRUNCATE conversations, memory_entries, memory_chunk_nodes,
                      doc_chunks, librarian_runs, semantic_edge, noun,
                      claims, claim_evidence, entity, entity_alias, turn_entity,
-                     uptakes, aliases, data_migrations
+                     uptakes, aliases, data_migrations, durable_job
                      RESTART IDENTITY CASCADE;
             """
         )
@@ -215,7 +215,7 @@ async def clean_hermes_test_db(db_pool):
             TRUNCATE conversations, memory_entries, memory_chunk_nodes,
                      doc_chunks, librarian_runs, semantic_edge, noun,
                      claims, claim_evidence, entity, entity_alias, turn_entity,
-                     uptakes, aliases, data_migrations
+                     uptakes, aliases, data_migrations, durable_job
                      RESTART IDENTITY CASCADE;
             """
         )

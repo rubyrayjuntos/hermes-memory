@@ -12,7 +12,7 @@ pytestmark = [pytest.mark.store, pytest.mark.integration]
 
 async def _reset(db_pool) -> None:
     async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM write_outbox")
+        await conn.execute("DELETE FROM durable_job WHERE kind = 'capture'")
 
 
 @pytest.mark.asyncio
@@ -35,8 +35,8 @@ async def test_parked_rows_are_not_claimed_and_are_counted(db_pool, store, clean
     await _reset(db_pool)
     oid, _ = await store.outbox_add("alice", {"type": "turn", "content": "poison"}, "seed", "op-poison")
     async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL, attempts = $2 WHERE id = $1",
-                           oid, OUTBOX_MAX_ATTEMPTS)
+        await conn.execute("UPDATE durable_job SET status = 'pending', claimed_by = NULL, lease_expires_at = NULL, "
+                           "attempts = $2 WHERE id = $1", oid, OUTBOX_MAX_ATTEMPTS)
     assert await store.outbox_claim_stale("proc-a", 10, min_age_s=0) == []
     assert await store.outbox_counts() == {"pending": 0, "parked": 1}
 
@@ -70,7 +70,7 @@ async def test_a_stale_worker_cannot_settle_a_row_someone_else_reclaimed(db_pool
     await _reset(db_pool)
     oid, fence_a = await store.outbox_add("alice", {"type": "turn"}, "proc-a", "op-lease")
     async with db_pool.acquire() as conn:  # proc-a's lease has expired
-        await conn.execute("UPDATE write_outbox SET claimed_at = now() - interval '1 hour', "
+        await conn.execute("UPDATE durable_job SET lease_expires_at = now() - interval '1 second', "
                            "created_at = now() - interval '1 hour' WHERE id = $1", oid)
     [(rid, fence_b, _)] = await store.outbox_claim_stale("proc-b", 5)
     assert rid == oid and fence_b > fence_a

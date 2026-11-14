@@ -170,4 +170,5 @@ def test_provider_init_checks_schema_head() -> None:
 
 def test_head_versions_include_claims_evidence() -> None:
     assert "V18" in CONSUMER_HEAD_VERSIONS
+    assert "V19" in CONSUMER_HEAD_VERSIONS
 
