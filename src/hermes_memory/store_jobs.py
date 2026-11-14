@@ -60,7 +60,8 @@ class StoreJobsMixin:
 
     async def job_claim(self, kind: str, worker: str, limit: int, *, lease_s: float,
                         min_age_s: float = 0.0, max_attempts: int = JOB_MAX_ATTEMPTS,
-                        session_ordered: bool = False) -> list[tuple[int, int, dict]]:
+                        session_ordered: bool = False,
+                        defer_backfill: bool = False) -> list[tuple[int, int, dict]]:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
@@ -85,13 +86,17 @@ class StoreJobsMixin:
                                      WHERE e.owner = c.owner AND e.kind = c.kind
                                        AND e.session_id = c.session_id AND e.status IN {_LIVE}
                                        AND (e.event_time, e.id) < (c.event_time, c.id)))
+                              AND (NOT $8::boolean OR c.priority = 0 OR NOT EXISTS (
+                                    SELECT 1 FROM durable_job l
+                                     WHERE l.kind = c.kind AND l.priority = 0
+                                       AND l.status IN {_LIVE}))
                             ORDER BY c.priority, c.event_time NULLS LAST, c.id
                             LIMIT $7
                             FOR UPDATE SKIP LOCKED)
                     RETURNING j.id, j.fence, j.payload
                     """,
                     kind, worker, float(lease_s), float(min_age_s), int(max_attempts),
-                    bool(session_ordered), int(limit))
+                    bool(session_ordered), int(limit), bool(defer_backfill))
         return [(int(r["id"]), int(r["fence"]), _payload(r["payload"])) for r in rows]
 
     async def job_heartbeat(self, job_id: int, fence: int, lease_s: float) -> bool:

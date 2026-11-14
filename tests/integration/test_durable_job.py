@@ -83,3 +83,24 @@ async def test_v19_copies_pending_outbox_rows_and_is_idempotent(db_pool, clean_h
             "SELECT op_id, status FROM durable_job WHERE kind = 'capture' AND owner = 'alice'")}
         assert rows == {"op-legacy": "pending", "op-poison": "failed"}
         assert await conn.fetchval("SELECT count(*) FROM write_outbox") == 0
+
+
+@pytest.mark.asyncio
+async def test_defer_backfill_holds_priority_jobs_while_a_live_job_is_open(store, clean_hermes_test_db):
+    await store.job_add("alice", "extract_rules", "op-live", {"n": "live"}, priority=0)
+    await store.job_add("alice", "extract_rules", "op-backfill", {"n": "backfill"}, priority=10)
+    claimed = await store.job_claim("extract_rules", "w", 10, lease_s=60, defer_backfill=True)
+    assert [p["n"] for _, _, p in claimed] == ["live"]
+    [(live_id, live_fence, _)] = claimed
+    # The live job is still leased, so backfill stays held.
+    assert await store.job_claim("extract_rules", "w", 10, lease_s=60, defer_backfill=True) == []
+    assert await store.job_done(live_id, live_fence) is True
+    second = await store.job_claim("extract_rules", "w", 10, lease_s=60, defer_backfill=True)
+    assert [p["n"] for _, _, p in second] == ["backfill"]
+
+
+@pytest.mark.asyncio
+async def test_defer_backfill_off_claims_both(store, clean_hermes_test_db):
+    await store.job_add("alice", "extract_rules", "op-live", {}, priority=0)
+    await store.job_add("alice", "extract_rules", "op-backfill", {}, priority=10)
+    assert len(await store.job_claim("extract_rules", "w", 10, lease_s=60)) == 2
