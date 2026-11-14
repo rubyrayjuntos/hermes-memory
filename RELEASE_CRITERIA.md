@@ -2,7 +2,7 @@
 
 This is a **destination**, not a status label and not a roadmap.
 
-`pyproject.toml` `0.1.0` and README **Alpha, local trust** describe *where we are*.
+`pyproject.toml` `0.9.0` and README **Alpha, local trust** describe *where we are*.
 This file says what **done** means, on two independent tracks plus one
 **derived** seam (Observability & Control), at two bars.
 
@@ -60,14 +60,14 @@ telemetry is most of the *view* half; it is not 75% of a view-and-control pane.
 
 ## Criteria
 
-Status column is a **snapshot against `origin/main` @ `58e2662` (2026-09-08)** (merges #75–#81). Delivery Met *landing* evidence for `D-MVP-5/6/7` remains `207e635`. Installed-pin table below is still pin `8c3e0de` on `:5452` (reinstall to pick up HEAD). Documents `:5450` / `hermes_memory` for the large graph.
+Status column is a **snapshot against `origin/main` @ `58e2662` (2026-09-08)** (merges #75–#81). Delivery Met *landing* evidence for `D-MVP-5/6/7` remains `207e635`. Installed-pin table below records pin `8c3e0de` on `:5452` as of 2026-09-07; the live install is now a bundled build (see `~/.hermes/plugins/hybrid-age/.hermes-memory-version`). Documents `:5450` / `hermes_memory` for the large graph.
 Re-check before treating a row as closed. Execution state, not opinion.
 Narrative (why a row exists) is [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/HERMES_MEMORY_SPEC.md) §5;
 **Open/Met lives only in this table.** `*-PROD-*` rows are out of the MVP cut.
 
 | ID | Track | Bar | Criterion | Why it is a row (already surfaced) | Status @ 58e2662 |
 |----|-------|-----|-----------|------------------------------------|------------------|
-| `D-MVP-1` | Delivery | MVP | **Turn-drain writes** fail loud **or** are durably marked. L0 never raises. L1 = no row + process `writes_failed` (accepted loss). L2 = row + `embed_null`. L3 = row + `drain_status='graph_degraded'`. Scope is `insert_turn` / flower / nouns / mentions. Mentions dim-mismatch and ingest stamps are `D-MVP-6` / `D-MVP-7`. | Silent loss was the original lie. | **Met** for this narrowed drain. Installed path: 4/4 turns `drain_status='complete'`; `/api/health` `writes_failed=0` `embed_null=0` `graph_degraded=0`. The two named holes are **Met** at `207e635` (`D-MVP-6`/`D-MVP-7`). |
+| `D-MVP-1` | Delivery | MVP | **Turn-drain writes** fail loud **or** are durably marked. L0 never raises. L1 = no row + process `writes_failed` (accepted loss). L2 = row + `embed_null`. L3 = row + `drain_status='graph_degraded'`. Scope is `insert_turn` / flower / nouns / mentions. Mentions dim-mismatch and ingest stamps are `D-MVP-6` / `D-MVP-7`. | Silent loss was the original lie. | **Met** for this narrowed drain. Installed path: 4/4 turns `drain_status='complete'`; `/api/health` `writes_failed=0` `embed_null=0` `graph_degraded=0`. The two named holes are **Met** at `207e635` (`D-MVP-6`/`D-MVP-7`). Note (2026-11-14, `e1f2e53`): failed turn inserts are now retried from the V16 `write_outbox` (up to 5 replay attempts, then the row is parked); "accepted loss" in the L1 clause no longer describes the behavior. Status unchanged. |
 | `D-MVP-2` | Delivery | MVP | Boot refuses to start on schema drift (`apply_pending_migrations` then `Store.require_schema_head`). | Compose init is first-boot only; live migrate is a backstop. | **Met.** Installed plugin has no copied `sql/` tree. Head check is `CONSUMER_HEAD_VERSIONS` vs live `migration_history` (`8c3e0de`). |
 | `D-MVP-3` | Delivery | MVP | CI on every merge runs the write-path tests (L1/L3 names collectable; `integration or store or idempotent` including `test_drain_status`). | A red `main` with “36 passed” is not a green write path until the failure is opened. | **Met** on `origin/main` `207e635` — CI [34187637800](https://github.com/rubyrayjuntos/hermes-memory/actions/runs/34187637800) success (ruff+mypy, property 3.11/3.12, integration). PR CI for #76: [34183424291](https://github.com/rubyrayjuntos/hermes-memory/actions/runs/34183424291). |
 | `D-MVP-4` | Delivery | MVP | One scoring function in-tree (`beam_score`). No dead competing formulas. | Four-formula split-brain. | **Met** (also `RQ-MVP-1`) |
@@ -77,7 +77,7 @@ Narrative (why a row exists) is [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/
 | `D-PROD-1` | Delivery | Production | Fleet-safe: revisit `DEPLOY_TOPOLOGY.rolling_deploy` vs `head_check=expected_not_applied_only`. Topology today is one provider + optional pane, not a rolling fleet. | Flipping one without the other is a known foot-gun (`AGENTS.md`). | **Open** — current topology is loopback / single-node by design. |
 | `D-PROD-2` | Delivery | Production | CD runs migrations against live, not boot-time backstop only. | GitHub CD does not migrate live. | **Open** |
 | `D-PROD-3` | Delivery | Production | Auth on the ports that are not loopback-only; secrets handling remains file-local (no `.env` in git). | Alpha binds `127.0.0.1:5450` / `:7890`. Loopback is not an auth story. | **Open** as Production. Loopback bind is an Alpha control, not this row. |
-| `D-PROD-4` | Delivery | Production | Versioned release tags whose changelog matches `pyproject.toml`. | Tag `v0.1.0` (2026-08-24); `main` is ahead; package still `0.1.0`. | **Open** — changelog exists; version/tag have not caught `main`. |
+| `D-PROD-4` | Delivery | Production | Versioned release tags whose changelog matches `pyproject.toml`. | Tags `v0.1.0` (2026-08-24) and `v0.9.0`; `v0.9.0` matches `pyproject.toml` version `0.9.0` and its changelog section. `main` has commits after `v0.9.0` (CHANGELOG `[Unreleased]`). | **Open** — changelog exists; version/tag have not caught `main`. |
 | `RQ-MVP-1` | Retrieval Quality | MVP | One named, documented scoring function (`beam_score` in walk / architecture / manifold spec). | Same split-brain as `D-MVP-4`. | **Met.** [#72](https://github.com/rubyrayjuntos/hermes-memory/issues/72) (adjacent-only mention chains + `MAX_NOUNS=5`) is an RQ *construction* ceiling, **not** an MVP ship-blocker and **not** a second scoring formula. Do not promote #72 into Delivery/OC because it has an issue number. |
 | `RQ-MVP-2` | Retrieval Quality | MVP | Synthetic ANN / verify path passes in CI (`hermes-memory-verify`, walk/score tests). This proves the *pipe*, not that recall is good. | Needed so Delivery hardening cannot ship a broken retriever unnoticed. | **Met** as mechanism smoke on `207e635` CI [34187637800](https://github.com/rubyrayjuntos/hermes-memory/actions/runs/34187637800). **Not** a quality floor. Installed-path recall: `/api/librarian/search?q=Nightingale` on `:5452` returned conv 5–8. |
 | `RQ-PROD-1` | Retrieval Quality | Production | Live-shaped golden set with human-judged expected memories, a defined bar, enforced in CI. | Spec Injection-Hit ≥ 0.85 is advisory until that set exists (≥50 was the sprint gate). `assert_live_shaped_eval_allowed` must keep refusing while the V9 gap remains. | **Open** — must not be locked yet. |
@@ -94,7 +94,7 @@ Narrative (why a row exists) is [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/
 
 ## Installed-path evidence (2026-09-07) — `:5452` / `hermes_memory_installed`
 
-Pin `8c3e0de` (`~/.hermes/plugins/hybrid-age/.hermes-memory-version`, `ref=origin/main`, `installed_at=2026-09-07T21:15:53Z`). Fresh install, not an editable clone. `pip show` → site-packages. Pane on `127.0.0.1:7890`.
+Pin `8c3e0de` (`~/.hermes/plugins/hybrid-age/.hermes-memory-version`, `ref=origin/main`, `installed_at=2026-09-07T21:15:53Z`) at the time of this table. The live install has since been replaced by a bundled build; for its current pin see `~/.hermes/plugins/hybrid-age/.hermes-memory-version`. Fresh install, not an editable clone. `pip show` → site-packages. Pane on `127.0.0.1:7890`.
 
 | Check | Result |
 |-------|--------|
@@ -220,7 +220,7 @@ Not evidence of Met for any user-facing row. Level 6 needs a human-observed
 transcript (`DEFINITION_OF_DONE.md`). Remaining release blockers:
 
 - No human-observed transcript of a clean install on a machine without a prior Hermes runtime.
-- No release tag that contains the bundled installer. `v0.1.0` predates it, so the pip install path has nothing to install until a tag is cut (`D-PROD-4`).
+- Resolved: tag `v0.9.0` contains the bundled installer (PRs #87–#89). `v0.1.0` predates it (`D-PROD-4`).
 - `OC-MVP-3` and `OC-MVP-4` remain Open and need level-6 artifacts.
 
 ## Document changelog
@@ -230,3 +230,4 @@ transcript (`DEFINITION_OF_DONE.md`). Remaining release blockers:
 | 1.1 | 2026-09-05 | 2026-11-13 | Codex | Add disposable release-gate readiness and explicit live isolation blocker; no criteria status changes. |
 | 1.2 | 2026-09-05 | 2026-11-13 | Claude | Record the automated isolated lifecycle run and its defect fixes; no criteria status changes. |
 | 1.3 | 2026-09-05 | 2026-11-14 | Claude | Add current install, dependency and memory-scope evidence and list remaining release blockers; no status changes. |
+| 1.4 | 2026-09-05 | 2026-11-14 | Claude | Note V16 outbox retry under `D-MVP-1`; record tag `v0.9.0` (matches `pyproject.toml` 0.9.0) under `D-PROD-4` and in the blocker list; point the installed pin at the bundled build's version file. No status changes. |

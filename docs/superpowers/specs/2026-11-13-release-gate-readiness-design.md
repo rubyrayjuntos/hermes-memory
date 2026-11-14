@@ -1,6 +1,10 @@
 # Release-gate readiness — design
 
-**Status:** approved for implementation.
+**Status:** approved for implementation; implemented (see `docs/superpowers/plans/2026-11-13-release-gate-readiness.md`).
+
+> **Note (2026-11-14):** The clone-first contract was superseded by bundled wheel installs (PRs #87–#89): a pip-installed package installs from its bundled build; checkouts keep the Git-pinned path.
+
+> **Open item (2026-11-14):** Non-interactive uninstall without --force calls input() and raises EOFError instead of refusing cleanly (uninstall_cli.py).
 
 **Intent:** make the clone-first `hybrid-age` provider installable and removable without targeting unrelated data, and provide a disposable-environment gate that proves the lifecycle before a release.
 
@@ -72,3 +76,4 @@ Unit tests use temporary homes and fake command binaries to prove target resolut
 | Version | Created | Modified | Author | Notes |
 |---|---|---|---|---|
 | 0.1 | 2026-11-13 | 2026-11-13 | OpenAI Codex | Approved repository-first release-gate design. |
+| 0.2 | 2026-11-13 | 2026-11-14 | Claude | Noted that bundled wheel installs (PRs #87–#89) superseded the clone-first contract; added uninstall EOFError open item. |

@@ -1,3 +1,5 @@
+> **Historical.** Superseded by docs/specs/HERMES_MEMORY_SPEC.md. Many statements here (RLS, OpenAI-primary embeddings, AGE Cypher expansion, port 5440, Prometheus metrics) do not describe the current system.
+
 # Hermes Persistent Memory & Prompt Context Injection Specification
 
 ## Technical Specification & Implementation Roadmap for Hybrid pgvector \+ Apache AGE Integration

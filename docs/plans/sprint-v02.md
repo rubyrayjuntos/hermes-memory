@@ -1,6 +1,6 @@
 # Sprint: Persistent Memory & Prompt Context Injection (v0.2 kickoff)
 
-**Spec:** [`docs/specs/persistent-memory-spec.md`](persistent-memory-spec.md) (canonical, amended)
+**Spec:** [`docs/specs/persistent-memory-spec.md`](../specs/persistent-memory-spec.md) (historical; the current narrative spec is [`docs/specs/HERMES_MEMORY_SPEC.md`](../specs/HERMES_MEMORY_SPEC.md))
 **Process:** same gauntlet — one implementer, spec review → quality review → delta re-review
 **Runs in parallel with:** Phase-2 production install (`phase2-install.md`)
 

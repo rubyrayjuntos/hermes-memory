@@ -58,7 +58,7 @@ Copy `CANONICAL_NAMES` from `legacy/scripts/graph_taxonomy.py` into `extract_nou
 - Consumes: nothing from later tasks
 - Produces: `extract_nouns(text: str, *, existing_labels: Sequence[str] = (), synthetic_session: bool = False) -> list[NounMention]` where `NounMention` is a dataclass `label: str, type: str | None, conf: float, mention_index: int`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 from hermes_memory.extract_nouns import extract_nouns
@@ -99,21 +99,21 @@ def test_synthetics_on_synthetic_session():
     assert extract_nouns("Project Zephyr and Atlas Vault Engine", synthetic_session=True) == []
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_extract_nouns.py -v`
 Expected: FAIL (module not found)
 
-- [ ] **Step 3: Implement `extract_nouns.py`**
+- [x] **Step 3: Implement `extract_nouns.py`**
 
 Include: `_slug`, seeded `CANONICAL_NAMES` (copy keys from `legacy/scripts/graph_taxonomy.py`), `SCHEMA_DENYLIST = frozenset({"id","src","tgt","conf","noun_id","chunk_id","session_id","turn_id","vertex_id","e_src_vec","e_tgt_vec","provenance_turns","magnitude","polarity","verb_type"})` compared slug/lowercase **exact**. Surfaces: backticks, identifier tokens, acronyms ≥2, 2–4 token multiword. Attach via slug + aliases + `existing_labels`. First-mint: collapse whitespace, do not Title-Case identifiers. `conf` table from spec §6.4. Floor 0.3. Quota 5 by `(-conf, mention_index)` then **re-sort kept rows by `mention_index`** for F chain order. `short_term_is_real` logic as in `legacy/scripts/graph_taxonomy.py`. No LLM. No cosine typo-fold.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_extract_nouns.py tests/test_extract_concepts.py tests/property/test_p3_p4_phrase_extraction.py -v`
 Expected: PASS (or P3/P4 file deleted)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hermes_memory/extract_nouns.py tests/test_extract_nouns.py tests/test_extract_concepts.py tests/property/test_p3_p4_phrase_extraction.py
@@ -141,7 +141,7 @@ EOF
   - `consensus_decay(*, empty_incident: bool, local_dir: float, query_dir: float, hop: int, lam: float = 0.05) -> float`
   - `beam_score(*, sim: float, src_align: float, tgt_align: float, prov_boost: float, decay: float, magnitude: float) -> tuple[float, float, float]` → `(c, composite, score)` with `c = src_align * tgt_align`, `score = composite * (magnitude / 8.0)`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 from hermes_memory.walk import beam_score, consensus_decay, provenance_boost, clamp_cos
@@ -169,21 +169,21 @@ def test_score_scales_by_magnitude_over_eight():
     assert abs(half - 0.5 * score) < 1e-9
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_walk.py -v`
 Expected: FAIL (module not found)
 
-- [ ] **Step 3: Implement `walk.py` per spec §7.2**
+- [x] **Step 3: Implement `walk.py` per spec §7.2**
 
 Empty incident must **not** compute `local_dir * query_dir`. Non-empty: `exp(-lam * hop * (1.0 - local_dir * query_dir))` with `hop` in `{1, 2}`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `pytest tests/test_walk.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hermes_memory/walk.py tests/test_walk.py
@@ -209,7 +209,7 @@ EOF
 - Consumes: live `conversations.id BIGSERIAL`
 - Produces: `noun`, `semantic_edge`, altered `memory_chunk_nodes`, HNSW on `conversations.embedding` and `semantic_edge.e_src_vec`
 
-- [ ] **Step 1: Write failing assertions in `test_migrate_idempotent.py`**
+- [x] **Step 1: Write failing assertions in `test_migrate_idempotent.py`**
 
 ```python
 @pytest.mark.asyncio
@@ -244,12 +244,12 @@ async def test_v9_noun_passport_indexes(migrated_db, db_pool):
         assert typ == "bigint"
 ```
 
-- [ ] **Step 2: Run to verify fail (V9 missing)**
+- [x] **Step 2: Run to verify fail (V9 missing)**
 
 Run: `pytest tests/test_migrate_idempotent.py::test_v9_noun_passport_indexes --migrate -v`
 Expected: FAIL (relation noun does not exist) or assertion on indexes
 
-- [ ] **Step 3: Write V9 and mirror into init**
+- [x] **Step 3: Write V9 and mirror into init**
 
 `V9__noun_passport_semantic_edge.sql` must include (idempotent):
 
@@ -302,12 +302,12 @@ CREATE INDEX IF NOT EXISTS idx_conversations_embedding
 
 Mirror the same objects in `02_schema.sql` / `03_indexes.sql` for fresh volumes. Do **not** add a generated midpoint column. Do **not** backfill AGE Concepts.
 
-- [ ] **Step 4: Run migrate + tests**
+- [x] **Step 4: Run migrate + tests**
 
 Run: `python scripts/migrate.py --dsn "$HERMES_TEST_DSN"` then `pytest tests/test_migrate_idempotent.py --migrate -v`
 Expected: V9 applied once; second run 0 applied; new test PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add sql/migrations/V9__noun_passport_semantic_edge.sql sql/init/02_schema.sql sql/init/03_indexes.sql tests/test_migrate_idempotent.py
@@ -337,23 +337,23 @@ EOF
 
 Do **not** add a `bridge_turn` without `noun_id` for new conversation writes.
 
-- [ ] **Step 1: Write failing integration tests** (`pytest.mark.store`, `--migrate`)
+- [x] **Step 1: Write failing integration tests** (`pytest.mark.store`, `--migrate`)
 
 Insert two nouns, one turn id `1` (use a real `conversations` insert), `write_passports` two rows same `chunk_id` different `noun_id`. Assert two rows. Second `write_passports` updates `conf`. `upsert_mentions_chain` one pair; repeat with higher conf; assert `magnitude` capped at 8 after enough repeats; `e_src_vec` unchanged (compare first 4 floats).
 
-- [ ] **Step 2: Run to verify fail**
+- [x] **Step 2: Run to verify fail**
 
 Run: `pytest tests/integration/test_manifold_writes.py --migrate -v`
 Expected: FAIL (`upsert_noun` missing)
 
-- [ ] **Step 3: Implement store methods** using parameterized SQL (`$1`…), not string-concatenated identifiers for data. `vec_to_literal` from `embed.py` for vectors.
+- [x] **Step 3: Implement store methods** using parameterized SQL (`$1`…), not string-concatenated identifiers for data. `vec_to_literal` from `embed.py` for vectors.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `pytest tests/integration/test_manifold_writes.py --migrate -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hermes_memory/store.py tests/integration/test_manifold_writes.py
@@ -377,18 +377,18 @@ EOF
 - Consumes: `extract_nouns`, `Store.upsert_noun`, `write_passports`, `upsert_mentions_chain`, `insert_turn`, AGE flower MERGE already in store
 - Produces: drain stages A–F as spec §5. Queue item includes `previous_conversation_id`. `self._last_turn_id: dict[str, int]` updated after B. C reads **only** `item["previous_conversation_id"]` (no SQL lookup in C).
 
-- [ ] **Step 1: Write failing tests** in `tests/integration/test_turn_write_contract.py`
+- [x] **Step 1: Write failing tests** in `tests/integration/test_turn_write_contract.py`
 
 Use a fake embedder: `async def embed_text(text)` returns a 768-d vector from `hash(text) % 97` scaled, or `None` when `text == "__fail__"`. Call the provider drain helper or `Store`+extracted stages through a small test seam `async def write_turn_item(provider, item)` if `_awrite_item` stays private — tests may call `_awrite_item` on a constructed provider with fake embedder and test pool.
 
 Cases from spec §10.2: two identifiers mention-order; embed None → F skipped; empty extract → zero passports; no AGE `Concept` created (Cypher count ABOUT from this session’s turns stays 0). `chunk_id` starts with `conv_` and `source='conversation'`.
 
-- [ ] **Step 2: Run to verify fail**
+- [x] **Step 2: Run to verify fail**
 
 Run: `pytest tests/integration/test_turn_write_contract.py --migrate -v`
 Expected: FAIL (ABOUT linker still writes Concepts, or new methods unused)
 
-- [ ] **Step 3: Implement A–F**
+- [x] **Step 3: Implement A–F**
 
 In `_awrite_item` for `type=="turn"`:
 1. A: `vec = await embedder.embed_text(content)`
@@ -402,12 +402,12 @@ In `_awrite_item` for `type=="turn"`:
 
 Delete ABOUT scoring (`SNAP_COSINE` gating of concepts) from this path. Leave file ingest IMPORTS untouched.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `pytest tests/integration/test_turn_write_contract.py --migrate -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hermes_memory/provider.py tests/integration/test_turn_write_contract.py
@@ -435,25 +435,25 @@ EOF
 
 Keep a thin wrapper if old tests pass `seed_vertex_ids: Sequence[int]`: empty list / unused AGE path must return `[]` and not Cypher-walk ABOUT.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Two nouns, one `mentions` edge, one hypothesis on src, `q_vec` aligned with `e_src_vec`. Assert `rel == "mentions"`, `w == magnitude`, `c >= 0`, `score == (0.4*sim + 0.4*c*prov + 0.2*decay) * (magnitude/8)` within 1e-6. Hypothesis session B must not appear in returned audit sidecar if you attach `session_id` on a parallel dict — at minimum child tuples must not swap session. Empty hypotheses → `[]`.
 
-- [ ] **Step 2: Run to verify fail**
+- [x] **Step 2: Run to verify fail**
 
 Run: `pytest tests/integration/test_expand_mentions.py --migrate -v`
 Expected: FAIL (old Cypher expand still returns AGE vertices)
 
-- [ ] **Step 3: Implement beam in `expand_graph`**
+- [x] **Step 3: Implement beam in `expand_graph`**
 
 SQL: outgoing edges `WHERE src_noun = $1 AND verb_type = 'mentions'`. Consensus: other `mentions` with `last_active_turn` in window `seed_turn_id - 32`. L2-normalize `e_tgt_vec` before mean. Use `walk.py`. Width: hop1 `limit=max(k*4,16)`; hop2 dest cap 32, `limit=max(k*2,8)`. Drop `score < 0.05`. Prefetch `_expand_paths`: for each conversation seed, `passports_for_conversations`, build hypotheses, call `expand_graph`. Stats line: SQL counts turns/nouns/mentions — **not** `a ABOUT`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `pytest tests/integration/test_expand_mentions.py tests/test_store.py --migrate -v`
 Expected: PASS (old expand tests updated to empty-int → `[]`)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hermes_memory/store.py src/hermes_memory/provider.py tests/integration/test_expand_mentions.py tests/test_store.py
@@ -468,6 +468,8 @@ EOF
 ---
 
 ### Task 7: `/search` packing, catalog, prefixes
+
+> **Partial:** the catalog does not load the latest Turns from AGE; /search is not owner-scoped and embeds a different query than prefetch. See design §13.
 
 **Files:**
 - Modify: `src/hermes_memory/graph_api.py` (`pack_search`, `_asearch`, `_agraph_3d` / catalog)
@@ -537,23 +539,23 @@ EOF
 - Consumes: prefixed ids and `mentions` edges from `/api/librarian/search` and catalog graph JSON
 - Produces: default view with legend Session / Turn / Noun; caption **co-occurrence (mention order)**; no ABOUT/Concept; ghosts off on load; `3d.html` not advertised
 
-- [ ] **Step 1: Write a failing characterization test** if one exists for copy; otherwise add `tests/property/test_edge_filter.py` updates: default visible labels include `mentions`; ABOUT is not required. Do not keep tests that treat ABOUT as the conversation semantic edge.
+- [x] **Step 1: Write a failing characterization test** if one exists for copy; otherwise add `tests/property/test_edge_filter.py` updates: default visible labels include `mentions`; ABOUT is not required. Do not keep tests that treat ABOUT as the conversation semantic edge.
 
-- [ ] **Step 2: Run to see current ABOUT assumptions fail or skip**
+- [x] **Step 2: Run to see current ABOUT assumptions fail or skip**
 
 Run: `pytest tests/property/test_edge_filter.py -v`
 
-- [ ] **Step 3: Edit fountain default state**
+- [x] **Step 3: Edit fountain default state**
 
 `AppState.level = 1` locked for ship (ignore stored L2–L4 or clamp). Do not fetch `/api/librarian/graph/ghost` on load. Legend: mentions ≠ thematic purple ABOUT. Click edge shows `w`, `c`, decay, score. Empty catalog copy: seed in chat.
 
 README: replace ABOUT write-path with A–F; walk formula = spec composite × magnitude/8; pane URL unchanged; do not list `3d.html` as the inspector.
 
-- [ ] **Step 4: Grep guard**
+- [x] **Step 4: Grep guard**
 
 Run: `rg -n "ABOUT|Concept" README.md docs/graph/fountain.html` and fix remaining **ship** copy. Legacy `3d.html` may still mention ABOUT; do not advertise it.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/graph/fountain.html README.md tests/property/test_edge_filter.py
@@ -576,7 +578,7 @@ EOF
 - Consumes: Tasks 4–6 (write + walk)
 - Produces: Hypothesis test that two text session ids sharing a canonical label never bleed passports
 
-- [ ] **Step 1: Write the failing property test**
+- [x] **Step 1: Write the failing property test**
 
 ```python
 from hypothesis import given, settings
@@ -597,19 +599,19 @@ async def test_two_sessions_one_noun_no_bleed(label, db_pool, store, fake_embedd
 
 Fill the body using `write_passports` / `upsert_mentions_chain` if full provider is heavy; still assert AGE NEXT for A excludes B turn vids.
 
-- [ ] **Step 2: Run to verify fail** if isolation not wired
+- [x] **Step 2: Run to verify fail** if isolation not wired
 
 Run: `pytest tests/property/test_passport_isolation.py --migrate -v`
 Expected: FAIL until child hypotheses keep parent `session_id`
 
-- [ ] **Step 3: Fix walker if the test finds a swap** (do not “fix” by splitting nouns)
+- [x] **Step 3: Fix walker if the test finds a swap** (do not “fix” by splitting nouns)
 
-- [ ] **Step 4: Run full related suite**
+- [x] **Step 4: Run full related suite**
 
 Run: `pytest tests/test_extract_nouns.py tests/test_walk.py tests/integration/test_turn_write_contract.py tests/integration/test_expand_mentions.py tests/property/test_passport_isolation.py tests/test_migrate_idempotent.py --migrate -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/property/test_passport_isolation.py src/hermes_memory/store.py

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+`main` and branch work since tag `v0.9.0`.
+
+### Added
+- Retrieval eval harness for the provider (`scripts/eval_memory.py`, PR #90).
+- Durable write outbox (V16 `write_outbox`): `sync_turn` / `on_memory_write` record each write before queuing it; a full queue defers to the outbox instead of dropping; leftover rows replay at start and every 30 s with `SKIP LOCKED` claims; shutdown releases claims; replays carry `outbox_id` into row metadata so a turn is not written twice. V16 is in the installed head check.
+- Harness metrics: entity coverage, cross-owner leakage, and a burst/shutdown/replay durability mode (`--durability N`).
+
+### Changed
+- Graph expansion is owner-scoped: a path is kept only if one of its provenance turns belongs to this memory owner, and its provenance is trimmed to those turns (`Store.owned_turn_ids`).
+
 ## [0.9.0] - 2026-11-14
 
 Pre-release for human-observed install testing. Not a public release.
@@ -13,19 +25,6 @@ Pre-release for human-observed install testing. Not a public release.
 - Plugin manifest (`plugin.yaml`) declares dependencies; `hermes memory setup hybrid-age` admits them into Hermes's runtime.
 - `hybrid_age.memory_scope` (default `shared`): one memory per profile across chat sessions; `session` restores per-chat isolation.
 - Disposable release gate (`scripts/release_gate.py`) and an isolated live lifecycle (`--execute`).
-
-### Fixed
-- Uninstall: compose shutdown needs the interpolation variable; no longer calls a nonexistent `hermes restart`; `--keep-db` keeps the password its volume needs.
-- Verify cleanup removes claim rows before synthetic conversations (RESTRICT foreign keys).
-- Provider loads in the gateway (dependency admission) and no longer logs failed imports for CLI modules.
-- Shared memory is owned per profile, so profiles on one database do not merge memories.
-- Source distributions and checkout installs keep the pinned commit and dirty state.
-
-## [Unreleased]
-
-`main` since tag `v0.9.0`.
-
-### Added
 - Fountain live inspector (`docs/graph/fountain.html`) via `hermes-memory-api` on `127.0.0.1:7890`.
 - First-time install CLI (`hermes-memory-install`) plus upgrade / migrate / uninstall / backfill.
 - Instrumented prefetch / injection cockpit and graph path expansion (#59).
@@ -51,6 +50,11 @@ Pre-release for human-observed install testing. Not a public release.
 - Rewrote ABOUT recency integration as mentions + magnitude ranking (`test_expand_graph_stronger_mentions_ranks_first`); mentions decay stays in `store_expand` / walk tests.
 
 ### Fixed
+- Uninstall: compose shutdown needs the interpolation variable; no longer calls a nonexistent `hermes restart`; `--keep-db` keeps the password its volume needs.
+- Verify cleanup removes claim rows before synthetic conversations (RESTRICT foreign keys).
+- Provider loads in the gateway (dependency admission) and no longer logs failed imports for CLI modules.
+- Shared memory is owned per profile, so profiles on one database do not merge memories.
+- Source distributions and checkout installs keep the pinned commit and dirty state.
 - Prefetch fencing so Hermes sanitize keeps SEED/Path (#58).
 - Graph search packing, live graph name, concept embed batching (#59 review).
 
@@ -89,3 +93,4 @@ First tagged release. Six kanban cards ([docs/plans/board.md](docs/plans/board.m
 | Version | Created | Modified | Author | Notes |
 |---|---|---|---|---|
 | 1.1 | 2026-08-24 | 2026-11-13 | Codex | Record packaging and lifecycle contract documentation. |
+| 1.2 | 2026-08-24 | 2026-11-14 | Claude | Put `[Unreleased]` above `[0.9.0]`; moved items already in tag `v0.9.0` into the 0.9.0 section; added eval harness and Phase 0 entries. |

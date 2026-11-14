@@ -1,6 +1,6 @@
 # Conversation manifold — design
 
-**Status:** draft for review. Implementation is gated on approval of this file.
+**Status:** Implemented in PR #67 (`f2681a7`) with later divergences; see §13 Reconciliation (2026-11-14).
 
 **Date:** 2026-09-03
 
@@ -27,6 +27,8 @@ Success for this slice: a handful of real chats produce `conversations` rows, Tu
 ---
 
 ## 2. Non-goals
+
+> **Superseded (proposal) by** docs/superpowers/specs/2026-11-14-graph-layer-design.md (2026-11-14). Kept for history. This applies only to the "LLM extraction in the drain loop" non-goal below.
 
 - Dual semantic topology (AGE `Concept`/`ABOUT` **and** `noun`/`semantic_edge` for the same switches).
 - A second table named `bridge`. Passports extend `memory_chunk_nodes`.
@@ -202,6 +204,8 @@ AGE stays SAVEPOINT-isolated. Manifold SQL runs after **B** commits. D+E one txn
 
 ## 6. Noun extraction
 
+> **Superseded (proposal) by** docs/superpowers/specs/2026-11-14-graph-layer-design.md (2026-11-14). Kept for history.
+
 **Job:** from one message, produce ≤5 `(label, type?, conf)` in **mention order** for stage D. Empty list is valid.
 
 Not this section: minting thematic `ABOUT` / `USES` edges (later verb pass). Cosine to the turn does not decide whether a noun exists. `SNAP_COSINE` and `_ABOUT_PATTERN` retire on the conversation path.
@@ -264,6 +268,8 @@ Pure Python + regex in the drain. No LLM. Alias table is data, not Cypher.
 ---
 
 ## 7. Walker
+
+> **Superseded (proposal) by** docs/superpowers/specs/2026-11-14-graph-layer-design.md (2026-11-14). Kept for history.
 
 **Job:** ANN on `conversations.embedding` → passports → `mentions` beam → one 7-tuple. Fountain only draws it. Prefetch `_expand_paths` and `GET /api/librarian/search` call the same `expand_graph`.
 
@@ -372,6 +378,8 @@ Seed conversations are list rows (excerpt, `sim`, `chunk_id = conv_{id}`), not A
 If pane search and prefetch selected **different turns**, that is a bug. The pane dump **must** keep scores and Cypher; prefetch **must not**.
 
 ### 8.2.1 Injection surfaces
+
+> **Superseded (proposal) by** docs/superpowers/specs/2026-11-14-graph-layer-design.md (2026-11-14). Kept for history.
 
 | Artifact | Function | Contents |
 |---|---|---|
@@ -584,3 +592,37 @@ Primary code surfaces (for the later plan, not to start now):
 - README pane copy: `mentions` as co-occurrence; stats without ABOUT; `3d.html` unlisted
 
 Do not modify `.github/workflows/`, `.opencode/`, `opencode.json`, or `AGENTS.md` as part of this work unless a later human PR says so.
+
+---
+
+## 13. Reconciliation (2026-11-14)
+
+This section records where the code differs from this design as of branch `phase0/scoping-durability` (HEAD `e1f2e53`). The sections above are kept as written.
+
+### 13.1 Divergences and partial implementations
+
+| Section | Design says | Code does | Where |
+|---|---|---|---|
+| §5 | Queue carries `previous_conversation_id` so NEXT links the prior turn | The value is overwritten from in-memory `_last_turn_id` at drain time. Replayed or restarted items lose NEXT. | `src/hermes_memory/provider.py` |
+| §5 | Secrets are stripped before embed | Not implemented. Secrets are filtered only at recall (`SECRET_RE`). Raw content is stored. | `src/hermes_memory/provider.py` |
+| §5.1 | F provenance keeps up to 32 turn ids | Capped at the oldest 32 turns (`prov[:32]`). Later turns are never recorded. | `src/hermes_memory/store.py` |
+| §7.1 | `min_similarity` 0.72 | Default is 0.55. | `src/hermes_memory/config.py` |
+| §7.2 | Consensus window falls back to the latest 32 turns globally when the seed turn is unknown | Fallback is missing. | `src/hermes_memory/store_expand.py` |
+| §8.1 | Catalog does not compute its own score | The catalog computes a second score. | `src/hermes_memory/graph_view.py` |
+| §8.2 | `/search` and prefetch call the same path | `/search` is not owner-scoped and embeds `q[:800]`; prefetch embeds an enriched query truncated to `QUERY_TOKEN_CAP` tokens. They can pick different turns. | `src/hermes_memory/graph_runtime.py`, `src/hermes_memory/provider.py` |
+| §8.2.1 | Hops resolve turn bodies into `prompt.rendered` | Prefetch renders with `format_span_injection`, which ignores graph paths. The walk does not reach the prompt. | `src/hermes_memory/provider_helpers.py` |
+| §9.1, §2 | No Concept backfill; MERGE Concept/ABOUT stops after cutover | `hermes-memory-backfill-about` still writes AGE Concept/ABOUT. `scripts/replay_conversation_manifold.py --live` backfills C–F onto historical turns. | `scripts/` |
+| §9.5 | V10 IMPORTS time-box | Not done. Ingest still writes AGE `IMPORTS`. | `src/hermes_memory/ingest.py` |
+| §10.4 | Test that prefetch and `/search` pick the same turns | No such test. | `tests/` |
+| §10.5 | Test comparing `sql/init` against V9 | No such test. | `tests/` |
+
+### 13.2 Implemented beyond this spec
+
+- V11 `drain_status` on `conversations`.
+- Reception stage between B and C: V12–V15 (spans, claims, uptake, claim canons/aliases, claim status, live key).
+- A dedupe hit at B skips C–F.
+- V16 `write_outbox`: durable write record with replay.
+- Owner-scoped graph paths (`_owner_scoped_paths`, `Store.owned_turn_ids`).
+- Provenance-first `format_span_injection` as the prompt renderer.
+- Junk-fragment filter in noun extraction.
+- `noun_hop` endpoint in the pane API (`graph_http.py`, `graph_view.py`, `graph_runtime.py`).

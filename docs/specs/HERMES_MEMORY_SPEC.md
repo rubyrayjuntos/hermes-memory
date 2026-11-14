@@ -7,7 +7,7 @@ Status of each release row lives only in [`RELEASE_CRITERIA.md`](../../RELEASE_C
 `queue_prefetch`, which is not in the tree). The destination PDF and
 `HERMES_MEMORY_OVERALL_SPEC.md` are retired as standalone files.
 
-**Last verified against:** `origin/main` @ `58e2662` (narrative).
+**Last verified against:** `phase0/scoping-durability` @ `e1f2e53` (narrative; `origin/main` plus Phase 0, migration V16).
 Open/Met cells: [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) only.
 If code and this spec disagree, the code is right and this document is stale —
 fix the document, not the belief.
@@ -54,8 +54,9 @@ A claim in §6 is a **proposal**, not a requirement, until it has a row in
 sync_turn(user_content, assistant_content, session_id)
     │
     ▼
-_enqueue_write({...})                         [returns immediately]
-    │
+_enqueue_write({...})
+    │   record item in write_outbox (V16)       [blocks the caller up to 2 s]
+    │   put_nowait on the in-memory queue
     ▼
 Background drain on a dedicated asyncio loop thread
     │
@@ -66,11 +67,26 @@ Background drain on a dedicated asyncio loop thread
     └─► SQL mentions chain (semantic_edge)
 ```
 
-- Non-blocking: `asyncio.Queue(maxsize=256)`; overflow drops and increments a **process-local**
-  ledger counter. **A restart zeros this ledger — it is not Postgres.** This is an explicit MVP
-  non-goal (see `RELEASE_CRITERIA.md`), not a bug to fix inside this document.
-- `shutdown()` drains ≤5s and closes the pool.
-- Secrets filtered by regex before embed/write.
+- Outbox first: `sync_turn` and `on_memory_write` record each write in the V16 `write_outbox`
+  table before queuing it (`_record_outbox`, `OUTBOX_ADD_TIMEOUT_S = 2.0` in `provider.py`).
+  This runs on Hermes's thread and can block the caller up to 2 s when the database is slow.
+  If the outbox insert fails, the write stays in memory only and the failure is logged.
+- Queue: `asyncio.Queue(maxsize=256)`. A full queue hands the outbox row back for replay instead
+  of dropping it. `dropped_writes` counts only writes whose outbox record itself failed. That
+  counter is **process-local** — a restart zeros it. This is an explicit MVP non-goal (see
+  `RELEASE_CRITERIA.md`), not a bug to fix inside this document.
+- Replay: leftover outbox rows (full queue, shutdown, crash, failed write) are replayed at start
+  and every 30 s (`OUTBOX_REPLAY_INTERVAL_S`). `Store.outbox_claim_stale` claims rows with
+  `FOR UPDATE SKIP LOCKED`, so two processes do not replay the same row. A replayed turn carries
+  `outbox_id` into its row metadata, and `insert_turn` checks it, so a turn is never written
+  twice. The drain deletes the outbox row once the write has landed.
+- `shutdown()` drains ≤5s, releases this process's outbox claims (`outbox_release`), and closes
+  the pool.
+- Rows that fail 5 replay attempts stay parked in `write_outbox`. **Open item:** parked rows are
+  not yet surfaced in `Runtime.health()` or `hermes-memory-verify`.
+- Secrets: **write-path secret filtering is not implemented.** Raw content is stored in
+  `conversations` and `write_outbox`. Secrets are filtered only at recall/injection (`SECRET_RE`
+  in `provider.py`). **Open item.**
 
 ### Write-failure policy (L0–L6)
 
@@ -80,7 +96,7 @@ and what the ledger must record.
 | Layer | Scope | Swallow? | Outcome |
 |-------|-------|----------|---------|
 | L0 | Hermes `prefetch`, `sync_turn`, `on_memory_write` | Yes — never raise | `prefetch` returns `""`; writes enqueue or `DROPPED` |
-| L1 | Durable SQL insert/upsert | Caught once in drain | **No row — accepted loss.** Not `FAILED` as a status; there is nothing to mark or replay. Process `writes_failed` increments. Proven on real Postgres (`NOT NULL` reject → zero rows) — see `D-MVP-1`. |
+| L1 | Durable SQL insert/upsert | Caught once in drain | No row yet. Process `writes_failed` increments and the outbox row is handed back with `last_error`; replay retries it up to 5 attempts, then the row stays parked in `write_outbox`. No longer accepted loss (V16). The `NOT NULL` reject test on real Postgres still proves no partial row — see `D-MVP-1`. |
 | L2 | Embed | Yes — NULL vector is first-class | Row `drain_status='embed_null'`; SQL insert still happens |
 | L3 | Graph flower / nouns / mentions | Yes, after SQL success (L1) | Row `drain_status='graph_degraded'`. Queryable via `SELECT drain_status`, not just a ledger int. |
 | L4 | SAVEPOINT MERGE helpers | Yes, savepoint only | `logger.warning`, not debug |
@@ -118,10 +134,33 @@ site (`schema_guard`, V11 header, `bench.load_golden_set`) plus a test
   `DEPLOY_TOPOLOGY["rolling_deploy"] = False`; the same dict carries
   `DEPLOY_TOPOLOGY["head_check"] = "expected_not_applied_only"` with a comment that flipping
   `rolling_deploy` to `True` makes this check insufficient — read together, not two greps apart.
-- V8, V9, V10, V11 exist in `sql/migrations/`. V9's gap (Sep 1–3, 2026, live only) left
+- V8–V16 exist in `sql/migrations/`. V12–V15 add the reception stage (spans, claims, uptake,
+  claim canons/aliases, `claims_status`, claim live key); V16 adds `write_outbox`.
+  `schema_guard.CONSUMER_HEAD_VERSIONS` is `("V1", "V9", "V10", "V11", "V16")`. V9's gap (Sep 1–3, 2026, live only) left
   conversations with zero graph presence — not corrupted, but structurally absent from the
   mentions mesh for that window. **Any live-shaped eval must exclude or explicitly account
   for that window** (see `RQ-PROD-1` / `RQ-PROD-2`).
+
+### Install path
+
+- A pip-installed package (wheel) installs from its bundled build (`bundled.py`); `--ref` is
+  refused there. A Git checkout keeps the Git-pinned path (`require_git_checkout`,
+  `default_release_ref` in `install_cli.py`).
+- `src/hermes_memory/plugin.yaml` declares `pip_dependencies`, which `hermes memory setup
+  hybrid-age` admits into Hermes's runtime. The list must match `[project].dependencies` in
+  `pyproject.toml` (`tests/test_bundled_install.py`).
+
+### Memory scope
+
+`hybrid_age.memory_scope` (`config.py`, default `shared`) sets the memory owner
+(`agent_identity`) through `resolve_agent_identity`:
+
+- `shared`: one owner per Hermes profile, derived from `hermes_home` (`profile_owner`: the
+  profile name under `.../profiles/<name>`, else `default`). Every chat session in that profile
+  reads and writes the same memory. A caller that names its own owner (verify, tests) keeps it.
+- `session`: per-chat owner from the gateway session key, for per-chat isolation.
+
+This is application-level isolation, not Postgres row-level security.
 
 ---
 
@@ -133,9 +172,10 @@ prefetch(query)
     ▼
 Synchronous. Never raises. Does the FULL retrieve — there is no cache.
     │
-    ├─► Embed query (nomic, [:800] chars)
+    ├─► Embed enriched query (nomic, truncated to QUERY_TOKEN_CAP = 2048 tokens, tokens.py)
     ├─► vector_search: vector_k=12, drop similarity < 0.55, drop SECRET_RE
-    ├─► Graph expansion via beam_score (walk.py)
+    ├─► Graph expansion via beam_score (walk.py), owner-scoped paths
+    │     (paths are computed but not rendered; see below)
     ├─► Budget ≤1200 tokens
     └─► format_span_injection → fenced <memory> block (grounded / unconfirmed)
 ```
@@ -182,6 +222,18 @@ target is read by multiple model profiles (Nemotron, Grok, Claude Opus, GPT-5.5,
 and `cl100k_base` is exact only for GPT-4-class tokenizers. No per-profile token counting exists
 yet; the 90% margin is deliberate slack, not a solved measurement (`RQ-PROD-3`).
 
+### Graph expansion: owner-scoped, not rendered
+
+Expansion is owner-scoped: `_owner_scoped_paths` (`provider.py`) keeps a path only if at least
+one of its provenance turns belongs to this memory owner (`Store.owned_turn_ids`), and trims its
+provenance to those turns. `noun`, `semantic_edge`, and passports themselves are shared across
+owners.
+
+Current behavior: the rendered prompt does not use the paths. `format_span_injection` ignores
+graph paths, so the walk does not reach the prompt. **Open item.** `GET /api/librarian/search`
+is not owner-scoped and embeds `q[:800]` (`graph_runtime.py`), so it can pick different turns
+than prefetch.
+
 ### What exists vs the PDF “epistemic notice”
 
 **NOT ON MAIN — proposal only.** There is no `<epistemic_notice status="partial_coverage">`
@@ -194,7 +246,7 @@ labels `high relevance` vs `related` (`_relevance_word` only). Grep: that consta
 read by Fountain, debug injection, or any second meaning. That 0.65 is **not** the PDF
 notice. Timeout and exception still return `""` with no notice. See §6.
 
-### Provenance-first packing (wip/span-pack-reception, pending merge)
+### Provenance-first packing
 
 `format_injection` (seeds + verbalized `"You previously linked …"` path notes) is
 superseded at the prefetch call site by `format_span_injection`
@@ -373,9 +425,8 @@ Track **this session** vs **`origin/main` CI** as separate claims.
 ## 10. Explicit Non-Goals (MVP)
 
 - Human-judged live-shaped eval as a merge blocker.
-- Rolling-deploy / multi-tenant / RLS.
+- Rolling-deploy / multi-tenant / RLS. Isolation is `hybrid_age.memory_scope` (application-level owner, §2), not RLS.
 - Durable process ledger across restart (`drain_status` on the row is the durable fact).
-- Persisting L1 failures as rows (accepted-loss policy).
 - A `READ_FAILED` Kind for `prefetch`.
 - A 50ms p95 gate on live `prefetch()`.
 - Treating the PDF epistemic notice, bi-temporal columns, or pre-compress V2 as present.

@@ -147,7 +147,7 @@ LEDGER = WriteLedger()  # process singleton
 - Consumes: existing drain control flow; do not change A–F SQL/Cypher.
 - Produces: `LEDGER` for Wave 2b health merge.
 
-- [ ] **Step 1: Failing tests** in `tests/test_write_outcome.py`:
+- [x] **Step 1: Failing tests** in `tests/test_write_outcome.py`:
 
 ```python
 from hermes_memory.write_outcome import Kind, Stage, WriteOutcome, WriteLedger
@@ -175,8 +175,8 @@ def test_graph_degraded_after_ok_sql():
 
 Also add provider-level tests (new functions in the same file or `test_provider_helpers.py`) that call `LEDGER.reset()` then drive `_awrite_turn` with a stub store whose `insert_turn` raises, and assert `LEDGER.counts()["writes_failed"] == 1`. Stub embedder returns a 768-list so EMBED is OK. Second test: `insert_turn` succeeds, `_link_turn_flower` raises, assert `graph_degraded >= 1` and no `writes_failed`.
 
-- [ ] **Step 2:** `pytest tests/test_write_outcome.py -q` fails (module missing).
-- [ ] **Step 3:** Implement `write_outcome.py`. Wire `LEDGER.record` at:
+- [ ] **Step 2:** `pytest tests/test_write_outcome.py -q` fails (module missing). (not verifiable from history)
+- [x] **Step 3:** Implement `write_outcome.py`. Wire `LEDGER.record` at:
   - QueueFull → `Stage.ENQUEUE, Kind.DROPPED` (keep `_dropped_writes` in sync or derive from ledger).
   - embed except / `vec is None` after try → `EMBED, EMBED_NULL`.
   - `insert_turn` except or `conv_id is None` → `SQL_TURN, FAILED` then return.
@@ -185,9 +185,9 @@ Also add provider-level tests (new functions in the same file or `test_provider_
   - mentions except → `MENTIONS, GRAPH_DEGRADED`.
   - memory SQL path except → `MEMORY_SQL, FAILED`.
   - Successful stages may record `OK` (optional; counts() ignores OK).
-- [ ] **Step 4:** Prefetch / sync_turn still never raise. `_initialized` behavior unchanged.
-- [ ] **Step 5:** `pytest tests/test_write_outcome.py tests/test_provider_helpers.py -q` and `pytest -q -m "not integration"`.
-- [ ] **Step 6:** Parent (not this agent) runs `type-design-analyzer` on `write_outcome.py`. Fix only encapsulation nits that break the four count keys.
+- [x] **Step 4:** Prefetch / sync_turn still never raise. `_initialized` behavior unchanged.
+- [x] **Step 5:** `pytest tests/test_write_outcome.py tests/test_provider_helpers.py -q` and `pytest -q -m "not integration"`.
+- [ ] **Step 6:** Parent (not this agent) runs `type-design-analyzer` on `write_outcome.py`. Fix only encapsulation nits that break the four count keys. (not verifiable from history)
 
 **DoD:** Tests above pass. `LEDGER.counts()` keys exactly `dropped_writes`, `writes_failed`, `embed_null`, `graph_degraded`. No graph/store/CI edits.
 
@@ -201,10 +201,10 @@ Also add provider-level tests (new functions in the same file or `test_provider_
 
 **Do not change** `librarian_health` SQL or return keys.
 
-- [ ] Promote `logger.debug(..., exc_info=True)` on `except Exception` for flower/ABOUT/MERGE write helpers to `logger.warning`.
-- [ ] Leave `purge_verify_*` at debug (L5).
-- [ ] Narrow L4 MERGE inner catches to `asyncpg.PostgresError` where the block only exists to ROLLBACK TO SAVEPOINT; keep a trailing `Exception` at warning if AGE wraps errors as generic.
-- [ ] `pytest -q -m "not integration"` plus `tests/test_store.py` if present.
+- [x] Promote `logger.debug(..., exc_info=True)` on `except Exception` for flower/ABOUT/MERGE write helpers to `logger.warning`.
+- [x] Leave `purge_verify_*` at debug (L5).
+- [x] Narrow L4 MERGE inner catches to `asyncpg.PostgresError` where the block only exists to ROLLBACK TO SAVEPOINT; keep a trailing `Exception` at warning if AGE wraps errors as generic.
+- [x] `pytest -q -m "not integration"` plus `tests/test_store.py` if present.
 
 **DoD:** `rg 'logger.debug\\(.*exc_info' src/hermes_memory/store.py src/hermes_memory/store_merge.py` shows only purge/teardown or none. No health key changes.
 
@@ -225,9 +225,9 @@ Also add provider-level tests (new functions in the same file or `test_provider_
 # Store counts keys remain; ledger keys added alongside.
 ```
 
-- [ ] `verify.py` after pipeline: print `LEDGER.snapshot()` one line (no secrets).
-- [ ] Update `tests/test_graph_api.py` health stubs/assertions so extra keys are allowed; assert `dropped_writes` in `Runtime.health()` (use `LEDGER.reset()` in the test).
-- [ ] Do not change `scripts/librarian_health.py` fail-on-drift logic (it calls Store, not Runtime).
+- [x] `verify.py` after pipeline: print `LEDGER.snapshot()` one line (no secrets).
+- [x] Update `tests/test_graph_api.py` health stubs/assertions so extra keys are allowed; assert `dropped_writes` in `Runtime.health()` (use `LEDGER.reset()` in the test).
+- [x] Do not change `scripts/librarian_health.py` fail-on-drift logic (it calls Store, not Runtime).
 
 **DoD:** Existing graph API tests pass. Health JSON includes the four ledger ints.
 
@@ -249,6 +249,8 @@ README garden contract: do **not** write the words `ABOUT` or `Concept` in `READ
 
 **DoD:** `pytest tests/property/test_edge_filter.py::test_readme_advertises_garden_manifold_only -q` passes.
 
+> **Diverged (2026-11-14):** the L0–L6 table lives in `docs/specs/HERMES_MEMORY_SPEC.md` (Write-failure policy). `docs/architecture.md` was retired and now points there.
+
 ---
 
 ### Task 2d: Recency skip (Wave 2, parallel)
@@ -259,9 +261,9 @@ README garden contract: do **not** write the words `ABOUT` or `Concept` in `READ
 
 The skip reason is `legacy AGE ABOUT recency engine removed`. `expand_graph` now walks SQL `mentions` and uses `consensus_decay`.
 
-- [ ] Prefer: rewrite the test to two `mentions` edges with different `created_at` / magnitude and assert newer ranks first (same store fixtures as other integration tests). No ABOUT labels.
-- [ ] If rewrite cannot express the invariant without ABOUT vertices: delete the file and add Unreleased changelog: "Removed skipped ABOUT recency integration; mentions decay stays in `store_expand` / walk tests."
-- [ ] Do not leave `pytest.mark.skip` without a tracked Unreleased waiver.
+- [x] Prefer: rewrite the test to two `mentions` edges with different `created_at` / magnitude and assert newer ranks first (same store fixtures as other integration tests). No ABOUT labels.
+- [ ] (Not needed: the test was rewritten.) If rewrite cannot express the invariant without ABOUT vertices: delete the file and add Unreleased changelog: "Removed skipped ABOUT recency integration; mentions decay stays in `store_expand` / walk tests."
+- [x] Do not leave `pytest.mark.skip` without a tracked Unreleased waiver.
 
 **DoD:** No unconditional skip for ABOUT recency. `pytest -q -m "not integration"` unchanged. Integration file either passes under `--migrate` or is gone.
 
@@ -294,8 +296,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
 from .about_concepts import SNAP_COSINE, _extract_concepts, _slug, ...
 ```
 
-- [ ] Grep `AboutConceptLinker` — only `about_concepts.py` and maybe backfill.
-- [ ] `pytest tests/test_extract_concepts.py tests/test_provider_helpers.py tests/test_write_outcome.py -q`
+- [x] Grep `AboutConceptLinker` — only `about_concepts.py` and maybe backfill.
+- [x] `pytest tests/test_extract_concepts.py tests/test_provider_helpers.py tests/test_write_outcome.py -q`
 
 **DoD:** Provider MRO does not include `AboutConceptLinker`. Tests still pass.
 
@@ -324,6 +326,8 @@ Tune the allowlist so current L5 lines in provider shutdown still pass. Re-run t
 
 **DoD:** Lint job fails if someone reintroduces write-path debug+exc_info. Poetry stays gone.
 
+- [x] Implemented: the `logger.debug(... exc_info` grep step is in the lint job of `.github/workflows/ci.yml`.
+
 ---
 
 ### Task 4: Parent integration review (Wave 4)
@@ -340,6 +344,8 @@ pytest tests/property -q
 Fix any FAIL yourself (do not spawn a fifth writer on `provider.py` without pausing others).
 
 **DoD:** Reviewer finds no L0 raise regressions, no Store health key break, no README ABOUT leak.
+
+- [ ] Parent integration review (code-reviewer, pr-test-analyzer, ruff/mypy/pytest runs) (not verifiable from history)
 
 ---
 

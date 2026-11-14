@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-13-release-gate-readiness-design.md`
 
+> **Note (2026-11-14):** The clone-first contract was superseded by bundled wheel installs (PRs #87–#89): a pip-installed package installs from its bundled build; checkouts keep the Git-pinned path.
+
+> **Open item (2026-11-14):** Non-interactive uninstall without --force calls input() and raises EOFError instead of refusing cleanly (uninstall_cli.py).
+
 ## Global Constraints
 
 - Preserve the pinned-Git-tree, clone-first installation contract.
@@ -42,11 +46,11 @@
 - Produces: `InstallState`, `load_install_state(path)`, `write_install_state(path, state)`, `install_state_path(home)`, and `require_git_checkout(repo)`.
 - Consumes: existing install constants and pinned ref/SHA.
 
-- [ ] Write failing tests proving atomic non-secret round-trip, corrupt-record rejection, and non-checkout preflight before mutation.
-- [ ] Run `pytest -q tests/test_install_state.py tests/test_install_pin.py` and confirm the new tests fail for missing interfaces.
-- [ ] Implement the state model, atomic JSON write, strict validation, and checkout preflight.
-- [ ] Integrate state writing into installation without storing the DSN/password.
-- [ ] Run `pytest -q tests/test_install_state.py tests/test_install_pin.py` and confirm success.
+- [x] Write failing tests proving atomic non-secret round-trip, corrupt-record rejection, and non-checkout preflight before mutation.
+- [ ] Run `pytest -q tests/test_install_state.py tests/test_install_pin.py` and confirm the new tests fail for missing interfaces. (not verifiable from history)
+- [x] Implement the state model, atomic JSON write, strict validation, and checkout preflight.
+- [x] Integrate state writing into installation without storing the DSN/password.
+- [x] Run `pytest -q tests/test_install_state.py tests/test_install_pin.py` and confirm success.
 
 ### Task 2: Fail-closed uninstall target and ownership resolution
 
@@ -58,11 +62,11 @@
 - Consumes: `InstallState` and `load_install_state` from Task 1.
 - Produces: `resolve_uninstall_target(args, state)` and `build_compose_down_command(state)`.
 
-- [ ] Write failing tests for explicit DSN, recorded target, missing/corrupt record, `--keep-db`, redacted display, installed `:5452` targeting, and recorded Compose shutdown.
-- [ ] Run the focused tests and verify failures describe the unsafe current fallback/missing helpers.
-- [ ] Refactor CLI parsing into `main(argv=None, *, home=None, runner=subprocess.run) -> int` and implement fail-closed resolution.
-- [ ] Stop the recorded Compose project before requested database removal.
-- [ ] Run focused tests and confirm success.
+- [x] Write failing tests for explicit DSN, recorded target, missing/corrupt record, `--keep-db`, redacted display, installed `:5452` targeting, and recorded Compose shutdown.
+- [ ] Run the focused tests and verify failures describe the unsafe current fallback/missing helpers. (not verifiable from history)
+- [x] Refactor CLI parsing into `main(argv=None, *, home=None, runner=subprocess.run) -> int` and implement fail-closed resolution.
+- [x] Stop the recorded Compose project before requested database removal.
+- [x] Run focused tests and confirm success.
 
 ### Task 3: Owned cleanup, preservation, and truthful failure status
 
@@ -77,11 +81,11 @@
 - Produces: `remove_owned_env_values(path, expected)`, `remove_hybrid_age_config(path)`, and aggregated uninstall result handling.
 - Consumes: owned paths and expected non-secret values from `InstallState`.
 
-- [ ] Write failing tests that preserve unrelated/comment/later-modified values, remove only owned values, default to plugin/skill cleanup, support keep flags, retain the record on failure, and return nonzero for any required failure.
-- [ ] Run focused tests and verify the intended failures.
-- [ ] Implement value-sensitive environment/YAML cleanup and exact-path owned artifact removal.
-- [ ] Aggregate step failures; emit complete/incomplete truthfully and remove the record only on full success.
-- [ ] Run focused tests and confirm success.
+- [x] Write failing tests that preserve unrelated/comment/later-modified values, remove only owned values, default to plugin/skill cleanup, support keep flags, retain the record on failure, and return nonzero for any required failure.
+- [ ] Run focused tests and verify the intended failures. (not verifiable from history)
+- [x] Implement value-sensitive environment/YAML cleanup and exact-path owned artifact removal.
+- [x] Aggregate step failures; emit complete/incomplete truthfully and remove the record only on full success.
+- [x] Run focused tests and confirm success.
 
 ### Task 4: Provider discovery and packaging contract
 
@@ -95,11 +99,11 @@
 - Consumes: `hermes_memory.register`, project entry-point metadata, and clone-first preflight.
 - Produces: tested discovery contract and documented distribution boundary.
 
-- [ ] Write failing/characterization tests loading the entry point, registering exactly one provider, checking wheel metadata, and confirming non-checkout guidance.
-- [ ] Run focused tests and validate the behavior.
-- [ ] Make only the production changes needed by those tests.
-- [ ] Document clone-first installation, owned state, safe uninstall flags, failure semantics, and release-gate command; add required changelogs.
-- [ ] Run focused tests and confirm success.
+- [x] Write failing/characterization tests loading the entry point, registering exactly one provider, checking wheel metadata, and confirming non-checkout guidance.
+- [ ] Run focused tests and validate the behavior. (not verifiable from history)
+- [x] Make only the production changes needed by those tests.
+- [x] Document clone-first installation, owned state, safe uninstall flags, failure semantics, and release-gate command; add required changelogs.
+- [x] Run focused tests and confirm success.
 
 ### Task 5: Disposable release-gate harness
 
@@ -113,11 +117,11 @@
 - Produces: `python scripts/release_gate.py` for static/disposable checks and `--live` for an explicitly isolated Docker/Ollama lifecycle.
 - Consumes: installer/uninstaller commands and existing `hermes-memory-verify` behavior.
 
-- [ ] Write failing tests proving the default gate uses a temporary home, validates entry points/wheel/tests, never invokes live deletion, and rejects non-isolated live targets.
-- [ ] Run focused tests and verify failures.
-- [ ] Implement the default gate and guarded live orchestration with command transcripts and redacted output.
-- [ ] Update release criteria as readiness evidence only; do not mark a live/user-facing row Met without a level-6 artifact.
-- [ ] Run `pytest -q`, `ruff check src tests scripts/release_gate.py`, `mypy`, wheel build/inspection, and the non-live release gate.
+- [x] Write failing tests proving the default gate uses a temporary home, validates entry points/wheel/tests, never invokes live deletion, and rejects non-isolated live targets.
+- [ ] Run focused tests and verify failures. (not verifiable from history)
+- [x] Implement the default gate and guarded live orchestration with command transcripts and redacted output.
+- [x] Update release criteria as readiness evidence only; do not mark a live/user-facing row Met without a level-6 artifact.
+- [x] Run `pytest -q`, `ruff check src tests scripts/release_gate.py`, `mypy`, wheel build/inspection, and the non-live release gate.
 
 ### Task 6: Final safety review and handoff
 
@@ -128,13 +132,14 @@
 - Consumes: all previous task interfaces.
 - Produces: review findings, final validation evidence, and explicit remaining live/user actions.
 
-- [ ] Review the complete diff for destructive targeting, secret exposure, path ownership, subprocess error handling, and compatibility.
-- [ ] Add a failing regression test for each Critical/Important finding before fixing it.
-- [ ] Re-run the complete validation set and `git diff --check`.
-- [ ] Report changed files, tests, local/static/live validation boundaries, commit/push status, and the exact command requiring user approval for the live gate.
+- [ ] Review the complete diff for destructive targeting, secret exposure, path ownership, subprocess error handling, and compatibility. (not verifiable from history)
+- [ ] Add a failing regression test for each Critical/Important finding before fixing it. (not verifiable from history)
+- [ ] Re-run the complete validation set and `git diff --check`. (not verifiable from history)
+- [ ] Report changed files, tests, local/static/live validation boundaries, commit/push status, and the exact command requiring user approval for the live gate. (not verifiable from history)
 
 ## Changelog
 
 | Version | Created | Modified | Author | Notes |
 |---|---|---|---|---|
 | 0.1 | 2026-11-13 | 2026-11-13 | OpenAI Codex | Initial approved implementation plan. |
+| 0.2 | 2026-11-13 | 2026-11-14 | Claude | Ticked steps in Tasks 1–5 that the code shows were implemented; marked red-run and Task 6 process steps as not verifiable from history; noted bundled wheel installs superseded clone-first; added uninstall EOFError open item. |
