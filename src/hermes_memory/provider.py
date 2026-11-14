@@ -1417,21 +1417,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 logger.debug("pool close on shutdown failed", exc_info=True)
         self.pool = None
 
-        task = getattr(self, "_outbox_task", None)
-        if task is not None and self._loop is not None and self._loop.is_running():
-            # Cancel and wait on the loop, so the task finishes before the loop stops
-            # (otherwise asyncio reports "Task was destroyed but it is pending").
-            async def _cancel_replay() -> None:
-                task.cancel()
-                try:
-                    await task
-                except BaseException:
-                    pass
+        # Cancel and wait on the loop so tasks finish before it stops (otherwise asyncio
+        # reports "Task was destroyed but it is pending"). The drain is cancelled only
+        # when it did not finish: its queued and in-flight writes are in the outbox
+        # with released claims, and replay is idempotent by op_id.
+        tasks = [getattr(self, "_outbox_task", None)]
+        if not drained:
+            tasks.append(getattr(self, "_drain_task", None))
+        pending = [t for t in tasks if t is not None and not t.done()]
+        if pending and self._loop is not None and self._loop.is_running():
+            async def _cancel_tasks() -> None:
+                for t in pending:
+                    t.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
 
             try:
-                asyncio.run_coroutine_threadsafe(_cancel_replay(), self._loop).result(timeout=1.0)
+                asyncio.run_coroutine_threadsafe(_cancel_tasks(), self._loop).result(timeout=1.0)
             except Exception:
-                logger.debug("outbox replay cancel failed", exc_info=True)
+                logger.debug("task cancel on shutdown failed", exc_info=True)
         if self._loop is not None:
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
