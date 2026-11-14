@@ -143,7 +143,7 @@ def test_live_checkout_default_ref_is_never_v010() -> None:
     repo = find_source_repo() or REPO_ROOT
     assert default_release_ref(repo) != "v0.1.0"
     if is_git_repo(REPO_ROOT):
-        assert default_release_ref(REPO_ROOT) != "HEAD" or not is_git_repo(REPO_ROOT)
+        assert default_release_ref(REPO_ROOT) != "HEAD"
 
 
 def test_installed_compose_has_no_first_boot_init(tmp_path: Path) -> None:
