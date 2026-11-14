@@ -136,7 +136,6 @@ def resolve_pin_github(ref: str) -> tuple[str, str]:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("HERMES_GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.load(resp)
