@@ -23,8 +23,10 @@ import json
 import logging
 import os
 import re
+import socket
 import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 try:
@@ -53,6 +55,8 @@ logger = logging.getLogger("hybrid_age")
 SECRET_RE = re.compile(r"api[_-]?key|secret|password|BEGIN PRIVATE", re.I)
 
 SHUTDOWN_DRAIN_S = 5.0
+OUTBOX_ADD_TIMEOUT_S = 2.0
+OUTBOX_REPLAY_INTERVAL_S = 30.0
 
 
 def _is_missing_embed_version_schema(exc: BaseException) -> bool:
@@ -77,6 +81,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._agent_identity = ""
         self._write_queue: Optional[asyncio.Queue] = None
         self._dropped_writes = 0
+        self._outbox_owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        self._outbox_task: Optional[asyncio.Task] = None
         self._primary_context = True  # writes allowed until told otherwise
         # Session context — rolling window of recent topics/turns for query enrichment
         self._recent_topics: List[str] = []
@@ -225,6 +231,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("reception catch-up failed", exc_info=True)
         # Strong reference so the drain loop is never garbage-collected mid-flight.
         self._drain_task = asyncio.create_task(self._awrite_drain())
+        self._outbox_task = asyncio.create_task(self._outbox_replay_loop())
 
     # -- turn capture (non-blocking enqueue) --------------------------------------
 
@@ -295,6 +302,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
         if self._loop is None or self._write_queue is None:
             return
+        self._record_outbox(item)
         try:
             fut = asyncio.run_coroutine_threadsafe(self._put_nowait(item), self._loop)
 
@@ -302,6 +310,11 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 try:
                     f.result()
                 except asyncio.QueueFull:
+                    if item.get("_outbox_id") is not None:
+                        # Durable: hand the row back so replay writes it later.
+                        self._defer_outbox(item["_outbox_id"], "queue full")
+                        logger.info("hybrid-age write queue full; deferred outbox id=%s", item["_outbox_id"])
+                        return
                     self._dropped_writes += 1
                     LEDGER.record(
                         WriteOutcome(
@@ -330,6 +343,75 @@ class HybridAgeMemoryProvider(MemoryProvider):
         assert self._write_queue is not None
         self._write_queue.put_nowait(item)
 
+    # -- durable outbox (V16) -------------------------------------------------------
+
+    def _record_outbox(self, item: dict) -> None:
+        """Persist the write before queuing it. Called on Hermes's threads, never on
+        the provider loop. If the database is unreachable the write stays in memory
+        only (previous behavior) and the failure is logged."""
+        store = self.store
+        if store is None or not hasattr(store, "outbox_add"):
+            return
+        payload = {k: v for k, v in item.items() if not str(k).startswith("_")}
+        owner = item.get("agent_identity") or self._agent_identity or "default"
+        try:
+            item["_outbox_id"] = self._run(
+                store.outbox_add(owner, payload, self._outbox_owner), timeout=OUTBOX_ADD_TIMEOUT_S
+            )
+        except Exception:
+            logger.warning("outbox record failed; write kept in memory only", exc_info=True)
+
+    def _defer_outbox(self, outbox_id: int, reason: str) -> None:
+        store, loop = self.store, self._loop
+        if store is None or loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(store.outbox_unclaim(outbox_id, reason), loop)
+        except Exception:
+            logger.debug("outbox defer failed", exc_info=True)
+
+    async def _settle_outbox(self, item: dict) -> None:
+        """Delete the outbox row once the write landed; otherwise hand it back."""
+        outbox_id = item.get("_outbox_id")
+        if outbox_id is None or self.store is None:
+            return
+        try:
+            if item.get("_persisted"):
+                await self.store.outbox_done(outbox_id)
+            else:
+                await self.store.outbox_unclaim(outbox_id, "write not persisted")
+        except Exception:
+            logger.warning("outbox settle failed id=%s", outbox_id, exc_info=True)
+
+    async def _replay_outbox(self, limit: int = 200) -> int:
+        """Queue rows left by a full queue, a shutdown, or a crash."""
+        store, q = self.store, self._write_queue
+        if store is None or q is None or not hasattr(store, "outbox_claim_stale"):
+            return 0
+        free = max(0, q.maxsize - q.qsize() if q.maxsize else limit)
+        if free == 0:
+            return 0
+        rows = await store.outbox_claim_stale(self._outbox_owner, min(limit, free))
+        queued = 0
+        for outbox_id, payload in rows:
+            payload["_outbox_id"] = outbox_id
+            try:
+                q.put_nowait(payload)
+                queued += 1
+            except asyncio.QueueFull:
+                await store.outbox_unclaim(outbox_id, "queue full on replay")
+        if queued:
+            logger.info("hybrid-age outbox replay queued=%d", queued)
+        return queued
+
+    async def _outbox_replay_loop(self) -> None:
+        while True:
+            try:
+                await self._replay_outbox()
+            except Exception:
+                logger.warning("outbox replay failed", exc_info=True)
+            await asyncio.sleep(OUTBOX_REPLAY_INTERVAL_S)
+
     async def _awrite_drain(self) -> None:
         q = self._write_queue
         assert q is not None
@@ -339,7 +421,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 break
             try:
                 await self._awrite_item(item)
+                await self._settle_outbox(item)
             except Exception as exc:
+                await self._settle_outbox(item)
                 if not item.get("_ledger_failed"):
                     stage = (
                         Stage.MEMORY_SQL if item.get("type") == "memory" else Stage.SQL_TURN
@@ -424,6 +508,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     await store.remove_memory_entries(
                         agent_identity, target, content,
                     )
+                item["_persisted"] = True
             except Exception as exc:
                 LEDGER.record(
                     WriteOutcome(
@@ -557,7 +642,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
             inserted_turn = await store.insert_turn(
                 session_id, item.get("agent_identity") or self._agent_identity,
                 item.get("role") or "user", content, vec_literal,
-                metadata={"kind": classify_session_kind(session_id)},
+                metadata={
+                    "kind": classify_session_kind(session_id),
+                    **({"outbox_id": str(item["_outbox_id"])} if item.get("_outbox_id") is not None else {}),
+                },
                 include_inserted=True,
             )
         except Exception as exc:
@@ -590,6 +678,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             )
             item["_ledger_failed"] = True
             return
+        # The row exists (new or deduplicated): the outbox entry can be cleared.
+        item["_persisted"] = True
         if isinstance(inserted_turn, tuple):
             conv_id, inserted_new = inserted_turn
         else:
@@ -1113,7 +1203,42 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "hop": audit.get("hop"),
                 "provenance_turns": list(audit.get("provenance_turns") or []),
             })
+        paths = await self._owner_scoped_paths(paths)
         return paths[:16]
+
+    async def _owner_scoped_paths(self, paths: List[dict]) -> List[dict]:
+        """Drop graph paths with no provenance from this memory owner.
+
+        noun / semantic_edge are shared across owners. A path survives only if at
+        least one of its provenance turns was written by this owner, and its
+        provenance is trimmed to those turns, so another profile's turns and the
+        labels they introduced never reach this prompt.
+        """
+        owner = getattr(self, "_agent_identity", None)
+        lookup = getattr(self.store, "owned_turn_ids", None)
+        if not owner or not callable(lookup) or not paths:
+            return paths
+        candidate: set[int] = set()
+        for p in paths:
+            for tid in p.get("provenance_turns") or []:
+                try:
+                    candidate.add(int(tid))
+                except (TypeError, ValueError):
+                    continue
+        owned = await lookup(sorted(candidate), owner) if candidate else set()
+        kept: List[dict] = []
+        for p in paths:
+            mine = []
+            for tid in p.get("provenance_turns") or []:
+                try:
+                    if int(tid) in owned:
+                        mine.append(int(tid))
+                except (TypeError, ValueError):
+                    continue
+            if not mine:
+                continue
+            kept.append({**p, "provenance_turns": mine})
+        return kept
 
     def _budget_seeds(self, seeds: List[dict]) -> List[dict]:
         from .tokens import count_tokens, injection_token_cap
@@ -1224,6 +1349,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # still in flight, closing here would yank connections out from under
         # them. The loop teardown below handles cleanup in that case.
         drained = self._write_queue is None or self._write_queue.empty()
+        if not drained and self.store is not None and self._loop is not None:
+            try:
+                released = asyncio.run_coroutine_threadsafe(
+                    self.store.outbox_release(self._outbox_owner), self._loop
+                ).result(timeout=1.0)
+                logger.info("hybrid-age shutdown: released %s outbox claim(s) for replay", released)
+            except Exception:
+                logger.debug("outbox release on shutdown failed", exc_info=True)
         if not drained:
             logger.warning(
                 "hybrid-age shutdown: write queue still busy after %ss drain — "
@@ -1243,6 +1376,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 logger.debug("pool close on shutdown failed", exc_info=True)
         self.pool = None
 
+        task = getattr(self, "_outbox_task", None)
+        if task is not None and self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(task.cancel)
+            except Exception:
+                logger.debug("outbox replay cancel failed", exc_info=True)
         if self._loop is not None:
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)

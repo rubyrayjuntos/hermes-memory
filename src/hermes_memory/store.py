@@ -363,6 +363,19 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         assert_embedding_compatible(vec_literal, self.embed_dim)
         import hashlib
 
+        outbox_id = (metadata or {}).get("outbox_id")
+        if outbox_id:
+            # Replay of an outbox row whose turn already landed: return that row.
+            async with self.pool.acquire() as conn:
+                existing = await conn.fetchval(
+                    "SELECT id FROM conversations WHERE metadata->>'outbox_id' = $1 "
+                    "ORDER BY id LIMIT 1",
+                    str(outbox_id),
+                )
+            if existing is not None:
+                turn_id = int(existing)
+                return (turn_id, False) if include_inserted else turn_id
+
         dup = None
         if len(content or "") >= 80:
             content_hash = hashlib.md5((content or "").encode("utf-8")).hexdigest()
@@ -702,6 +715,91 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 keys,
             )
         return [dict(r) for r in rows]
+
+    # -- durable write outbox (V16) -------------------------------------------------
+
+    async def outbox_add(self, agent_identity: str, item: Dict[str, Any], claimed_by: str) -> int:
+        """Record a pending write, claimed by this process, and return its id."""
+        async with self.pool.acquire() as conn:
+            return int(await conn.fetchval(
+                "INSERT INTO write_outbox (agent_identity, item, claimed_by, claimed_at) "
+                "VALUES ($1, $2::jsonb, $3, now()) RETURNING id",
+                agent_identity, json.dumps(item), claimed_by,
+            ))
+
+    async def outbox_done(self, outbox_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM write_outbox WHERE id = $1", int(outbox_id))
+
+    async def outbox_unclaim(self, outbox_id: int, error: str | None = None) -> None:
+        """Hand a row back for replay (full queue, failed write)."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL, "
+                "last_error = coalesce($2, last_error) WHERE id = $1",
+                int(outbox_id), error,
+            )
+
+    async def outbox_release(self, claimed_by: str) -> int:
+        """Release every claim held by one process (shutdown)."""
+        async with self.pool.acquire() as conn:
+            status = await conn.execute(
+                "UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL WHERE claimed_by = $1",
+                claimed_by,
+            )
+        try:
+            return int(str(status).split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    async def outbox_claim_stale(
+        self, claimed_by: str, limit: int, *, min_age_s: float = 30.0,
+        stale_claim_s: float = 600.0, max_attempts: int = 5,
+    ) -> list[tuple[int, Dict[str, Any]]]:
+        """Claim rows nobody is working on: unclaimed (or claim abandoned) and old
+        enough not to be a live enqueue. SKIP LOCKED keeps concurrent processes
+        from claiming the same row. Rows past max_attempts stay parked."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE write_outbox o
+                   SET claimed_by = $1, claimed_at = now(), attempts = o.attempts + 1
+                 WHERE o.id IN (
+                       SELECT id FROM write_outbox
+                        WHERE (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => $3))
+                          AND created_at < now() - make_interval(secs => $4)
+                          AND attempts < $5
+                        ORDER BY id
+                        LIMIT $2
+                        FOR UPDATE SKIP LOCKED)
+                RETURNING o.id, o.item
+                """,
+                claimed_by, int(limit), float(stale_claim_s), float(min_age_s), int(max_attempts),
+            )
+        out: list[tuple[int, Dict[str, Any]]] = []
+        for r in rows:
+            item = r["item"]
+            if isinstance(item, str):
+                item = json.loads(item)
+            out.append((int(r["id"]), dict(item)))
+        return out
+
+    async def owned_turn_ids(self, ids: Sequence[int], agent_identity: str) -> set[int]:
+        """Subset of ``ids`` whose conversation row belongs to ``agent_identity``.
+
+        Graph tables (noun, semantic_edge, passports) are not owner-scoped, so an
+        edge's provenance can name another owner's turns. Expansion keeps only
+        provenance this owner wrote.
+        """
+        wanted = sorted({int(i) for i in ids})
+        if not wanted:
+            return set()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM conversations WHERE id = ANY($1::bigint[]) AND agent_identity = $2",
+                wanted, agent_identity,
+            )
+        return {int(r["id"]) for r in rows}
 
     async def conversations_by_ids(self, ids: Sequence[int]) -> list[dict]:
         """Turn bodies for injection extras. Empty input → no round trip."""

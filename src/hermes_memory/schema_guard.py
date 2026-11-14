@@ -81,7 +81,7 @@ SELECT COUNT(*)::bigint
 # apply; the plugin only consumes. Bump when plugin code starts depending on
 # a newer V*. Do not copy the SQL tree into ~/.hermes/plugins to keep these
 # in sync — that is a second source of truth.
-CONSUMER_HEAD_VERSIONS = ("V1", "V9", "V10", "V11")
+CONSUMER_HEAD_VERSIONS = ("V1", "V9", "V10", "V11", "V16")
 
 
 def try_find_migrations_dir() -> Path | None:

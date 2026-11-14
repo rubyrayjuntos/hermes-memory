@@ -10,6 +10,10 @@ questions in a new session and measures what ``prefetch`` injects:
 - noise: other projects' names injected alongside the answer
 - latency: wall-clock per prefetch (p50 / p95)
 - ingest: drain throughput (turns/s until every turn is complete)
+- entity coverage: share of projects / owners / cities minted as graph nouns
+- leakage: another owner's names injected into this owner's answers (must be 0)
+- durability (--durability N): burst N turns, shut down at once, start a fresh
+  provider, measure rows persisted after outbox replay
 
 Synthetic and English-only by design; invented entity names so no built-in taxonomy
 can help. Run only against a disposable database (the DSN must name a *_eval* or
@@ -107,10 +111,11 @@ def pct(values, q):
 
 
 async def run(args) -> dict:
-    from hermes_memory.config import HybridAgeConfig
-    from hermes_memory.provider import HybridAgeMemoryProvider
-    from hermes_memory.embed import vec_to_literal
     import asyncpg
+
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.embed import vec_to_literal
+    from hermes_memory.provider import HybridAgeMemoryProvider
 
     if not re.search(r"(_eval\b|hermes_release_gate_)", args.dsn):
         raise SystemExit("refusing: DSN must name an *_eval or hermes_release_gate_* database")
@@ -147,10 +152,44 @@ async def run(args) -> dict:
     prov.shutdown()
     expected = len(turns)
 
+    # Second owner on the same database: its names must never reach the first owner's answers.
+    other_facts, _ = build_corpus(args.other_facts, 0, args.seed + 101)
+    other_names = {f.project for f in other_facts} | {f.owner for f in other_facts}
+    if args.other_facts:
+        other = HybridAgeMemoryProvider(config=cfg)
+        other.initialize(f"eval-other-{args.seed}", agent_identity="eval-other", agent_context="primary")
+        other_turns = [t for f in other_facts for t in f.turns]
+        for user, assistant in other_turns:
+            other.sync_turn(user, assistant, session_id=f"eval-other-{args.seed}")
+        conn = await asyncpg.connect(args.dsn)
+        other_deadline = time.monotonic() + args.drain_timeout
+        while time.monotonic() < other_deadline:
+            n = await conn.fetchval("select count(*) from conversations where agent_identity='eval-other'")
+            if n >= 2 * len(other_turns):
+                break
+            await asyncio.sleep(0.5)
+        await conn.close()
+        other.shutdown()
+
+    conn = await asyncpg.connect(args.dsn)
+    nouns = {str(r["l"]).lower() for r in await conn.fetch("select label as l from noun")}
+    await conn.close()
+
+    def coverage(names):
+        names = list(names)
+        return round(sum(1 for n in names if n.lower() in nouns) / len(names), 3) if names else None
+
+    entity_coverage = {
+        "projects": coverage(f.project for f in facts),
+        "owners": coverage(f.owner for f in facts),
+        "cities": coverage({f.city for f in facts}),
+    }
+
     prov = HybridAgeMemoryProvider(config=cfg)
     prov.initialize(f"eval-query-{args.seed}", agent_identity=identity, agent_context="primary")
 
-    results = {"recall": [], "vector_only_recall": [], "noise": [], "latency_ms": [], "chars": [], "by_kind": {}}
+    results = {"recall": [], "vector_only_recall": [], "noise": [], "latency_ms": [], "chars": [], "by_kind": {},
+               "leaked_answers": 0, "leaked_names": set()}
     for kind, text, gold_names, _ in queries:
         t0 = time.perf_counter()
         injected = prov.prefetch(text, session_id=f"eval-query-{args.seed}") or ""
@@ -161,6 +200,10 @@ async def run(args) -> dict:
         results["by_kind"].setdefault(kind, []).append(hit)
         gold_projects = {g for g in gold_names if g in all_projects}
         results["noise"].append(len(distinct_projects(injected, all_projects) - gold_projects))
+        leaked = {n for n in other_names if re.search(rf"\b{re.escape(n)}\b", injected)}
+        if leaked:
+            results["leaked_answers"] += 1
+            results["leaked_names"] |= leaked
 
         # Ablation: raw vector top-k over the same store, before graph expansion and budget.
         # Run on the provider's own loop: its pool/connections are bound to that loop.
@@ -183,10 +226,57 @@ async def run(args) -> dict:
         "recall_by_kind": {k: frac(v) for k, v in results["by_kind"].items()},
         "noise_projects_per_answer_mean": round(statistics.mean(results["noise"]), 2) if results["noise"] else None,
         "injected_chars_p50": pct(results["chars"], 0.5),
+        "entity_coverage": entity_coverage,
+        "leakage": {"other_owner_facts": args.other_facts, "answers_with_foreign_names": results["leaked_answers"],
+                    "distinct_foreign_names": len(results["leaked_names"])},
         "latency_ms": {"p50": round(pct(results["latency_ms"], 0.5), 1),
                        "p95": round(pct(results["latency_ms"], 0.95), 1)},
     }
     return summary
+
+
+async def run_durability(args) -> dict:
+    """Burst N turns, shut down immediately, then let a fresh provider replay the outbox."""
+    import asyncpg
+
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    if not re.search(r"(_eval\b|hermes_release_gate_)", args.dsn):
+        raise SystemExit("refusing: DSN must name an *_eval or hermes_release_gate_* database")
+    cfg = HybridAgeConfig(dsn=args.dsn, prefetch_timeout_s=args.prefetch_timeout)
+    identity = f"eval-durable-{args.seed}"
+    session = f"eval-durable-{args.seed}"
+    n = args.durability
+    first = HybridAgeMemoryProvider(config=cfg)
+    first.initialize(session, agent_identity=identity, agent_context="primary")
+    t0 = time.perf_counter()
+    for i in range(n):
+        first.sync_turn(f"Durability turn {i}: the burst project {i} is owned by Burst Owner {i} for this test.",
+                        f"Reply {i}: noted, burst project {i} belongs to Burst Owner {i} for planning.",
+                        session_id=session)
+    first.shutdown()
+    conn = await asyncpg.connect(args.dsn)
+    after_shutdown = await conn.fetchval("select count(*) from conversations where agent_identity=$1", identity)
+    second = HybridAgeMemoryProvider(config=cfg)
+    second.initialize(session + "-replay", agent_identity=identity, agent_context="primary")
+    expected = 2 * n
+    deadline = time.monotonic() + args.drain_timeout
+    persisted = after_shutdown
+    while time.monotonic() < deadline:
+        persisted = await conn.fetchval("select count(*) from conversations where agent_identity=$1", identity)
+        if persisted >= expected:
+            break
+        await asyncio.sleep(2)
+    recovered_s = time.perf_counter() - t0
+    leftover = await conn.fetchval("select count(*) from write_outbox where agent_identity=$1", identity)
+    dupes = await conn.fetchval(
+        "select count(*) - count(distinct (role, content)) from conversations where agent_identity=$1", identity)
+    await conn.close()
+    second.shutdown()
+    return {"durability": {"burst_turns": n, "expected_rows": expected, "rows_after_immediate_shutdown": after_shutdown,
+                           "rows_after_replay": persisted, "outbox_rows_left": leftover, "duplicate_rows": dupes,
+                           "seconds_to_recover": round(recovered_s, 1)}}
 
 
 def main(argv=None) -> int:
@@ -199,9 +289,11 @@ def main(argv=None) -> int:
     p.add_argument("--prefetch-timeout", type=float, default=15.0)
     p.add_argument("--drain-timeout", type=float, default=900.0)
     p.add_argument("--chunk", type=int, default=100)
+    p.add_argument("--other-facts", type=int, default=50, help="facts for a second owner (leakage check)")
+    p.add_argument("--durability", type=int, default=0, help="run only the burst/shutdown/replay check with N turns")
     p.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
-    summary = asyncio.run(run(args))
+    summary = asyncio.run(run_durability(args) if args.durability else run(args))
     print(json.dumps(summary, indent=2) if args.json else json.dumps(summary, indent=2))
     return 0
 
