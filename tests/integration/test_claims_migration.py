@@ -48,12 +48,22 @@ async def test_repaired_claim_stays_retracted(db_pool, store, clean_hermes_test_
 
 @pytest.mark.asyncio
 async def test_retract_never_lands_on_another_owners_span(db_pool, store, clean_hermes_test_db):
-    bobs = await legacy(db_pool, await span(store, "bob", 2), "Nightingale", "uses", "Atlas", "live", polarity="negative")
-    alices = await legacy(db_pool, await span(store, "alice", 1), "Nightingale", "uses", "Atlas", "retracted", superseded_by=bobs)
+    bobs_span = await span(store, "bob", 2)
+    alices_span = await span(store, "alice", 1)
+    bobs = await legacy(db_pool, bobs_span, "Nightingale", "uses", "Atlas", "live", polarity="negative")
+    alices = await legacy(db_pool, alices_span, "Nightingale", "uses", "Atlas", "retracted", superseded_by=bobs)
     await migrate_legacy_claims(store)
     async with db_pool.acquire() as conn:
         owners = {r["owner"] for r in await conn.fetch("SELECT owner FROM claim_evidence WHERE act = 'retract'")}
         assert owners == {"alice"}
+        # The owner column is copied from the claim, so prove the binding via the span itself.
+        retract_spans = await conn.fetch(
+            "SELECT e.span_id, c.agent_identity FROM claim_evidence e "
+            "JOIN conversations c ON c.id = e.span_id WHERE e.act = 'retract'")
+        assert retract_spans
+        assert {r["agent_identity"] for r in retract_spans} == {"alice"}
+        assert {r["span_id"] for r in retract_spans} == {alices_span}
+        assert bobs_span not in {r["span_id"] for r in retract_spans}
         assert await conn.fetchval("SELECT status FROM claims WHERE claim_id = $1", alices) != "grounded"
 
 
