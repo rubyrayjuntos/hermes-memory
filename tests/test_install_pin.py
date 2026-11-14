@@ -130,11 +130,11 @@ def test_noncheckout_preflight_precedes_all_hermes_mutation(tmp_path, monkeypatc
     monkeypatch.setattr(install_cli, "HERMES_HOME", home)
     monkeypatch.setattr(install_cli, "PLUGIN_DIRS", (home / "plugins" / "hybrid-age",))
     monkeypatch.setattr(install_cli, "CONFIG_PATHS", (home / "config.yaml",))
+    monkeypatch.setattr(install_cli, "BUNDLE_DIR", tmp_path / "no-bundle")
     with pytest.raises(SystemExit) as exc:
         install_cli.main(["--yes"])
-    assert "Git checkout" in str(exc.value)
-    assert "Clone hermes-memory" in str(exc.value)
-    assert "checkout's environment" in str(exc.value)
+    assert "no bundled build information" in str(exc.value)
+    assert "pip install git+https://github.com/rubyrayjuntos/hermes-memory@" in str(exc.value)
     assert not home.exists()
     assert "HERMES_PG_PASSWORD=" not in capsys.readouterr().out
 
@@ -377,10 +377,12 @@ def test_reinstall_cleanup_preserves_edited_passwords(isolated_install, monkeypa
     def runner(command, **kwargs):
         return subprocess.CompletedProcess(command, 0, "", "")
     assert uninstall(["--force", "--keep-db"], home=home, runner=runner) == 0
+    # --keep-db retains the Postgres volume, so the password must survive wherever it is:
+    # the user's edit where edited, the installer's value where not.
     for index, path in enumerate(paths):
         text = path.read_text()
         assert ("HERMES_PG_PASSWORD=test-only-user-edited-password" in text) == (index < edited_count)
-        assert "HERMES_PG_PASSWORD=test-only-install-owned-password" not in text
+        assert ("HERMES_PG_PASSWORD=test-only-install-owned-password" in text) == (index >= edited_count)
 
 
 def test_reinstall_does_not_retain_missing_artifact_ownership(isolated_install, monkeypatch):

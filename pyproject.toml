@@ -60,6 +60,9 @@ hybrid-age = "hermes_memory:register"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+hermes_memory = ["_bundle/**/*", "plugin.yaml"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

@@ -1,0 +1,13 @@
+# Hermes plugin manifest. ``hermes memory setup hybrid-age`` reads pip_dependencies and
+# admits them into Hermes's runtime; without this the provider cannot import in the
+# gateway. Keep this list identical to [project].dependencies in pyproject.toml
+# (tests/test_bundled_install.py enforces it).
+name: hybrid-age
+version: 0.1.0
+description: Postgres + pgvector + Apache AGE memory provider for Hermes
+pip_dependencies:
+  - "psycopg[binary]>=3.0"
+  - "asyncpg>=0.29"
+  - "openai>=1.0"
+  - "tiktoken>=0.7"
+  - "pyyaml>=6.0"

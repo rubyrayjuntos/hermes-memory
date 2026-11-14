@@ -16,6 +16,7 @@ import argparse
 import datetime
 import hashlib
 import io
+import json
 import os
 import re
 import secrets
@@ -29,6 +30,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from hermes_memory.bundled import (
+    BUNDLE_DIR,
+    export_bundle,
+    is_checkout,
+    resolve_bundle_pin,
+)
 from hermes_memory.install_state import (
     InstallState,
     install_state_path,
@@ -48,6 +55,7 @@ CONFIG_PATHS = (
     HERMES_HOME / "profiles" / "librarian" / "config.yaml",
 )
 VERSION_FILENAME = ".hermes-memory-version"
+PIN_FILE = "HERMES_PIN.json"  # read by hermes_build_info.py when the archive has no .git
 INSTALLED_COMPOSE_PROJECT = "hermes-memory-installed"
 INSTALLED_CONTAINER = "hermes-memory-postgres-installed"
 INSTALLED_PORT = "5452"
@@ -156,7 +164,7 @@ def copy_plugin_tree(src_pkg: Path, plugin_dir: Path) -> None:
     shutil.copytree(
         src_pkg,
         plugin_dir,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "_bundle"),
     )
 
 
@@ -378,6 +386,23 @@ def _redact_dsn(dsn: str) -> str:
     return f"{host}:{port}/{db}"
 
 
+def _existing_env_value(key: str) -> str | None:
+    """Process env first, then the Hermes home env files. Values are never printed."""
+    value = os.environ.get(key)
+    if value:
+        return value
+    for env_path in get_env_files():
+        try:
+            for line in env_path.read_text().splitlines():
+                if line.startswith(f"{key}="):
+                    found = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if found:
+                        return found
+        except OSError:
+            continue
+    return None
+
+
 def _existing_env_dsn() -> str | None:
     dsn = os.environ.get("HYBRID_AGE_DSN")
     if dsn:
@@ -465,10 +490,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {exc}; DSN withheld.", file=sys.stderr)
             return 2
 
-    require_git_checkout(REPO_ROOT)
-    ref = args.ref or default_release_ref(REPO_ROOT)
-    ref, sha = resolve_pin(REPO_ROOT, ref)
-    print(f"install: pin ref={ref} sha={sha}")
+    bundled = not is_checkout(REPO_ROOT)
+    if bundled:
+        if args.ref:
+            print("ERROR: --ref applies to Git checkouts only; this package installs its own build.", file=sys.stderr)
+            return 2
+        ref, sha = resolve_bundle_pin(BUNDLE_DIR)
+        print(f"install: bundled build ref={ref} sha={sha}")
+    else:
+        require_git_checkout(REPO_ROOT)
+        ref = args.ref or default_release_ref(REPO_ROOT)
+        ref, sha = resolve_pin(REPO_ROOT, ref)
+        print(f"install: pin ref={ref} sha={sha}")
 
     state_path = install_state_path(HERMES_HOME)
     previous = load_install_state(state_path)
@@ -495,9 +528,13 @@ def main(argv: list[str] | None = None) -> int:
     if not dsn or "***" in (dsn or ""):
         import getpass
 
-        pw = os.environ.get("HERMES_PG_PASSWORD", "").strip()
-        if not pw and args.yes:
-            pw = secrets.token_urlsafe(20)
+        # Order: process env, then the Hermes home env (kept by --keep-db), then a
+        # generated password when no terminal is available, else an interactive prompt.
+        pw = (_existing_env_value("HERMES_PG_PASSWORD") or "").strip()
+        if not pw and (args.yes or not sys.stdin.isatty()):
+            # hex: URL-safe, so it can never break the DSN (base64 can contain + / =).
+            pw = secrets.token_hex(24)
+            print("install: generated a database password and stored it in the Hermes env file.")
         if not pw:
             pw = getpass.getpass(
                 "HERMES_PG_PASSWORD for the installed database "
@@ -592,9 +629,16 @@ def main(argv: list[str] | None = None) -> int:
 
         with tempfile.TemporaryDirectory(prefix="hermes-memory-pin-") as tmp:
             export = Path(tmp)
-            print(f"[1/7] Exporting pinned tree {sha[:12]}…")
-            export_pin(REPO_ROOT, sha, export)
-            src_pkg = export / "src" / "hermes_memory"
+            print(f"[1/7] Preparing install files for build {sha[:12]}…")
+            if bundled:
+                export_bundle(export, BUNDLE_DIR)
+                src_pkg = Path(__file__).resolve().parent
+            else:
+                export_pin(REPO_ROOT, sha, export)
+                # git archive has no .git, so the build cannot read the commit. Record the
+                # pinned commit for setup.py (hermes_build_info.PIN_FILE) to keep its provenance.
+                (export / PIN_FILE).write_text(json.dumps({"sha": sha, "ref": ref}), encoding="utf-8")
+                src_pkg = export / "src" / "hermes_memory"
             skill_src = export / "skills" / "librarian-setup"
 
             print("[1b/7] Installing hybrid-age plugin from pin (copy, not symlink)…")
@@ -616,16 +660,19 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"    WARNING: {skill_src} not in pin — skip skill copy.")
 
-            print("[2/7] pip install (non-editable) from pinned tree…")
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", str(export)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                print(f"    pip install failed: {result.stderr}", file=sys.stderr)
-                return 1
-            print("    Package installed from pin.")
+            if bundled:
+                print("[2/7] pip install skipped: this package is already installed from its build.")
+            else:
+                print("[2/7] pip install (non-editable) from pinned tree…")
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", str(export)],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    print(f"    pip install failed: {result.stderr}", file=sys.stderr)
+                    return 1
+                print("    Package installed from pin.")
 
             print("[3/7] Configuring Hermes config.yaml…")
             hermes_bin = shutil.which("hermes") or "hermes"
@@ -644,18 +691,22 @@ def main(argv: list[str] | None = None) -> int:
                 ([], "default"),
                 (["--profile", "librarian"], "librarian"),
             ):
+                # ``memory setup`` admits the plugin's declared pip_dependencies into
+                # Hermes's own runtime, then saves the selection. Setting the key directly
+                # skips that step, and the provider then cannot import in the gateway.
                 result = subprocess.run(
-                    [hermes_bin, *profile_args, "config", "set", "memory.provider", "hybrid-age"],
+                    [hermes_bin, *profile_args, "memory", "setup", "hybrid-age"],
                     capture_output=True,
                     text=True,
+                    stdin=subprocess.DEVNULL,
                 )
                 if result.returncode != 0:
-                    print(f"    memory.provider ({label}) via hermes CLI failed: {result.stderr.strip()[:200]}")
-                else:
-                    index = 1 if profile_args else 0
-                    if index < len(CONFIG_PATHS) and CONFIG_PATHS[index].exists():
-                        record_owned_path("config_paths", CONFIG_PATHS[index])
-                    print(f"    memory.provider=hybrid-age ({label})")
+                    print(f"    memory setup hybrid-age ({label}) failed: {result.stderr.strip()[:300]}", file=sys.stderr)
+                    return 1
+                index = 1 if profile_args else 0
+                if index < len(CONFIG_PATHS) and CONFIG_PATHS[index].exists():
+                    record_owned_path("config_paths", CONFIG_PATHS[index])
+                print(f"    memory provider hybrid-age activated ({label}), dependencies admitted")
 
             print("[4/7] Writing hybrid_age block to config.yaml…")
             for config_path in CONFIG_PATHS:

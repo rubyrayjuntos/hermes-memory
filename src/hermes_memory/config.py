@@ -47,7 +47,15 @@ class HybridAgeConfig:
     embed_url_env: str = DEFAULT_EMBED_URL_ENV
     decay_half_life_days: float = 30.0
     hnsw_ef_search: int = 100
+    # "shared": every chat session of this profile reads and writes one memory (MVP
+    # default). "session": each chat session is isolated (the earlier behavior, where a
+    # new session could not recall facts from an older one).
+    memory_scope: str = "shared"
     _raw: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+MEMORY_SCOPES = ("shared", "session")
+SHARED_AGENT_IDENTITY = "default"
 
 
 def _load_yaml_block(config_path: Optional[str] = None) -> Dict[str, Any]:
@@ -194,6 +202,11 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
             except (TypeError, ValueError):
                 pass
 
+    if raw.get("memory_scope") is not None:
+        scope = str(raw["memory_scope"]).strip().lower()
+        if scope in MEMORY_SCOPES:
+            cfg.memory_scope = scope
+
     # also allow env override for decay_half_life_days
     if os.environ.get("HYBRID_AGE_DECAY_HALF_LIFE_DAYS"):
         try:
@@ -279,3 +292,39 @@ CONFIG_SCHEMA_FIELDS = [
         "env_var": "HYBRID_AGE_DECAY_HALF_LIFE_DAYS",
     },
 ]
+
+
+def resolve_agent_identity(scope: str, kwargs: Dict[str, Any]) -> str:
+    """Memory owner for a session. ``shared`` pins one owner for the profile, so every
+    chat session reads and writes the same memory. ``session`` keeps the per-chat owner."""
+    if scope == "shared":
+        # A caller that names its own memory owner (verify, tests) keeps it; a chat
+        # session's per-chat key does not split the shared memory. Otherwise the owner
+        # is the profile, so two profiles on one database never share memory.
+        explicit = kwargs.get("agent_identity")
+        if explicit and explicit not in (SHARED_AGENT_IDENTITY, kwargs.get("gateway_session_key")):
+            return str(explicit)
+        return profile_owner(kwargs.get("hermes_home"))
+    explicit = kwargs.get("agent_identity")
+    if explicit == SHARED_AGENT_IDENTITY:
+        explicit = None
+    return (
+        kwargs.get("gateway_session_key")
+        or explicit
+        or kwargs.get("agent_workspace")
+        or kwargs.get("agent_identity")
+        or SHARED_AGENT_IDENTITY
+    )
+
+
+def profile_owner(hermes_home: Any) -> str:
+    """Stable memory owner for a Hermes home: the profile name for ``.../profiles/<name>``,
+    ``default`` for the root home (or when no home is given)."""
+    if not hermes_home:
+        return SHARED_AGENT_IDENTITY
+    normalized = os.path.normpath(os.path.expanduser(str(hermes_home)))
+    name = os.path.basename(normalized)
+    parent = os.path.basename(os.path.dirname(normalized))
+    if parent == "profiles" and name:
+        return name
+    return SHARED_AGENT_IDENTITY

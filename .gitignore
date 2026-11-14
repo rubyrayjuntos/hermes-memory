@@ -6,6 +6,7 @@ __pycache__/
 venv/
 .env
 *.egg-info/
+src/hermes_memory/_bundle/
 dist/
 build/
 

@@ -30,6 +30,13 @@ def write_wheel(path, *, provider="hermes_memory:register", scripts=True):
     with ZipFile(wheel, "w") as archive:
         archive.writestr("hermes_memory-0.1.0.dist-info/entry_points.txt", entries)
         archive.writestr("hermes_memory/__init__.py", "def register(ctx): pass\n")
+        for name in (
+            "hermes_memory/_bundle/build_info.json", "hermes_memory/_bundle/docker/Dockerfile",
+            "hermes_memory/_bundle/sql/migrations/V1__vector_age.sql",
+            "hermes_memory/_bundle/scripts/migrate.py",
+            "hermes_memory/_bundle/skills/librarian-setup/SKILL.md",
+        ):
+            archive.writestr(name, "")
     return wheel
 
 
