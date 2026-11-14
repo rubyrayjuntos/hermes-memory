@@ -352,6 +352,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         metadata: Dict[str, Any] | None = None,
         *,
         include_inserted: bool = False,
+        ts: str | None = None,
     ) -> Optional[int] | tuple[int, bool]:
         """Insert a turn and return its id (RETURNING id) for graph linkage.
 
@@ -365,19 +366,6 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
         """
         assert_embedding_compatible(vec_literal, self.embed_dim)
         import hashlib
-
-        outbox_id = (metadata or {}).get("outbox_id")
-        if outbox_id:
-            # Replay of an outbox row whose turn already landed: return that row.
-            async with self.pool.acquire() as conn:
-                existing = await conn.fetchval(
-                    "SELECT id FROM conversations WHERE metadata->>'outbox_id' = $1 "
-                    "ORDER BY id LIMIT 1",
-                    str(outbox_id),
-                )
-            if existing is not None:
-                turn_id = int(existing)
-                return (turn_id, False) if include_inserted else turn_id
 
         dup = None
         if len(content or "") >= 80:
@@ -404,8 +392,10 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 """
                 INSERT INTO conversations
                     (session_id, agent_identity, role, content, embedding, metadata,
-                     embed_model, embed_dim)
-                VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, $7, $8)
+                     embed_model, embed_dim, ts)
+                VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, $7, $8,
+                        coalesce($9::text::timestamptz, now()))
+                ON CONFLICT ((metadata->>'op_id')) WHERE metadata ? 'op_id' DO NOTHING
                 RETURNING id
                 """,
                 session_id,
@@ -416,7 +406,18 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                 json.dumps(metadata or {}),
                 self.embed_model,
                 self.embed_dim,
+                ts,
             )
+            op_id = (metadata or {}).get("op_id")
+            if row is None and op_id:
+                # This captured write already landed (replay, late outbox commit, or a
+                # worker whose lease expired): return the stored row, never a second one.
+                existing = await conn.fetchval(
+                    "SELECT id FROM conversations WHERE metadata->>'op_id' = $1", str(op_id))
+                if existing is None:
+                    return None
+                turn_id = int(existing)
+                return (turn_id, False) if include_inserted else turn_id
             if not row or row["id"] is None:
                 return None
             turn_id = int(row["id"])
@@ -722,14 +723,24 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
 
     # -- durable write outbox (V16) -------------------------------------------------
 
-    async def outbox_add(self, agent_identity: str, item: Dict[str, Any], claimed_by: str) -> int:
-        """Record a pending write, claimed by this process, and return its id."""
+    async def outbox_add(
+        self, agent_identity: str, item: Dict[str, Any], claimed_by: str, op_id: str,
+    ) -> tuple[int, int] | None:
+        """Record a captured write, claimed by this process, and return (id, fence).
+
+        op_id is unique: a retried or late-committing record returns the existing row.
+        None means the row was already settled (done) by another path.
+        """
         async with self.pool.acquire() as conn:
-            return int(await conn.fetchval(
-                "INSERT INTO write_outbox (agent_identity, item, claimed_by, claimed_at) "
-                "VALUES ($1, $2::jsonb, $3, now()) RETURNING id",
-                agent_identity, json.dumps(item), claimed_by,
-            ))
+            row = await conn.fetchrow(
+                "INSERT INTO write_outbox (agent_identity, item, claimed_by, claimed_at, op_id, fence) "
+                "VALUES ($1, $2::jsonb, $3, now(), $4, 1) "
+                "ON CONFLICT (op_id) WHERE op_id IS NOT NULL DO NOTHING RETURNING id, fence",
+                agent_identity, json.dumps(item), claimed_by, op_id,
+            )
+            if row is None:
+                row = await conn.fetchrow("SELECT id, fence FROM write_outbox WHERE op_id = $1", op_id)
+        return (int(row["id"]), int(row["fence"])) if row is not None else None
 
     async def outbox_counts(self) -> dict[str, int]:
         """Pending rows (still replayable) and parked rows (failed OUTBOX_MAX_ATTEMPTS times)."""
@@ -741,18 +752,22 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             )
         return {"pending": int(row["pending"]), "parked": int(row["parked"])}
 
-    async def outbox_done(self, outbox_id: int) -> None:
+    async def outbox_done(self, outbox_id: int, fence: int) -> bool:
+        """Delete a settled row. Only the current lease holder (fence) may do so."""
         async with self.pool.acquire() as conn:
-            await conn.execute("DELETE FROM write_outbox WHERE id = $1", int(outbox_id))
+            status = await conn.execute(
+                "DELETE FROM write_outbox WHERE id = $1 AND fence = $2", int(outbox_id), int(fence))
+        return str(status).endswith(" 1")
 
-    async def outbox_unclaim(self, outbox_id: int, error: str | None = None) -> None:
-        """Hand a row back for replay (full queue, failed write)."""
+    async def outbox_unclaim(self, outbox_id: int, fence: int, error: str | None = None) -> bool:
+        """Hand a row back for replay (full queue, failed write). Fenced like done."""
         async with self.pool.acquire() as conn:
-            await conn.execute(
+            status = await conn.execute(
                 "UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL, "
-                "last_error = coalesce($2, last_error) WHERE id = $1",
-                int(outbox_id), error,
+                "last_error = coalesce($3, last_error) WHERE id = $1 AND fence = $2",
+                int(outbox_id), int(fence), error,
             )
+        return str(status).endswith(" 1")
 
     async def outbox_release(self, claimed_by: str) -> int:
         """Release every claim held by one process (shutdown)."""
@@ -769,7 +784,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
     async def outbox_claim_stale(
         self, claimed_by: str, limit: int, *, min_age_s: float = 30.0,
         stale_claim_s: float = 600.0, max_attempts: int = OUTBOX_MAX_ATTEMPTS,
-    ) -> list[tuple[int, Dict[str, Any]]]:
+    ) -> list[tuple[int, int, Dict[str, Any]]]:
         """Claim rows nobody is working on: unclaimed (or claim abandoned) and old
         enough not to be a live enqueue. SKIP LOCKED keeps concurrent processes
         from claiming the same row. Rows past max_attempts stay parked."""
@@ -777,7 +792,8 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
             rows = await conn.fetch(
                 """
                 UPDATE write_outbox o
-                   SET claimed_by = $1, claimed_at = now(), attempts = o.attempts + 1
+                   SET claimed_by = $1, claimed_at = now(), attempts = o.attempts + 1,
+                       fence = o.fence + 1
                  WHERE o.id IN (
                        SELECT id FROM write_outbox
                         WHERE (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => $3))
@@ -786,24 +802,29 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin):
                         ORDER BY id
                         LIMIT $2
                         FOR UPDATE SKIP LOCKED)
-                RETURNING o.id, o.item
+                RETURNING o.id, o.fence, o.item
                 """,
                 claimed_by, int(limit), float(stale_claim_s), float(min_age_s), int(max_attempts),
             )
-        out: list[tuple[int, Dict[str, Any]]] = []
+        out: list[tuple[int, int, Dict[str, Any]]] = []
         for r in rows:
             item = r["item"]
             if isinstance(item, str):
                 item = json.loads(item)
-            out.append((int(r["id"]), dict(item)))
+            out.append((int(r["id"]), int(r["fence"]), dict(item)))
         return out
 
-    async def latest_turn_id(self, agent_identity: str, session_id: str) -> int | None:
-        """Most recent stored turn for this owner and session (NEXT fallback)."""
+    async def previous_turn_before(self, agent_identity: str, session_id: str, ts: str) -> int | None:
+        """Latest stored turn for this owner and session captured before ``ts``.
+
+        Event time, not insertion order: a replayed older turn links to the turn
+        that preceded it, not to whatever landed last.
+        """
         async with self.pool.acquire() as conn:
             value = await conn.fetchval(
-                "SELECT max(id) FROM conversations WHERE agent_identity = $1 AND session_id = $2",
-                agent_identity, session_id,
+                "SELECT id FROM conversations WHERE agent_identity = $1 AND session_id = $2 "
+                "AND ts < $3::text::timestamptz ORDER BY ts DESC, id DESC LIMIT 1",
+                agent_identity, session_id, ts,
             )
         return int(value) if value is not None else None
 

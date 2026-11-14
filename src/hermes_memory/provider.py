@@ -302,6 +302,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
         if self._loop is None or self._write_queue is None:
             return
+        # Captured once, here: the op_id makes every later write of this item
+        # idempotent in the database, and captured_at is the turn's event time.
+        item.setdefault("op_id", uuid.uuid4().hex)
+        item.setdefault("captured_at", datetime.datetime.now(datetime.timezone.utc).isoformat())
         self._record_outbox(item)
         try:
             fut = asyncio.run_coroutine_threadsafe(self._put_nowait(item), self._loop)
@@ -312,7 +316,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 except asyncio.QueueFull:
                     if item.get("_outbox_id") is not None:
                         # Durable: hand the row back so replay writes it later.
-                        self._defer_outbox(item["_outbox_id"], "queue full")
+                        self._defer_outbox(item["_outbox_id"], item["_fence"], "queue full")
                         logger.info("hybrid-age write queue full; deferred outbox id=%s", item["_outbox_id"])
                         return
                     self._dropped_writes += 1
@@ -355,18 +359,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
         payload = {k: v for k, v in item.items() if not str(k).startswith("_")}
         owner = item.get("agent_identity") or self._agent_identity or "default"
         try:
-            item["_outbox_id"] = self._run(
-                store.outbox_add(owner, payload, self._outbox_owner), timeout=OUTBOX_ADD_TIMEOUT_S
+            recorded = self._run(
+                store.outbox_add(owner, payload, self._outbox_owner, item["op_id"]),
+                timeout=OUTBOX_ADD_TIMEOUT_S,
             )
         except Exception:
+            # A timed-out record may still commit later. That is safe: the row carries
+            # this item's op_id, so its replay lands on the same conversation row.
             logger.warning("outbox record failed; write kept in memory only", exc_info=True)
+            return
+        if recorded is not None:
+            item["_outbox_id"], item["_fence"] = recorded
 
-    def _defer_outbox(self, outbox_id: int, reason: str) -> None:
+    def _defer_outbox(self, outbox_id: int, fence: int, reason: str) -> None:
         store, loop = self.store, self._loop
         if store is None or loop is None:
             return
         try:
-            asyncio.run_coroutine_threadsafe(store.outbox_unclaim(outbox_id, reason), loop)
+            asyncio.run_coroutine_threadsafe(store.outbox_unclaim(outbox_id, fence, reason), loop)
         except Exception:
             logger.debug("outbox defer failed", exc_info=True)
 
@@ -375,11 +385,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
         outbox_id = item.get("_outbox_id")
         if outbox_id is None or self.store is None:
             return
+        fence = int(item.get("_fence") or 0)
         try:
+            # Fenced: if this worker's lease expired and another claimed the row, these
+            # are no-ops; the other worker settles it (its write is idempotent by op_id).
             if item.get("_persisted"):
-                await self.store.outbox_done(outbox_id)
+                await self.store.outbox_done(outbox_id, fence)
             else:
-                await self.store.outbox_unclaim(outbox_id, "write not persisted")
+                await self.store.outbox_unclaim(outbox_id, fence, "write not persisted")
         except Exception:
             logger.warning("outbox settle failed id=%s", outbox_id, exc_info=True)
 
@@ -393,13 +406,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return 0
         rows = await store.outbox_claim_stale(self._outbox_owner, min(limit, free))
         queued = 0
-        for outbox_id, payload in rows:
-            payload["_outbox_id"] = outbox_id
+        for outbox_id, fence, payload in rows:
+            payload["_outbox_id"], payload["_fence"], payload["_replayed"] = outbox_id, fence, True
             try:
                 q.put_nowait(payload)
                 queued += 1
             except asyncio.QueueFull:
-                await store.outbox_unclaim(outbox_id, "queue full on replay")
+                await store.outbox_unclaim(outbox_id, fence, "queue full on replay")
         if queued:
             logger.info("hybrid-age outbox replay queued=%d", queued)
         return queued
@@ -611,20 +624,24 @@ class HybridAgeMemoryProvider(MemoryProvider):
             done += 1
         return done
 
-    async def _resolve_previous_turn(self, store: Any, session_id: str, owner: str | None) -> int | None:
-        """Previous turn in this session: the in-memory value, else the database.
+    async def _resolve_previous_turn(self, store: Any, item: dict, session_id: str,
+                                     owner: str | None) -> int | None:
+        """The turn that preceded this one in time.
 
-        After an outbox replay or a restart the in-memory map is empty; without the
-        database fallback the turn would lose its NEXT link.
+        Live items arrive in capture order, so the in-memory value is right for them.
+        A replayed item may be older than turns already written, so it uses its own
+        capture time: the latest stored turn captured before it.
         """
-        prev = self._last_turn_id.get(session_id)
-        if prev is not None:
-            return prev
-        lookup = getattr(store, "latest_turn_id", None)
-        if not callable(lookup) or not owner:
+        if not item.get("_replayed"):
+            prev = self._last_turn_id.get(session_id)
+            if prev is not None:
+                return prev
+        lookup = getattr(store, "previous_turn_before", None)
+        captured_at = item.get("captured_at")
+        if not callable(lookup) or not owner or not captured_at:
             return None
         try:
-            return await lookup(owner, session_id)
+            return await lookup(owner, session_id, captured_at)
         except Exception:
             logger.warning("previous turn lookup failed", exc_info=True)
             return None
@@ -638,7 +655,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # Drain overwrites enqueue hint so the second item in one sync_turn
         # sees the first item's id. C reads only this field (no SQL lookup).
         item["previous_conversation_id"] = await self._resolve_previous_turn(
-            store, session_id, item.get("agent_identity") or self._agent_identity)
+            store, item, session_id, item.get("agent_identity") or self._agent_identity)
         embed_exc: BaseException | None = None
         try:
             vec = await embedder.embed_text(content)
@@ -663,9 +680,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 item.get("role") or "user", content, vec_literal,
                 metadata={
                     "kind": classify_session_kind(session_id),
-                    **({"outbox_id": str(item["_outbox_id"])} if item.get("_outbox_id") is not None else {}),
+                    **({"op_id": str(item["op_id"])} if item.get("op_id") else {}),
                 },
                 include_inserted=True,
+                ts=item.get("captured_at"),
             )
         except Exception as exc:
             if _is_missing_embed_version_schema(exc):
@@ -705,7 +723,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
             conv_id, inserted_new = int(inserted_turn), True
         if not inserted_new:
             return
-        self._last_turn_id[session_id] = int(conv_id)
+        if not item.get("_replayed"):
+            self._last_turn_id[session_id] = int(conv_id)
         degraded = False
         await self._stamp_drain(
             store,

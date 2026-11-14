@@ -19,13 +19,13 @@ async def _reset(db_pool) -> None:
 async def test_two_claimers_never_receive_the_same_row(db_pool, store, clean_hermes_test_db) -> None:
     await _reset(db_pool)
     for i in range(8):
-        oid = await store.outbox_add("alice", {"type": "turn", "content": f"t{i}"}, "seed")
-        await store.outbox_unclaim(oid)
+        oid, fence = await store.outbox_add("alice", {"type": "turn", "content": f"t{i}"}, "seed", f"op-{i}")
+        await store.outbox_unclaim(oid, fence)
     a, b = await asyncio.gather(
         store.outbox_claim_stale("proc-a", 5, min_age_s=0),
         store.outbox_claim_stale("proc-b", 5, min_age_s=0),
     )
-    ids_a, ids_b = {i for i, _ in a}, {i for i, _ in b}
+    ids_a, ids_b = {i for i, _, _ in a}, {i for i, _, _ in b}
     assert ids_a.isdisjoint(ids_b)
     assert len(ids_a | ids_b) == 8
 
@@ -33,7 +33,7 @@ async def test_two_claimers_never_receive_the_same_row(db_pool, store, clean_her
 @pytest.mark.asyncio
 async def test_parked_rows_are_not_claimed_and_are_counted(db_pool, store, clean_hermes_test_db) -> None:
     await _reset(db_pool)
-    oid = await store.outbox_add("alice", {"type": "turn", "content": "poison"}, "seed")
+    oid, _ = await store.outbox_add("alice", {"type": "turn", "content": "poison"}, "seed", "op-poison")
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE write_outbox SET claimed_by = NULL, claimed_at = NULL, attempts = $2 WHERE id = $1",
                            oid, OUTBOX_MAX_ATTEMPTS)
@@ -42,15 +42,53 @@ async def test_parked_rows_are_not_claimed_and_are_counted(db_pool, store, clean
 
 
 @pytest.mark.asyncio
-async def test_replayed_turn_with_same_outbox_id_returns_the_existing_row(db_pool, store, clean_hermes_test_db) -> None:
-    first = await store.insert_turn("replay-s", "alice", "user", "short replayed turn", None,
-                                    metadata={"outbox_id": "9001"})
-    again = await store.insert_turn("replay-s", "alice", "user", "short replayed turn", None,
-                                    metadata={"outbox_id": "9001"})
-    assert first == again
+async def test_concurrent_writes_of_one_op_store_one_row(db_pool, store, clean_hermes_test_db) -> None:
+    """Live path and replay racing on the same captured write: the database keeps one."""
+    results = await asyncio.gather(*[
+        store.insert_turn("race-s", "alice", "user", "short raced turn", None,
+                          metadata={"op_id": "op-race"}, include_inserted=True)
+        for _ in range(6)
+    ])
+    assert len({tid for tid, _ in results}) == 1
+    assert sum(1 for _, inserted in results if inserted) == 1
     async with db_pool.acquire() as conn:
-        n = await conn.fetchval("SELECT count(*) FROM conversations WHERE metadata->>'outbox_id' = '9001'")
+        n = await conn.fetchval("SELECT count(*) FROM conversations WHERE metadata->>'op_id' = 'op-race'")
     assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_outbox_record_is_idempotent_by_op_id(db_pool, store, clean_hermes_test_db) -> None:
+    await _reset(db_pool)
+    first = await store.outbox_add("alice", {"type": "turn"}, "proc-a", "op-same")
+    second = await store.outbox_add("alice", {"type": "turn"}, "proc-a", "op-same")
+    assert first == second
+    assert await store.outbox_counts() == {"pending": 1, "parked": 0}
+
+
+@pytest.mark.asyncio
+async def test_a_stale_worker_cannot_settle_a_row_someone_else_reclaimed(db_pool, store, clean_hermes_test_db) -> None:
+    await _reset(db_pool)
+    oid, fence_a = await store.outbox_add("alice", {"type": "turn"}, "proc-a", "op-lease")
+    async with db_pool.acquire() as conn:  # proc-a's lease has expired
+        await conn.execute("UPDATE write_outbox SET claimed_at = now() - interval '1 hour', "
+                           "created_at = now() - interval '1 hour' WHERE id = $1", oid)
+    [(rid, fence_b, _)] = await store.outbox_claim_stale("proc-b", 5)
+    assert rid == oid and fence_b > fence_a
+    assert await store.outbox_done(oid, fence_a) is False  # stale worker: no-op
+    assert await store.outbox_unclaim(oid, fence_a) is False
+    assert await store.outbox_done(oid, fence_b) is True
+
+
+@pytest.mark.asyncio
+async def test_previous_turn_before_uses_event_time_not_insertion_order(store, clean_hermes_test_db) -> None:
+    t1 = await store.insert_turn("order-s", "alice", "user", "first by event time", None,
+                                 ts="2026-11-14T10:00:00+00:00")
+    t3 = await store.insert_turn("order-s", "alice", "user", "third by event time", None,
+                                 ts="2026-11-14T10:02:00+00:00")
+    # The middle turn is replayed last; its predecessor is t1, not t3.
+    assert await store.previous_turn_before("alice", "order-s", "2026-11-14T10:01:00+00:00") == t1
+    assert await store.previous_turn_before("alice", "order-s", "2026-11-14T10:03:00+00:00") == t3
+    assert await store.previous_turn_before("bob", "order-s", "2026-11-14T10:03:00+00:00") is None
 
 
 @pytest.mark.asyncio
@@ -59,4 +97,3 @@ async def test_owned_turn_ids_filters_by_owner(store, clean_hermes_test_db) -> N
     b = await store.insert_turn("own-b", "bob", "user", "bob turn about projects", None)
     assert await store.owned_turn_ids([a, b], "alice") == {a}
     assert await store.owned_turn_ids([], "alice") == set()
-    assert await store.latest_turn_id("alice", "own-a") == a
