@@ -166,3 +166,8 @@ def test_provider_init_checks_schema_head() -> None:
 
     src = Path(provider_mod.__file__).read_text(encoding="utf-8")
     assert "require_schema_head" in src
+
+
+def test_head_versions_include_claims_evidence() -> None:
+    assert "V18" in CONSUMER_HEAD_VERSIONS
+
