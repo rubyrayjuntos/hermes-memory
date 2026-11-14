@@ -8,26 +8,38 @@ from hermes_memory.provider import HybridAgeMemoryProvider
 
 class FakeConn:
     def __init__(self, turns):
-        self.turns = turns  # id -> (owner, session, content)
+        # id -> (owner, session, content[, ts]); missing ts sorts as the id.
+        self.turns = turns
         self.model_inputs = []
+
+    def _parts(self, span_id):
+        row = self.turns[span_id]
+        owner, session, content = row[0], row[1], row[2]
+        ts = row[3] if len(row) > 3 and row[3] is not None else span_id
+        return owner, session, content, ts
 
     async def fetchrow(self, sql, *args):
         if "FROM durable_job" in sql:
             return {"owner": "o", "payload": {"span_id": 9}}
         span_id, owner = args[0], args[1]
-        owner_, session, content = self.turns[span_id]
+        owner_, session, content, ts = self._parts(span_id)
         if owner_ != owner:
             return None
-        return {"id": span_id, "session_id": session, "content": content, "role": "user"}
+        return {"id": span_id, "session_id": session, "content": content, "role": "user", "ts": ts}
 
     async def fetch(self, sql, *args):
         if "FROM verb" in sql:
             return [{"verb": "uses"}, {"verb": "works_on"}]
-        owner, session, span_id, limit = args
-        rows = [(i, c) for i, (o, s, c) in sorted(self.turns.items())
-                if o == owner and s == session and i < span_id]
-        rows = list(reversed(rows))[:limit]
-        return [{"id": i, "content": c} for i, c in rows]
+        owner, session, span_ts, span_id, limit = args
+
+        def key(i):
+            return (self._parts(i)[3], i)
+
+        rows = [(key(i), i, self._parts(i)[2]) for i, row in self.turns.items()
+                if row[0] == owner and row[1] == session and key(i) < (span_ts, span_id)]
+        rows.sort(reverse=True)
+        rows = rows[:limit]
+        return [{"id": i, "content": c} for _, i, c in rows]
 
 
 class FakePool:
@@ -85,8 +97,8 @@ def _patch_publish(monkeypatch, rules=None, model=None):
             await rules()
         return [1]
 
-    async def pub_model(conn, claims, job_id, fence):
-        published["model"].append((job_id, fence, claims))
+    async def pub_model(conn, embed, claims, job_id, fence):
+        published["model"].append((job_id, fence, claims, embed))
         if model:
             await model()
         return [2]
@@ -115,7 +127,7 @@ async def test_claims_rules_then_model_with_lease_and_flags(monkeypatch):
         ("extract_model", 1, 120, True, True),
     ]
     assert published["rules"][0][:2] == (1, 1) and published["rules"][0][2] is _embed
-    assert published["model"][0][:2] == (2, 1)
+    assert published["model"][0][:2] == (2, 1) and published["model"][0][3] is _embed
     assert store.done == [(2, 1)]  # publish_model does not settle; the worker does
 
 
@@ -179,6 +191,30 @@ async def test_model_gets_four_previous_turns_truncated_and_grounds_claims(monke
     assert all(len(c) == 1000 for c in seen["context"])
     claims = published["model"][0][2]
     assert [(c["verb"]) for c in claims] == ["uses"]
+
+
+async def test_model_context_follows_event_time_not_id_order(monkeypatch):
+    # Higher ids with earlier event times must still be excluded when after the span in id order
+    # only; context is the four prior *event-time* turns.
+    turns = {
+        1: ("o", "s", "turn early-id-late-time", 50),
+        2: ("o", "s", "turn 2", 20),
+        3: ("o", "s", "turn 3", 30),
+        4: ("o", "s", "turn 4", 40),
+        5: ("o", "s", "turn 5", 45),
+        9: ("o", "s", "Nightingale uses Atlas.", 35),
+    }
+    store = FakeStore(turns=turns, jobs={"extract_model": [(2, 1, {"span_id": 9})]})
+    _patch_publish(monkeypatch)
+    seen = {}
+
+    async def model(turn, context):
+        seen["context"] = list(context)
+        return {"claims": []}
+
+    await extraction_worker.run_extraction_once(object(), store, embed=_embed, model=model)
+
+    assert [c.split(" ", 1)[1] for c in seen["context"]] == ["2", "3"]
 
 
 async def test_failure_is_logged_not_raised_and_other_kind_still_runs(monkeypatch, caplog):

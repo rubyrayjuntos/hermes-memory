@@ -14,6 +14,14 @@ POSTGRES = {"subject": "Acme", "verb": "uses", "object": "Postgres", "polarity":
 REDIS = {"subject": "Acme", "verb": "uses", "object": "Redis", "polarity": "positive"}
 
 
+def _vec(seed: float = 0.1) -> list[float]:
+    return [seed + (i * 0.0001) for i in range(768)]
+
+
+async def _embed(texts):
+    return [_vec(0.2 + i * 0.01) for i, _ in enumerate(texts)]
+
+
 async def _model_job(store, span_id: int, owner: str = "alice"):
     kind, op_id, payload = job_specs(span_id)[1]
     assert kind == "extract_model"
@@ -22,9 +30,9 @@ async def _model_job(store, span_id: int, owner: str = "alice"):
     return job_id, fence
 
 
-async def _publish(db_pool, claims, job_id, fence):
+async def _publish(db_pool, claims, job_id, fence, embed=_embed):
     async with db_pool.acquire() as conn:
-        return await publish_model(conn, claims, job_id, fence)
+        return await publish_model(conn, embed, claims, job_id, fence)
 
 
 async def _states(db_pool, span_id: int) -> list[tuple[str, str, str]]:
@@ -84,3 +92,17 @@ async def test_stale_fence_changes_nothing(store, db_pool, clean_hermes_test_db)
     before = await _states(db_pool, span_id)
     assert await _publish(db_pool, [POSTGRES], job_id, fence) == []
     assert await _states(db_pool, span_id) == before == [("rules", "Postgres", "live")]
+
+
+@pytest.mark.asyncio
+async def test_model_only_claim_gets_fact_vec(store, db_pool, clean_hermes_test_db):
+    span_id = await span(store, "alice", 1)
+    job_id, fence = await _model_job(store, span_id)
+    ids = await _publish(db_pool, [POSTGRES], job_id, fence)
+    assert len(ids) == 1
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT vector_dims(fact_vec) AS dims, embed_model, fact_text "
+            "FROM claims WHERE claim_id = $1", ids[0])
+    assert row["fact_text"]
+    assert (row["dims"], row["embed_model"]) == (768, "nomic-embed-text")

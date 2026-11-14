@@ -29,14 +29,15 @@ EmbedFn = Callable[[Sequence[str]], Awaitable[list]]
 
 async def _load_model_input(conn, span_id: int, owner: str) -> Optional[tuple[str, list[str], set[str]]]:
     span = await conn.fetchrow(
-        "SELECT id, session_id, content FROM conversations WHERE id = $1 AND agent_identity = $2",
+        "SELECT id, session_id, content, ts FROM conversations WHERE id = $1 AND agent_identity = $2",
         int(span_id), owner)
     if span is None or not (span["content"] or "").strip():
         return None
+    # Spec §5.2: four previous turns of the same owner/session by event time (ties by id).
     prev = await conn.fetch(
         "SELECT id, content FROM conversations WHERE agent_identity = $1 AND session_id = $2 "
-        "AND id < $3 ORDER BY id DESC LIMIT $4",
-        owner, span["session_id"], int(span_id), CONTEXT_TURNS)
+        "AND (ts, id) < ($3::timestamptz, $4) ORDER BY ts DESC, id DESC LIMIT $5",
+        owner, span["session_id"], span["ts"], int(span_id), CONTEXT_TURNS)
     context = [(r["content"] or "")[:CONTEXT_CHARS] for r in reversed(prev)]
     verbs = {r["verb"] for r in await conn.fetch("SELECT verb FROM verb")}
     return span["content"], context, verbs
@@ -65,7 +66,7 @@ async def _run_rules(store, worker: str, embed: EmbedFn) -> int:
     return 1
 
 
-async def _run_model(store, worker: str, model: ModelFn) -> int:
+async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn) -> int:
     claimed = await store.job_claim("extract_model", worker, 1, lease_s=MODEL_LEASE_S,
                                     session_ordered=True, defer_backfill=True)
     if not claimed:
@@ -87,8 +88,8 @@ async def _run_model(store, worker: str, model: ModelFn) -> int:
             raw = await raw
         claims = grounded_claims(raw, turn, context, verbs)
         async with store.pool.acquire() as conn:
-            await publish_model(conn, claims, job_id, fence)
-        # publish_model does not settle the job; a stale fence makes this False.
+            await publish_model(conn, embed, claims, job_id, fence)
+        # publish_model embeds but does not settle; a stale fence makes this False.
         return 1 if await store.job_done(job_id, fence) else 0
     except Exception as exc:
         await _settle_failure(store, job_id, fence, "extract_model", exc)
@@ -104,7 +105,7 @@ async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optiona
     worker = str(getattr(provider, "_outbox_owner", "") or "extraction")
     finished = 0
     for step in (lambda: _run_rules(store, worker, embed),
-                 (lambda: _run_model(store, worker, model)) if model is not None else None):
+                 (lambda: _run_model(store, worker, model, embed)) if model is not None else None):
         if step is None:
             continue
         try:

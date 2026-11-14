@@ -67,14 +67,15 @@ async def publish_rules(conn, store_embed: StoreEmbed, job_id: int, fence: int) 
         return claim_ids
 
 
-async def publish_model(conn, claims: list[dict], job_id: int, fence: int) -> list[int]:
+async def publish_model(conn, store_embed: StoreEmbed, claims: list[dict], job_id: int, fence: int) -> list[int]:
     """Publish grounded model claims for one leased `extract_model` job; returns touched claim ids.
 
     Returns [] and writes nothing when the fence no longer matches. Model
     evidence supersedes only the live rules evidence of the same span,
     timeline key, polarity and object; other rules evidence stays live.
     Distinct timeline locks are taken in sorted (owner, subject_id, verb) order
-    before any evidence is written. This function does not embed or settle the job.
+    before any evidence is written. Current claim text is embedded in this
+    transaction (same as publish_rules). This function does not settle the job.
     """
     async with conn.transaction():
         if not await job_fence_check(conn, job_id, fence):
@@ -110,4 +111,13 @@ async def publish_model(conn, claims: list[dict], job_id: int, fence: int) -> li
         await _write_turn_entities(conn, info.owner, span_id, ev_ids)
         owner_of = {int(r["id"]): int(r["claim_id"]) for r in await conn.fetch(
             "SELECT id, claim_id FROM claim_evidence WHERE id = ANY($1::bigint[])", ev_ids)}
-        return list(dict.fromkeys(owner_of[e] for e in ev_ids))
+        claim_ids = list(dict.fromkeys(owner_of[e] for e in ev_ids))
+        missing = await claims_missing_vectors(conn, job["owner"], claim_ids)
+        if missing:
+            vectors = await store_embed([text for _, text in missing])
+            if len(vectors) != len(missing):
+                raise ValueError(f"embedder returned {len(vectors)} vectors for {len(missing)} texts")
+            rows = [(cid, vec) for (cid, _), vec in zip(missing, vectors) if vec is not None]
+            if rows:
+                await write_fact_vectors(conn, rows, FACT_EMBED_MODEL)
+        return claim_ids
