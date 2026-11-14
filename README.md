@@ -1,400 +1,231 @@
 <img width="2048" height="1152" alt="hermes_librarian_banner" src="https://github.com/user-attachments/assets/109ea41f-2787-443f-a815-18139f80da4c" />
+
 # 📜 The Hermes Librarian 📜
 
 **Persistent memory & context injection for [Hermes Agent](https://github.com/nousresearch/hermes-agent)** —
-pgvector for semantic recall + Apache AGE knowledge graph for entity expansion,
-in one Postgres database.
+combining PostgreSQL + pgvector for semantic recall and Apache AGE for knowledge graph entity expansion, all in a single database.
 
-This is an **unofficial community plugin** (provider name `hybrid-age`). It is not
-affiliated with Nous Research. Status: **Alpha**. Tested against Hermes Agent v0.20.x.
-Postgres and the viz API bind **loopback only** (`127.0.0.1`).
+This is an **unofficial community plugin** (provider name `hybrid-age`). Status: **Alpha**. Tested against Hermes Agent v0.20.x. All database and API bindings are **loopback only** (`127.0.0.1`).
 
-> *A librarian doesn't just store books — she knows where everything is, retrieves
-> the right volume at the right moment, and quietly discards what's stale.*
+> *A librarian doesn't just store books — she knows where everything is, retrieves the right volume at the right moment, and quietly discards what's stale.*
 
 Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 
-- **Stack:** `apache/age:release_PG17_1.6.0` + pgvector on `127.0.0.1:5450`
-- **Embeddings (default):** local Ollama, `nomic-embed-text` (768-dim). Do not mix embedding models on an existing database.
+---
 
-### Offers / does not offer
+### Choose Your Path
+
+| Persona | Goal | Start Here |
+| :--- | :--- | :--- |
+| 🚀 **Plugin User** | Install, verify, and run the plugin in Hermes Agent (no git clone required). | [Plugin User Guide](#-plugin-user-guide) |
+| 🛠️ **Developer / Integrator** | Clone the repo, run the dev stack, run tests, or inspect configurations. | [Developer & Integrator Guide](#-developer--integrator-guide) |
+| 🧭 **Contributor** | Understand the architecture invariants, release gates, and contribution rules. | [Contributor & Architecture Guide](#-contributor--architecture-guide) |
+
+---
+
+### What it Offers / Does Not Offer
 
 | Offers | Does not offer |
-|--------|----------------|
-| Unofficial `hybrid-age` **MemoryProvider** (one slot, additive) | Official Nous plugin or in-tree `hermes memory setup` pick |
-| Local Postgres + pgvector recall **and** Apache AGE walks | Hosted / multi-tenant memory service |
-| Prefetch injects quoted spans in a fenced `<memory>` block (`<grounded>` = user/doc speech, `<unconfirmed>` = model speech pending uptake; Fountain pane is retriever debug, not the prompt) | Replacing `MEMORY.md` / `USER.md` (those stay always-on) |
-| Turn extract → ordered Nouns + `mentions`; ingest for code | Automatic Obsidian vault recall |
-| `hermes-memory-install` / `verify` / `upgrade` / `uninstall` | Coverage under `hermes backup` (export Postgres yourself) |
-| Loopback only (`127.0.0.1:5450` and `:7890`) | Drop-in for every gateway/wrapper without the CLI |
+|---|---|
+| Unofficial `hybrid-age` **MemoryProvider** for Hermes Agent | Official Nous Research plugin |
+| Local Postgres + pgvector recall **and** Apache AGE graph walks | Hosted or multi-tenant cloud memory service |
+| Fenced `<memory>` prompt injection (`<grounded>` vs `<unconfirmed>` bins) | Replacing `MEMORY.md` / `USER.md` (those remain always-on) |
+| Decoupled async claims extraction + typed fact walks | In-process extraction blocking the prompt path |
+| Single CLI installer & lifecycle manager (`hermes-memory-install`) | Automated backup under `hermes backup` (export Postgres yourself) |
+| Loopback-only security model (`127.0.0.1:5450`, `:5452`, `:7890`) | Open network listening ports |
 
-The served prompt is vector memory with neighbour and claim overlays. Graph traversal is not yet on the prompt path.
+---
 
-Vector finds nearby chunks; the graph is the walk. Fountain is optional grammar — recall must work with the pane closed.
+## 🚀 Plugin User Guide
 
-**Deferred:** similarity-inferred graph edges (real ~38× lift over chance, ~1% absolute precision) — not building; see the [wiki experiment](https://github.com/rubyrayjuntos/hermes-memory/wiki/Experiment-Similarity-Inferred-Edges).
+You do **not** need to clone this repository to use the plugin. The package bundles all installation and migration assets directly into its release wheel.
 
-## Quick Start
+### Prerequisites
 
-This stack has moving parts (Docker, Ollama, a DB password, a Hermes plugin).
-That is intentional. We do not set it up for you in the dark — Hermes names
-each layer (`MEMORY.md`, sessions, this provider) and you run it. Load skill
-`librarian-setup`. You handle the secret bits, then **you** seed three facts
-in chat. Those turns are the first real graph.
+1. **Docker**: Running locally (for the loopback Postgres + Apache AGE container).
+2. **Local Ollama**: Running locally (`ollama serve` or Ollama desktop app).
+3. **Hermes Agent**: Installed with a working chat model (`hermes model`).
 
-Before you start, know what each part needs:
+### Installation
 
-- **Memory** needs only a local Ollama with `nomic-embed-text`. It does not use any hosted model or credits.
-- **Chat turns** need a configured and authorized chat model in Hermes (`hermes model`). Without one, turns fail before memory is written, and the memory provider cannot be exercised end to end.
-
-No clone is needed. Install the release from GitHub with pip, then run the
-installer that ships with it:
+Run this single command to install and set up the plugin:
 
 ```bash
-# 1. Local embeddings (required for recall — default URL is http://localhost:11434/v1)
-ollama pull nomic-embed-text
+pip install "git+https://github.com/rubyrayjuntos/hermes-memory" && hermes-memory-install --yes
+```
 
-# 2. Install the package from a release tag or a commit (replace <tag-or-commit>).
-#    Tags older than the bundled installer (for example v0.1.0) install a package
-#    without the install assets; the installer refuses those with guidance.
-pip install "git+https://github.com/rubyrayjuntos/hermes-memory@<tag-or-commit>"
+The installer automatically:
+- Probes Docker and confirms the daemon is healthy.
+- Checks Ollama and automatically pulls `nomic-embed-text` (768-dim) if missing.
+- Provisions the local container on `127.0.0.1:5452` and applies migrations.
+- Configures Hermes Agent (`hybrid-age` provider) and admits dependencies.
+- Starts the inspector API daemon on `127.0.0.1:7890`.
+- Runs verification and restarts the Hermes gateway.
 
-# 3. Install into Hermes: starts Postgres (127.0.0.1:5452), admits the plugin's
-#    dependencies, activates hybrid-age, and runs verify. The database password is
-#    generated and stored in ~/.hermes/.env unless you export HERMES_PG_PASSWORD first.
-hermes-memory-install --yes
+### Verification (Optional)
 
-# 4. Check the pipeline from any directory (exit 0 = PASS, 7/7 layers with embeddings)
+Verification runs automatically during install, but you can re-verify at any time:
+
+```bash
 hermes-memory-verify --require-embed
-
-# 5. Restart the Hermes gateway so running sessions load the plugin
-hermes gateway restart
-
-# 6. New Hermes session — load skill librarian-setup and *you* seed three facts in chat
 ```
+*(Exit code `0` indicates all layers passed).*
 
-To remove it: `hermes-memory-uninstall --force` (add `--keep-db` to keep the
-database; the password is kept with it so a reinstall can open it again).
+### Chatting & Seeding Memory
 
-Developers working from a checkout can still run `pip install -e '.[dev]'`
-and `hermes-memory-install --ref HEAD` from the clone. Checkout installs pin
-the Git ref you choose; packaged installs use the build's recorded commit.
+Open a chat session with Hermes:
+```bash
+hermes chat
+```
+Seed two or three distinct facts in conversation (e.g., your projects, active tools, or preferences). The Librarian extracts entities and relations in the background and writes them to durable storage.
 
-`hermes-memory-install` in a checkout installs a **pinned git tree** (`--ref`,
-default `origin/main` via `git archive` — GitHub, not the dirty working clone or
-the `v0.1.0` tag): it copies
-`src/hermes_memory` into `~/.hermes/plugins/hybrid-age`, writes
-`.hermes-memory-version` (SHA + ref), `pip install`s that archive
-(non-editable), and starts compose project `hermes-memory-installed` on
-`127.0.0.1:5452` / `hermes_memory_installed`. It refuses the dev stack
-(`127.0.0.1:5450/hermes_memory`) unless you pass `--reuse-dsn`. Then it
-sets `memory.provider=hybrid-age` and serves the inspector on
-`http://127.0.0.1:7890`.
+### Optional: Live Visual Inspector
 
-A wheel can be built and exposes `hybrid-age` in the
-`hermes_agent.memory_providers` entry-point group, but it is not a standalone
-installer. Run `hermes-memory-install` from an environment tied to a Git
-checkout: outside a checkout it stops before changing Hermes and asks you to
-clone. The installer exports the selected committed tree; local uncommitted
-changes are not included.
-
-The installer records non-secret ownership and progress in
-`<hermes-home>/hermes-memory-install.json` (normally `~/.hermes/`, mode
-`0600`). A successful install records its owned plugin, skill, configuration,
-environment values, and database/Compose target. Incomplete installs retain a
-record for recovery; environment values are represented by fingerprints, not
-secrets.
-
-To uninstall, run `hermes-memory-uninstall`. By default it removes recorded
-plugin and skill directories and cleans up owned configuration and unchanged
-owned environment values. `--keep-plugin` preserves the plugin and skill
-folders; `--keep-db` preserves the database. The legacy `--remove-plugin` is
-accepted as an alias for the default cleanup. The recorded owned Compose stack
-is stopped with `down --volumes` when removing its database, or `down` with
-`--keep-db`. An explicitly different `--dsn` targets `dropdb` without stopping
-the recorded stack. Without a usable record or explicit DSN, database removal
-is refused rather than guessing a target. Failed cleanup returns nonzero and
-retains the installation record for retry.
-
-Run `python scripts/release_gate.py` from an environment with `.[dev]`
-installed for disposable, offline release checks. It copies the source into a
-temporary directory, generates a fresh `HOME` and Hermes home, and runs the
-non-integration pytest suite, `ruff check src tests scripts/release_gate.py`,
-the declared mypy scope, an offline wheel build, wheel entry-point inspection,
-and provider registration from the wheel. It excludes operator `.env` files,
-credentials, integration/migration opt-ins, and inherited pip configuration.
-No install/uninstall CLI, Docker deletion, database removal, or live service is
-invoked. All temporary files are removed. Status transcripts omit child output
-because failing tests can print credentials; rerun the named failing check in a
-controlled development environment for diagnostics. Legacy scripts outside this
-scope are not included in the Ruff release gate.
-
-`python scripts/release_gate.py --live --dsn "$RELEASE_GATE_DSN" --embed-url
-http://127.0.0.1:<port>/v1` prints a plan and exits 2 without `--execute`.
-With `--execute` it runs the lifecycle in a temporary venv and temporary HOME:
-install of a staged snapshot of the working tree (`--ref HEAD`, `--release-gate-target`), `hermes-memory-verify
---require-embed`, `hermes memory status` (must report `hybrid-age`), uninstall
-with `--keep-db`, reinstall and verify, then full uninstall. The run-owned
-Docker container and volume are removed in a `finally`, using names derived from
-the validated DSN. The DSN must select a loopback host, a port other than
-5450/5452, and a database named `hermes_release_gate_<run-id>`; the embed URL
-must be loopback and not port 11434. The installer's `--release-gate-target`
-refuses a HOME outside the system temp directory. Use `--log-dir` only for a
-local, operator-chosen transcript directory; it may contain disposable-test
-secrets.
-
-The live lifecycle does **not** yet cover Hermes recall of seeded facts across a
-restart, or restart of owned services. It is automated evidence, not
-human-observed level-6 evidence.
-
-**Topology (do not mix):** clone / Documents work is `:5450` / `hermes_memory`.
-The install pin is `:5452` / `hermes_memory_installed`. Missing `HYBRID_AGE_DSN`
-after dotenv load **raises** — there is no silent fallback to `:5450`.
-Optional: `docker compose --profile pooled up -d` also starts PgBouncer on
-`127.0.0.1:6432`.
-
-Do not treat verify's Zephyr/Atlas rows as product data. The first real graph
-should be facts you said to Hermes. Memory works without opening the graph.
-If you want to *see* it, open
+If you want to visually explore the memory graph in your browser, open:
 [http://127.0.0.1:7890/api/librarian/pane](http://127.0.0.1:7890/api/librarian/pane)
-and drag to orbit (Fountain starts in a simple “Garden” view).
 
-Advanced: point `HYBRID_AGE_EMBED_URL` at any OpenAI-compatible `/v1` host that
-returns **768-dim** vectors. Changing models without re-embedding poisons search.
+*(Memory recall works completely autonomously with the visual pane closed).*
 
-```yaml
-# ~/.hermes/config.yaml — hermes-memory-install writes this; defaults shown
-memory:
-  provider: hybrid-age
+### Indexing a Codebase (Optional)
 
-hybrid_age:
-  dsn_env: HYBRID_AGE_DSN
-  embed_url_env: HYBRID_AGE_EMBED_URL
-  embed_model: nomic-embed-text
-  graph: hermes_knowledge
-  vector_k: 12
-  min_similarity: 0.55
-  max_tokens: 1200
-```
-
-Index a codebase (re-run is a no-op when content is unchanged):
-
+You can index an entire source repository into the Librarian:
 ```bash
 hermes-memory-ingest path/to/repo
 ```
+*(Re-running ingestion is an idempotent no-op for unchanged files).*
 
-## Documentation
+### Uninstallation
 
-| Path | Job |
-|------|-----|
-| [docs/README.md](docs/README.md) | In-repo map (what is binding vs scratch) |
-| [Wiki](https://github.com/rubyrayjuntos/hermes-memory/wiki) | Short how-tos; links back to the repo |
-| [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md) | **Only** Open/Met table |
-| [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) | Evidence levels; pane needs level 6 |
+To cleanly remove the plugin and shut down its dedicated container:
+```bash
+# Remove plugin and tear down database container
+hermes-memory-uninstall --force
 
-## Architecture
+# Or preserve the database for future re-installs:
+hermes-memory-uninstall --force --keep-db
+```
 
-The memory core spans **three coordinated layers**:
+---
 
-| Layer | What it holds | How it's built |
-|---|---|---|
-| **Conversations** | `conversations` table — one row per turn (user + assistant), with `session_id`, `turn_id`, `content`, and `created_at` | Per turn A–F: embed; insert conversation; MERGE the Session/Turn flower; extract Nouns; write passports; strengthen ordered `mentions` edges. |
-| **Vector + Graph** | `memory_entries` (pgvector HNSW, 768-dim nomic-embed-text), SQL `noun` / `semantic_edge`, and the AGE `hermes_knowledge` Session/Turn flower | Ingest walks codebase → SHA-256 chunks → embed → File/Module/Dependency with `IMPORTS` edges. Conversation recall walks SQL `mentions`; AGE preserves `NEXT` / `IN_SESSION`. |
-| **Inspector** | Optional Garden pane at `http://127.0.0.1:7890/api/librarian/pane` (`docs/graph/fountain.html`). Drag to orbit Noun nodes; threads are `mentions` (co-occurrence in mention order). Session and turn are properties. Not required for recall. | `hermes-memory-api` (loopback-only). CORS reflects loopback/`null` origins only. |
+## 🛠️ Developer & Integrator Guide
 
-**Walk** (`expand_graph`): `composite = 0.4 * seed_similarity + 0.4 * (source_alignment * target_alignment) * provenance_boost + 0.2 * decay`; `score = composite * (magnitude / 8)`. The bounded two-hop walker is pane search. It is not on the prompt path.
+For developers looking to inspect the code, modify migrations, or run tests locally.
 
-**Verify**: `hermes-memory-verify` checks database connectivity, conversation writes, the memory mirror, and prefetch output. The API health surface reports bridge and integrity counts.
+### Local Development Setup
+
+```bash
+git clone https://github.com/rubyrayjuntos/hermes-memory.git
+cd hermes-memory
+pip install -e '.[dev]'
+```
+
+### Dual-Database Port Architecture (Important)
+
+The codebase strictly enforces two separate database environments to prevent developer experiments from corrupting user memory:
+
+| Environment | Host & Port | Database Name | Managed By | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| **Development** | `127.0.0.1:5450` | `hermes_memory` | `docker compose up -d` | Local tests, migrations, experimentation |
+| **Installed Plugin** | `127.0.0.1:5452` | `hermes_memory_installed` | `hermes-memory-install` | Active Hermes Agent runtime plugin |
+
+> [!WARNING]
+> `hermes-memory-install` explicitly refuses to attach to the `:5450` dev database without `--reuse-dsn`. Missing `HYBRID_AGE_DSN` raises an error rather than silently defaulting.
+
+To spin up the local development database:
+```bash
+docker compose up -d
+```
+
+### Running Tests
+
+```bash
+# 1. Pure-function property tests (Hypothesis, no database required)
+pytest tests/property -q
+
+# 2. Standard test suite (excludes integration tests by default)
+pytest -q
+
+# 3. Integration test suite (requires dev stack running on :5450)
+pytest tests/integration -q -m integration --override-ini="addopts="
+```
+
+#### Property Test Suite (P1–P8)
+The property test suite guards against data corruption and security invariants:
+- **P1**: Cypher injection prevention (unescaped quotes/backslashes).
+- **P2**: Malformed MERGE properties handling.
+- **P3/P4**: Entity slug idempotence and noise filtration (`extract_nouns`).
+- **P5**: Artifact path filtration (ignoring hex/UUID/skip directories).
+- **P6**: Deterministic dependency index output.
+- **P7**: Silent file-hash state corruption resilience.
+- **P8**: Bridge table link symmetry and orphan prevention.
+
+### Offline Release Gate Checks
+
+Before opening a PR, run the automated release gate script to verify formatting, type-checking, and offline wheel packaging:
+```bash
+python scripts/release_gate.py
+```
+
+### Configuration Reference (`config.yaml`)
+
+`hermes-memory-install` writes default settings to `~/.hermes/config.yaml`. Knobs under `hybrid_age:` include:
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `dsn_env` | `HYBRID_AGE_DSN` | Environment variable containing the Postgres DSN |
+| `embed_url_env` | `HYBRID_AGE_EMBED_URL` | Environment variable for embeddings endpoint |
+| `embed_model` | `nomic-embed-text` | Embedding model name (strictly 768-dim) |
+| `graph` | `hermes_knowledge` | Apache AGE graph name |
+| `vector_k` | `12` | Top-$k$ nearest neighbors for vector recall |
+| `min_similarity` | `0.55` | Cosine similarity cutoff floor |
+| `max_tokens` | `1200` | Token budget for prompt injection block |
+
+---
+
+## 🧭 Contributor & Architecture Guide
+
+Contributors must adhere to the architectural invariants and release criteria defined in the governing specifications.
+
+### Architectural Core
 
 ```text
-User message ─▶ A embed ─▶ B insert conversation ─▶ C MERGE Session/Turn + NEXT/IN_SESSION ─▶ D extract ≤5 Nouns ─▶ E write passports ─▶ F strengthen ordered mentions
-                                    │
-                                    ▼
-                     SQL noun + semantic_edge manifold; AGE Session/Turn episodic flower
-                                    │
-                                    ▼
-                     expand_graph(passport hypotheses, q_vec, hops≤2, k) → composite × magnitude / 8
-```
-| Module | Path | Role |
-|--------|------|------|
-| Embeddings | `src/hermes_memory/embed.py` | OpenAI-compatible client (Ollama default), 768-dim invariant |
-| Store | `src/hermes_memory/store.py` | SQL/Cypher data access; every Cypher statement inside a SAVEPOINT |
-| Ingest | `src/hermes_memory/ingest.py` | Codebase indexing: hash→chunk→embed→vector+graph+bridge |
-| Verify | `src/hermes_memory/verify.py` | End-to-end pipeline smoke-check CLI |
-
-| Layer | Tech | Purpose |
-|-------|------|---------|
-| Storage | Postgres 17 + pgvector | Embeddings (HNSW) + conversation/memory/doc-chunk rows |
-| Graph | Apache AGE 1.6 | Entity vertices + typed edges in the `hermes_knowledge` graph |
-| Bridge | `memory_chunk_nodes` | Links vector chunks to AGE vertex IDs |
-
-## Status
-
-Alpha (`0.1.0` in `pyproject.toml`). The tagged release is `v0.1.0` (2026-08-24);
-`main` is ahead of that tag (Fountain inspector, install CLI, CORS/ingest/secrets
-hardening). This is not a production multi-tenant service.
-
-**What the machine is:** [`docs/specs/HERMES_MEMORY_SPEC.md`](docs/specs/HERMES_MEMORY_SPEC.md).
-**Where “done” is defined:** [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
-**What evidence “done” needs:** [`DEFINITION_OF_DONE.md`](DEFINITION_OF_DONE.md)
-(user-facing = level 6 + artifact).
-**Verified-wrong claims (do not restate):** [`docs/CORRECTIONS.md`](docs/CORRECTIONS.md).
-**Pane interaction (binding):** [`docs/PANE_INTERACTION_SPEC.md`](docs/PANE_INTERACTION_SPEC.md).
-Live UI: [`docs/graph/fountain.html`](docs/graph/fountain.html) on `:7890`.
-HTML prototypes ([`docs/pane-prototype.html`](docs/pane-prototype.html),
-[`docs/hermes_librarian_traversal_expansion_simulator.html`](docs/hermes_librarian_traversal_expansion_simulator.html))
-are **not** the live pane (they do not render on github.com).
-**How to walk the docs:** [`docs/README.md`](docs/README.md) ·
-[Wiki](https://github.com/rubyrayjuntos/hermes-memory/wiki).
-
-The table below is an inventory of what exists on `main`, **not** a release gate.
-Open/Met lives only in [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
-
-| Capability | On `main` |
-|------------|:---------:|
-| Docker compose stack (AGE PG17 1.6 + pgvector) | yes |
-| Memory provider (turn capture, budgeted prefetch) | yes |
-| `hermes-memory-install` + `hermes memory setup hybrid-age` | yes |
-| Doc/codebase ingest + verify CLIs | yes |
-| Fountain live inspector (loopback `:7890`) | yes |
-| Property tests P1–P8 (P3/P4 live on `extract_nouns`) + CI | yes |
-| Turn + ingest extractors | live path: `extract_nouns` + Session/Turn flower; ingest `extract_dependencies`. Legacy Title-Case cosine linker is isolated in `about_concepts.py`. `legacy/scripts/` is the old cron. |
-
-## Testing
-
-```bash
-pip install -e '.[dev]'
-
-pytest tests/property -q        # pure-function Hypothesis property tests (no DB)
-pytest -q                       # default addopts exclude integration
-pytest tests/integration -q -m integration --override-ini="addopts="   # needs the compose stack up
+Prompt Turn ──► vector_search (pgvector HNSW) ──► 2-hop Claim Walk (claim_walk.py)
+                     │                                      │
+                     ▼                                      ▼
+             RRF Ranking Fusion ──► MMR Diversification ──► <memory> Injection Block
+                     │
+                     ▼
+             retrieval_shadow (V20 Shadow Log)
 ```
 
-What the property suite guards:
+The system operates across three coordinated tiers:
+1. **Episodic & Conversational Storage**: Postgres `conversations` table, Apache AGE `Session`/`Turn` flower structure, and outbox queues (`write_outbox`).
+2. **Semantic Knowledge & Claims**: Typed owner-scoped claims (`claims`), evidence rows, and entities (`V18`), populated by decoupled background workers (`extraction_worker.py`, `V19`).
+3. **Retrieval & Shadow Logging**: HNSW vector search combined with bounded 2-hop claim walks, fused via Reciprocal Rank Fusion (RRF) and Maximal Marginal Relevance (MMR), evaluated against live traffic in shadow mode (`V20`, `shadow.py`).
 
-| ID | Guards against |
-|----|----------------|
-| P1 | Unescaped `'`/`\` surviving `age_str` (Cypher injection) |
-| P2 | Malformed MERGE props (None dropped, keys preserved once) |
-| P3/P4 | Extractor noise / slug idempotence (`extract_nouns`, always run) |
-| P5 | Garbage module names from artifact paths (hex/uuid/digits/skip-dirs) |
-| P6 | Nondeterministic dependency-index output |
-| P7 | Silent file-hash state corruption (corrupt JSON → `{}`) |
-| P8 | Orphan bridge rows (dedup key + insert/delete symmetry) |
+### Governing Specifications ("The Immune System")
 
-The verify CLI exercises all three layers end-to-end (synthetic turn → row counts
-in conversations, memory_entries, and the AGE graph) and exits non-zero if the
-background drain stalls:
+Do not guess or assume architectural rules. Consult the authoritative references:
 
-```bash
-hermes-memory-verify [--dsn postgres://...] [--drain-wait SECONDS]
-```
+| Document | Purpose |
+| :--- | :--- |
+| [docs/specs/HERMES_MEMORY_SPEC.md](docs/specs/HERMES_MEMORY_SPEC.md) | **The Governing Specification**: Narrative source of truth and NOW implementation contracts. |
+| [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md) | **Destination Gates**: The only authoritative Open/Met criteria table (Delivery vs Retrieval Quality). |
+| [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) | **Evidence Levels**: Required verification standards (user-facing features require Level 6 evidence). |
+| [docs/CORRECTIONS.md](docs/CORRECTIONS.md) | **Verified Negative Constraints**: 15 disproven claims and traps to avoid restating. |
+| [docs/age-quirks.md](docs/age-quirks.md) | **Engine Quirks**: Apache AGE Cypher nuances, SAVEPOINT wrapping, and syntax invariants. |
+| [docs/PANE_INTERACTION_SPEC.md](docs/PANE_INTERACTION_SPEC.md) | **Inspector Contract**: Binding interaction specification for the visual pane. |
+| [AGENTS.md](AGENTS.md) | **Agent & PR Guidelines**: Security policies, bot identity, and execution rules. |
+| [docs/README.md](docs/README.md) | **Documentation Map**: Guide to living contracts, reports, and [docs/archive/](docs/archive/README.md). |
 
-See [SECURITY.md](SECURITY.md) to report vulnerabilities.
+### Contributing Workflow
 
-## Configuration reference
+1. Check [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md) to identify the target track (Delivery, Retrieval Quality, or Observability & Control).
+2. Read [docs/CORRECTIONS.md](docs/CORRECTIONS.md) before writing any graph queries or modifying scoring formulas.
+3. Review [CONTRIBUTING.md](CONTRIBUTING.md) for branch naming conventions, review standards, and CI requirements.
 
-### config.yaml — `hybrid_age:` block (behavior knobs)
-
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `dsn_env` | `HYBRID_AGE_DSN` | Name of the env var holding the Postgres DSN |
-| `embed_url_env` | `HYBRID_AGE_EMBED_URL` | Name of the env var holding the embeddings endpoint |
-| `embed_model` | `nomic-embed-text` | Embedding model (must be 768-dim) |
-| `graph` | `hermes_knowledge` | AGE graph name |
-| `vector_k` | `12` | Vector-search top-k |
-| `min_similarity` | `0.55` | Minimum cosine similarity for recall candidates |
-| `max_tokens` | `1200` | Injection budget (tokens) |
-
-Resolution order: config.yaml > environment > defaults. Secrets/endpoints never go
-in committed yaml — they resolve from the env vars named by `dsn_env`/`embed_url_env`.
-
-### Environment variables
-
-| Variable | Required | Meaning |
-|----------|----------|---------|
-| `HERMES_PG_PASSWORD` | yes (compose) | Postgres password; compose refuses to start without it |
-| `HYBRID_AGE_DSN` | yes (provider) | e.g. `postgres://hermes:<pw>@localhost:5450/hermes_memory` |
-| `HYBRID_AGE_EMBED_URL` | no | Embeddings endpoint (default `http://localhost:11434/v1`) |
-| `HYBRID_AGE_EMBED_MODEL` | no | Overrides `embed_model` when yaml doesn't set it |
-| `HYBRID_AGE_GRAPH` | no | Overrides `graph` when yaml doesn't set it |
-| `HERMES_MEMORY_DSN` | no | Convenience alias defined in `.env.example` only — prefer `HYBRID_AGE_DSN` (nothing in src reads this) |
-| `HERMES_MEMORY_GRAPH` | no | Convenience alias only — prefer `HYBRID_AGE_GRAPH` |
-
-## Troubleshooting
-
-- **"char limit raised but nothing more is stored."** `memory_char_limit` /
-  `user_char_limit` cap how much context is *injected per turn* — they do not
-  change what is stored or retrieved. The injection budget is governed by
-  `max_tokens` (default 1200); raising the char limits alone won't surface more memory.
-- **Prefetch silently returns empty after ~8s.** Hermes kills prefetch at 8 seconds.
-  Warm prefetch should run well under 2s. If you're hitting the cap, check that
-  Ollama is reachable (`HYBRID_AGE_EMBED_URL`) and that the HNSW indexes exist
-  (`sql/init/03_indexes.sql`). On any failure the provider returns `""` rather than raising.
-- **Live schema behind `hermes_test`.** GitHub CD does not migrate the loopback
-  volume. Provider and pane boot run `scripts/migrate.py` (advisory lock), then
-  `require_schema_head` refuses to start if history still lags. The head check
-  is a backstop, not the apply path. Topology is one provider plus an optional
-  pane — not a rolling multi-instance cutover.
-- **Unstamped embeddings (`embed_model` NULL).** Pre-V10 rows are left NULL on
-  purpose (`trust_nomic_768`): they stay in ANN and are treated as nomic/768.
-  They are not backfilled. Mixing a second embed model requires a backfill or
-  an ANN filter first.
-- **A failed Cypher statement poisons the whole transaction.** In AGE, an error
-  aborts the transaction, not just the statement. The store layer wraps every
-  Cypher call in a SAVEPOINT and rolls back to it; keep that pattern if you add SQL
-  (see [docs/age-quirks.md](docs/age-quirks.md)).
-- **`ON CREATE SET` / `ON MATCH SET` don't exist in AGE 1.6** ([plan §3.3](docs/plans/v0.1.md)):
-  use MERGE-then-SET — `MERGE (v:Label {key}) RETURN v;` then
-  `SET v += {props}` in a second statement, keeping the merge key out of the SET map.
-- **GIN index note.** Containment queries issued as raw SQL against the label's
-  underlying table hit the GIN `properties` index (verified with Bitmap Index Scan).
-  Cypher-internal `properties @>` predicates may bypass the index — prefer raw SQL
-  for hot containment lookups.
-
-## Version compatibility
-
-Tested against **Hermes Agent v0.20.x**. Newer Hermes versions regularly add kwargs
-to provider methods; the provider accepts `**kwargs` everywhere, but pin expectations
-until re-tested.
-
-
-## Operations
-
-### CLI commands
-
-| Command | What it does |
-|---|---|
-| `hermes-memory-install` | Pin a git ref into `~/.hermes/plugins/hybrid-age` (copy + `.hermes-memory-version`), non-editable pip, installed DB on `:5452` / `hermes_memory_installed`, viz API `:7890`, verify. Does not attach to the `:5450` dev stack. |
-| `hermes-memory-upgrade` | From any prior version to 0.1.0: back up schema, run migrations, rewrite DSNs, restart API, verify. |
-| `hermes-memory-migrate` | Dump data from a source DSN, apply V6 constraint fix, restore to target DSN, optionally re‑ingest codebase. |
-| `hermes-memory-uninstall` | Clean up recorded ownership; use `--keep-plugin` and `--keep-db` to preserve those categories. Database removal requires a recorded or explicit target. |
-| `hermes-memory-api` | Read-only viz API (`start`/`stop`/`status`/`serve`) on 127.0.0.1:7890. Pane: `http://127.0.0.1:7890/api/librarian/pane`. |
-| `hermes-memory-backfill-about` | Legacy Title-Case linker only. Does **not** run live C–F (no nouns, passports, `semantic_edge`, or `drain_status`). The old name `hermes-memory-backfill` now exits 2 and prints this distinction. |
-| `scripts/replay_conversation_manifold.py --live` | The C–F backfill: flower, `extract_nouns`, passports, `upsert_mentions_chain`, `drain_status` on `hermes_memory`. Default (no `--live`) copies onto `hermes_test`. |
-
-### Backup & restore
-
-```bash
-# Backup the hermes_memory database (custom, compressed format)
-pg_dump -Fc hermes_memory > ~/librarian-$(date +%F).dump
-
-# Restore
-pg_restore -d hermes_memory ~/librarian-2026-08-31.dump
-```
-
-### Between‑version migration notes
-
-- **AGE 1.7.0 → 1.6.0**: the provider uses `MERGE‑then‑SET +=` (no `ON CREATE SET`/`ON MATCH SET`).
-- **Canonical dedup** (AGENTS.md): `memory_entries` dedup is on `(agent_identity, target, md5(content))` via `memory_entries_unique_hash` UNIQUE index on `md5(content)` — plain `UNIQUE (agent_identity, target, content)` exceeds btree 2704-byte limit. Fresh installs get the correct index from `sql/init/02_schema.sql`. Deployments that already applied `V6__fix_memory_entries_conflict_target.sql` (plain content UNIQUE) should apply `V7__canonical_md5_dedup.sql` which drops the plain constraint and creates the `md5(content)` index. `store.py:upsert_memory_entry` uses `ON CONFLICT (agent_identity, target, md5(content)) DO NOTHING` matching that index.
-- **`hermes memory reset`** only erases built‑in `MEMORY.md`/`USER.md` rows; it does **not** touch `hermes_memory` pgvector/AGE tables or the plugin directory.
+---
 
 ## License
 
-MIT
-
-## Document changelog
-
-| Version | Created | Modified | Author | Notes |
-|---|---|---|---|---|
-| 1.2 | 2026-08-24 | 2026-11-13 | Codex | Document disposable offline release gate, guarded live plan, and remaining lifecycle evidence. |
+MIT © 2026 The Hermes Librarian Authors.

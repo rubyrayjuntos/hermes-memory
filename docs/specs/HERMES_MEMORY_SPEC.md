@@ -7,7 +7,7 @@ Status of each release row lives only in [`RELEASE_CRITERIA.md`](../../RELEASE_C
 `queue_prefetch`, which is not in the tree). The destination PDF and
 `HERMES_MEMORY_OVERALL_SPEC.md` are retired as standalone files.
 
-**Last verified against:** `phase0/scoping-durability` @ `e1f2e53` (narrative; `origin/main` plus Phase 0, migration V16).
+**Last verified against:** `origin/main` @ `0322145` (narrative; PR #91 Graph Layer Phases 1–3, migrations through V20).
 Open/Met cells: [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) only.
 If code and this spec disagree, the code is right and this document is stale —
 fix the document, not the belief.
@@ -23,7 +23,7 @@ fix the document, not the belief.
 | 3 | [`DEFINITION_OF_DONE.md`](../../DEFINITION_OF_DONE.md) | Evidence level required before a row may become Met / NOW | Substitute “closes D-MVP-3” for a running artifact |
 | 4 | [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) | Destination rows: Delivery / RQ / OC × MVP / Prod (the only Open/Met table) | Define how prefetch works |
 | 5 | This document, §6 (Destination Deltas) | Proposed future work, explicitly labeled | Be quoted as `main` |
-| — | `docs/plans/*`, sprint scratch | Working notes | Define release |
+| — | `docs/archive/plans/*`, sprint scratch | Working notes | Define release |
 
 A claim in §6 is a **proposal**, not a requirement, until it has a row in
 `RELEASE_CRITERIA.md` and code on `origin/main`.
@@ -41,7 +41,10 @@ A claim in §6 is a **proposal**, not a requirement, until it has a row in
   (`trust_nomic_768`), not backfilled, not excluded — documented in `schema_guard`, the
   `vector_search` docstring, README, and AGENTS.md.
 - Package: `hermes_memory`. Key modules: `provider.py` (Hermes `MemoryProvider` ABC),
-  `store.py` (+ mixins, SQL/Cypher access), `walk.py` (`beam_score`, graph expansion),
+  `store.py` (+ mixins, `store_claims.py`, `store_jobs.py`, SQL/Cypher access),
+  `walk.py` (`beam_score`, graph expansion), `claim_walk.py` (bounded 2-hop typed facts traversal),
+  `fusion.py` (Reciprocal Rank Fusion + MMR diversification), `shadow.py` (shadow retrieval log),
+  `extraction_worker.py` (decoupled background rules/model claims extraction),
   `extract_nouns.py` (live entity extraction), `graph_api.py` (facade only — re-exports
   `graph_view`/`graph_server`/`graph_runtime`/`session_kind`), `verify.py`.
 - Viz/inspector pane on `127.0.0.1:7890`, read-only.
@@ -55,7 +58,7 @@ sync_turn(user_content, assistant_content, session_id)
     │
     ▼
 _enqueue_write({...})
-    │   record item in write_outbox (V16)       [blocks the caller up to 2 s]
+    │   record item in write_outbox (V16, idempotency V17)  [blocks caller up to 2 s]
     │   put_nowait on the in-memory queue
     ▼
 Background drain on a dedicated asyncio loop thread
@@ -64,10 +67,17 @@ Background drain on a dedicated asyncio loop thread
     ├─► INSERT conversations / memory_entries (stamped embed_model/embed_dim)
     ├─► Session/Turn flower MERGE (AGE)
     ├─► extract_nouns + noun passports
-    └─► SQL mentions chain (semantic_edge)
+    ├─► SQL mentions chain (semantic_edge)
+    └─► Enqueue durable extraction jobs (V19): rules & model extraction
+            │
+            ▼
+        Extraction Worker (extraction_worker.py, off prompt path)
+            ├─► Release DB connection before model call
+            ├─► Model / rules extraction → claims evidence (V18)
+            └─► Embed current fact text into fact_vec
 ```
 
-- Outbox first: `sync_turn` and `on_memory_write` record each write in the V16 `write_outbox`
+- Outbox first: `sync_turn` and `on_memory_write` record each write in the V16/V17 `write_outbox`
   table before queuing it (`_record_outbox`, `OUTBOX_ADD_TIMEOUT_S = 2.0` in `provider.py`).
   This runs on Hermes's thread and can block the caller up to 2 s when the database is slow.
   If the outbox insert fails, the write stays in memory only and the failure is logged.
@@ -80,13 +90,16 @@ Background drain on a dedicated asyncio loop thread
   `FOR UPDATE SKIP LOCKED`, so two processes do not replay the same row. A replayed turn carries
   `outbox_id` into its row metadata, and `insert_turn` checks it, so a turn is never written
   twice. The drain deletes the outbox row once the write has landed.
+- Extraction worker: Heavy model extraction runs asynchronously via durable background jobs (V19,
+  `extraction_worker.py`). The worker claims jobs with `SKIP LOCKED`, releases the database
+  connection during LLM inference (`model_extract.py`), enforces polarity/grounding checks,
+  writes evidence rows (V18), and embeds current fact text into `fact_vec`.
 - `shutdown()` drains ≤5s, releases this process's outbox claims (`outbox_release`), and closes
   the pool.
-- Rows that fail 5 replay attempts stay parked in `write_outbox`. **Open item:** parked rows are
-  not yet surfaced in `Runtime.health()` or `hermes-memory-verify`.
-- Secrets: **write-path secret filtering is not implemented.** Raw content is stored in
-  `conversations` and `write_outbox`. Secrets are filtered only at recall/injection (`SECRET_RE`
-  in `provider.py`). **Open item.**
+- Rows that fail 5 replay attempts stay parked in `write_outbox`. Parked rows are surfaced
+  in `/api/health` and `hermes-memory-verify` as `outbox_parked` and `outbox_pending`.
+- Secrets: Secrets matching `SECRET_RE` are redacted before outbox recording, SQL insertion,
+  and embedding. Raw secrets do not enter `conversations` or `write_outbox`.
 
 ### Write-failure policy (L0–L6)
 
@@ -134,10 +147,11 @@ site (`schema_guard`, V11 header, `bench.load_golden_set`) plus a test
   `DEPLOY_TOPOLOGY["rolling_deploy"] = False`; the same dict carries
   `DEPLOY_TOPOLOGY["head_check"] = "expected_not_applied_only"` with a comment that flipping
   `rolling_deploy` to `True` makes this check insufficient — read together, not two greps apart.
-- V8–V16 exist in `sql/migrations/`. V12–V15 add the reception stage (spans, claims, uptake,
-  claim canons/aliases, `claims_status`, claim live key); V16 adds `write_outbox`.
-  `schema_guard.CONSUMER_HEAD_VERSIONS` is `("V1", "V9", "V10", "V11", "V16")`. V9's gap (Sep 1–3, 2026, live only) left
-  conversations with zero graph presence — not corrupted, but structurally absent from the
+- V8–V20 exist in `sql/migrations/`. V12–V15 add the reception stage (spans, claims, uptake,
+  claim canons/aliases, `claims_status`, claim live key); V16 adds `write_outbox`; V17 adds
+  outbox idempotency; V18 adds claims evidence; V19 adds durable jobs; V20 adds retrieval shadow logging.
+  `schema_guard.CONSUMER_HEAD_VERSIONS` is `("V1", "V9", "V10", "V11", "V16", "V17", "V18", "V19", "V20")`.
+  V9's gap (Sep 1–3, 2026, live only) left conversations with zero graph presence — not corrupted, but structurally absent from the
   mentions mesh for that window. **Any live-shaped eval must exclude or explicitly account
   for that window** (see `RQ-PROD-1` / `RQ-PROD-2`).
 
@@ -174,9 +188,10 @@ Synchronous. Never raises. Does the FULL retrieve — there is no cache.
     │
     ├─► Embed enriched query (nomic, truncated to QUERY_TOKEN_CAP = 2048 tokens, tokens.py)
     ├─► vector_search: vector_k=12, drop similarity < 0.55, drop SECRET_RE
-    ├─► Graph expansion via beam_score (walk.py), owner-scoped paths
-    │     (paths are computed but not rendered; see below)
-    ├─► Budget ≤1200 tokens
+    ├─► (Graph expansion walk unhooked from prompt path to save ~600 ms; kept for pane)
+    ├─► Graph Layer shadow retrieval (V20): bounded 2-hop claim walk (claim_walk.py) +
+    │     RRF ranking fusion & MMR diversification (fusion.py) logged to retrieval_shadow
+    ├─► Budget ≤1200 tokens (tiktoken cl100k_base hedge at 90%)
     └─► format_span_injection → fenced <memory> block (grounded / unconfirmed)
 ```
 
@@ -190,7 +205,7 @@ Synchronous. Never raises. Does the FULL retrieve — there is no cache.
   fifth `counts()` key, and none is planned — asymmetric handling is intentional, not an
   oversight.
 - Measured (C7 bench): p50 ≈ 1043ms, p95 ≈ 1881ms. **This is not a cache-hit number** — it's
-  embed + ANN + graph expand, done live, every call. A 50ms bar does not apply to this function
+  embed + ANN, done live, every call. A 50ms bar does not apply to this function
   and never has; any document that states one is describing a different, unbuilt design (§6).
 
 ### Ranking — the single live formula
@@ -222,17 +237,18 @@ target is read by multiple model profiles (Nemotron, Grok, Claude Opus, GPT-5.5,
 and `cl100k_base` is exact only for GPT-4-class tokenizers. No per-profile token counting exists
 yet; the 90% margin is deliberate slack, not a solved measurement (`RQ-PROD-3`).
 
-### Graph expansion: owner-scoped, not rendered
+### Graph expansion & Shadow Retrieval
 
-Expansion is owner-scoped: `_owner_scoped_paths` (`provider.py`) keeps a path only if at least
-one of its provenance turns belongs to this memory owner (`Store.owned_turn_ids`), and trims its
-provenance to those turns. `noun`, `semantic_edge`, and passports themselves are shared across
-owners.
-
-Current behavior: the rendered prompt does not use the paths. `format_span_injection` ignores
-graph paths, so the walk does not reach the prompt. **Open item.** `GET /api/librarian/search`
-is not owner-scoped and embeds `q[:800]` (`graph_runtime.py`), so it can pick different turns
-than prefetch.
+- **Expansion decoupling:** Calling `_expand_paths` on the prompt path cost ~600 ms while
+  `format_span_injection` ignored path output. The walk was decoupled from `_aprefetch` (Phase 0
+  follow-up 0.1), keeping the method for the inspector pane.
+- **Search endpoint alignment:** `GET /api/librarian/search` is owner-scoped and shares the
+  query-embedding helper with prefetch (Phase 0 follow-up 0.2).
+- **Shadow Retrieval (V20):** Bounded 2-hop traversal over typed claims (`claim_walk.py`) and
+  candidate fusion with Reciprocal Rank Fusion (RRF) and Maximal Marginal Relevance (MMR)
+  (`fusion.py`) run in shadow mode. When `_shadow_hook` is active, results are recorded to
+  `retrieval_shadow` (V20, `shadow.py`) using HMAC-keyed query hashes, without persisting raw
+  query text and without changing the rendered prompt text until evaluation confirms quality.
 
 ### What exists vs the PDF “epistemic notice”
 
@@ -351,8 +367,8 @@ not a requirement**, until it earns a row in `RELEASE_CRITERIA.md` **and** code 
 | FalkorDB / Kùzu / Neo4j + SQLite WAL as graph+ledger | **Drop** | Conflicts with the verified, working Postgres+AGE+pgvector single-DSN design. Adopting this discards every migration, boot gate, and test in §2–§4. |
 | Live `prefetch` + HNSW + `beam_score` | **NOW** | Matches §3. Cite real knobs (`ef` clamp, `vector_k`, weights), not the PDF’s numbers. |
 | `queue_prefetch` + sidecar cache + 50ms format SLO | **NOT ON MAIN — proposal only** | Not in the tree. New cache-key/miss/invalidation/turn-1 design if built. Not an MVP gate. 50ms applies only to a format-only path that does not exist. |
-| Contextual propositions + typed relation verbs (`ROLE_ASSIGNED`, etc.) | **NOT ON MAIN — proposal only** | New write schema. Golden set must not require typed verbs until the extractor writes them. |
-| Bi-temporal invalidation (`valid_from`/`valid_to`/`superseded_by` on `semantic_edge`) | **NOT ON MAIN — proposal only** | V9 `semantic_edge` has no those columns; no later migration adds them. PDF Appendix A did not land. Worth adopting as an *additive* schema later; transaction-time (`T_i`) is not part of that sketch. Do not call the store bi-temporal. |
+| Contextual propositions + typed relation verbs (claims/evidence) | **NOW** | Landed in PR #91 (V18 claims evidence, V19 durable jobs, V20 shadow retrieval, `claim_walk.py`). Rules and model extractors write owner-scoped typed claims with polarity, grounding, and vector embeddings. |
+| Bi-temporal invalidation (`valid_from`/`valid_to`/`superseded_by`) | **PARTIAL — claims only** | V9 `semantic_edge` has no such columns and remains unchanged. However, the claims/evidence layer (V18) tracks invalidation via `invalid_at` and `superseded_by` on owner-scoped claims. Transaction-time (`T_i`) is not implemented anywhere; do not call the store bi-temporal. |
 | Epistemic Notice pattern (`<epistemic_notice status="partial_coverage">`) | **NOT ON MAIN — proposal only** | Not in `format_injection`. Do not confuse with `_PAST_INSTRUCTION` or the 0.65 `high relevance`/`related` labels (§3). |
 | `memory_search` / `memory_traverse` / `memory_inspect_lineage` tool affordances | **NOT ON MAIN — proposal only** | Not built. Do not gate on the notice pattern being “almost” present. |
 | Pre-Compress Checkpoint API V2 | **NOT ON MAIN — proposal only** | This plugin implements neither `on_pre_compress` nor `pre_compress_checkpoint_api_version = 2`. **Host (file-opened, not web search):** local `hermes-agent` **0.21.0** (`~/.hermes/hermes-agent/agent/memory_provider.py`) sets `PRE_COMPRESS_CHECKPOINT_API_VERSION = 2` and defaults `MemoryProvider.pre_compress_checkpoint_api_version = 1`; `on_pre_compress(messages)` is an optional hook that returns `""`. `memory_manager.py` only fail-closes (`require_checkpoint`, `BLOCKED_MISSING_PREREQUISITE`) for providers that advertise v2. Gap is **this plugin has not opted in** — a buildable roadmap item, not a fabricated host API. Do not treat V2 as a hermes-memory requirement until we advertise it. |

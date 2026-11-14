@@ -449,6 +449,110 @@ def _retained_env_fingerprints(previous: InstallState | None) -> dict[str, str]:
     return retained
 
 
+def check_docker_daemon() -> tuple[bool, str]:
+    """Check if the Docker daemon is accessible."""
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return False, "Docker executable ('docker') not found on PATH."
+    try:
+        res = subprocess.run(
+            [docker_bin, "info"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        if res.returncode != 0:
+            err = res.stderr.strip() or res.stdout.strip() or "Docker daemon returned non-zero."
+            return False, err
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def ensure_ollama_model(embed_url: str, model_name: str) -> None:
+    """Probe Ollama and auto-pull the embedding model if absent."""
+    import urllib.request
+    import urllib.error
+
+    parsed = urlparse(embed_url)
+    host_port = parsed.netloc or "localhost:11434"
+    base_url = f"{parsed.scheme or 'http'}://{host_port}"
+    tags_url = f"{base_url}/api/tags"
+
+    try:
+        req = urllib.request.Request(tags_url, headers={"User-Agent": "hermes-memory-install"})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m.get("name", "") for m in data.get("models", [])]
+            base_model = model_name.split(":")[0]
+            if any(m == model_name or m.startswith(f"{base_model}:") for m in models):
+                print(f"    Embedding model '{model_name}' is ready in Ollama.")
+                return
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        # Ollama not reachable at this URL or not an Ollama endpoint
+        print(f"    Note: Ollama endpoint {base_url} not reachable. Verify Ollama is running if using local embeddings.")
+        return
+
+    print(f"    Embedding model '{model_name}' not found locally. Auto-pulling from Ollama...")
+    ollama_bin = shutil.which("ollama")
+    if ollama_bin:
+        try:
+            res = subprocess.run([ollama_bin, "pull", model_name], capture_output=False)
+            if res.returncode == 0:
+                print(f"    Successfully pulled '{model_name}'.")
+                return
+        except Exception:
+            pass
+
+    # Fallback to HTTP POST /api/pull
+    pull_url = f"{base_url}/api/pull"
+    try:
+        body = json.dumps({"name": model_name, "stream": False}).encode("utf-8")
+        req = urllib.request.Request(
+            pull_url,
+            data=body,
+            headers={"Content-Type": "application/json", "User-Agent": "hermes-memory-install"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=180.0) as resp:
+            if resp.status == 200:
+                print(f"    Successfully pulled '{model_name}' via Ollama API.")
+                return
+    except Exception as exc:
+        print(f"    WARNING: Auto-pull for '{model_name}' failed: {exc}. Please run 'ollama pull {model_name}' manually.")
+
+
+def restart_hermes_gateway(hermes_bin: str) -> None:
+    """Bounce the Hermes gateway so active sessions load the new provider."""
+    bin_path = shutil.which(hermes_bin)
+    if not bin_path:
+        return
+    try:
+        res = subprocess.run([bin_path, "gateway", "restart"], capture_output=True, text=True, timeout=10)
+        if res.returncode == 0:
+            print("    Hermes gateway restarted.")
+        else:
+            print("    Hermes gateway not running (start with 'hermes gateway start').")
+    except Exception:
+        pass
+
+
+def print_install_summary(target: DbTarget, embed_model: str) -> None:
+    print(
+        "\n"
+        "==============================================================\n"
+        "  📜 The Hermes Librarian installed successfully!\n"
+        "==============================================================\n"
+        "  • Plugin:         hybrid-age (activated in Hermes)\n"
+        f"  • Database:       PostgreSQL 17 + Apache AGE ({target.port}/{target.db})\n"
+        f"  • Embeddings:     {embed_model}\n"
+        "  • Live Inspector: http://127.0.0.1:7890/api/librarian/pane\n"
+        "\n"
+        "  Ready! Start a chat with 'hermes chat' to seed your first facts.\n"
+        "=============================================================="
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hermes-memory-install",
@@ -726,6 +830,14 @@ def main(argv: list[str] | None = None) -> int:
                 print("    WARNING: pin is missing docker/Dockerfile.")
                 return 1
             else:
+                docker_ok, docker_err = check_docker_daemon()
+                if not docker_ok:
+                    print(
+                        f"    ERROR: Docker daemon is not running or accessible ({docker_err}).\n"
+                        "    Please start Docker (e.g. Docker Desktop or systemctl start docker) and re-run.",
+                        file=sys.stderr,
+                    )
+                    return 1
                 write_installed_compose(compose_path, target)
                 write_installed_compose(record_path, target)
                 state = replace(
@@ -805,6 +917,9 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception as exc:
                     print(f"    API start failed: {exc}")
 
+                print("[6b/7] Checking embedding model in Ollama…")
+                ensure_ollama_model(embed_url, embed_model)
+
             print("[7/7] Running hermes-memory-verify…")
             result = subprocess.run(
                 [sys.executable, "-m", "hermes_memory.verify"],
@@ -814,6 +929,10 @@ def main(argv: list[str] | None = None) -> int:
             print(result.stdout)
             if result.returncode == 0:
                 print(f"Installation complete! pin={sha[:12]} dsn={_redact_dsn(dsn)} verify=PASS")
+                if not args.release_gate_target:
+                    print("[7b/7] Restarting Hermes gateway…")
+                    restart_hermes_gateway(hermes_bin)
+                    print_install_summary(target, embed_model)
             else:
                 print("Installation finished with verify: FAIL")
             print("    skipped hermes-memory-backfill-about (ABOUT/Concept only; not C–F).")
