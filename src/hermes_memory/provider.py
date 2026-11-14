@@ -42,6 +42,7 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
     should_purge_concept,
 )
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config, resolve_agent_identity
+from . import extraction_worker
 from .embed import Embedder, vec_to_literal
 from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
@@ -83,6 +84,10 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._dropped_writes = 0
         self._outbox_owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self._outbox_task: Optional[asyncio.Task] = None
+        # Own task, separate from prefetch and the write drain (spec §5.2).
+        self._extraction_task: Optional[asyncio.Task] = None
+        # Optional `model(turn, context) -> dict`; without it only the rules tier runs.
+        self._extraction_model = None
         self._primary_context = True  # writes allowed until told otherwise
         # Session context — rolling window of recent topics/turns for query enrichment
         self._recent_topics: List[str] = []
@@ -240,6 +245,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # Strong reference so the drain loop is never garbage-collected mid-flight.
         self._drain_task = asyncio.create_task(self._awrite_drain())
         self._outbox_task = asyncio.create_task(self._outbox_replay_loop())
+        self._extraction_task = asyncio.create_task(extraction_worker.extraction_loop(self))
 
     # -- turn capture (non-blocking enqueue) --------------------------------------
 
@@ -1446,7 +1452,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # reports "Task was destroyed but it is pending"). The drain is cancelled only
         # when it did not finish: its queued and in-flight writes are in the outbox
         # with released claims, and replay is idempotent by op_id.
-        tasks = [getattr(self, "_outbox_task", None)]
+        tasks = [getattr(self, "_outbox_task", None), getattr(self, "_extraction_task", None)]
         if not drained:
             tasks.append(getattr(self, "_drain_task", None))
         pending = [t for t in tasks if t is not None and not t.done()]
