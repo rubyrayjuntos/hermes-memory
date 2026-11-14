@@ -124,3 +124,17 @@ def test_plugin_manifest_declares_the_same_dependencies_as_the_package():
     manifest = yaml.safe_load((root / "src" / "hermes_memory" / "plugin.yaml").read_text(encoding="utf-8"))
     assert manifest["name"] == "hybrid-age"
     assert sorted(manifest["pip_dependencies"]) == sorted(project["dependencies"])
+
+
+def test_build_provenance_uses_the_pinned_commit_when_there_is_no_git(tmp_path):
+    """Codex P2: a checkout install exports with git archive (no .git). The build must keep the
+    commit the installer pinned, or the next install refuses the package it just made."""
+    import hermes_build_info as build_meta
+
+    sha = "b" * 40
+    (tmp_path / build_meta.PIN_FILE).write_text(json.dumps({"sha": sha, "ref": "main"}), encoding="utf-8")
+    assert build_meta.build_info(tmp_path) == {"sha": sha, "ref": "main", "dirty": False}
+    assert install_cli.PIN_FILE == build_meta.PIN_FILE
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert build_meta.build_info(bare)["sha"] == "unknown"

@@ -127,7 +127,7 @@ def subprocess_runner(argv: list[str], *, cwd: Path, env: dict[str, str]):
 def _stage_source(repo: Path, destination: Path) -> None:
     # Do not copy .env, arbitrary operator files, Git internals or linked paths.
     allowed = {"src", "tests", "scripts", "sql", "docs", ".github", "skills", "docker"}
-    allowed |= {"pyproject.toml", "setup.py", "README.md", "LICENSE", ".env.example"}
+    allowed |= {"pyproject.toml", "setup.py", "hermes_build_info.py", "README.md", "LICENSE", ".env.example"}
     ignored = shutil.ignore_patterns("__pycache__", "*.egg-info", ".env", ".env.local", ".venv")
 
     def ignore(directory, names):

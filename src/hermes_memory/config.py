@@ -299,11 +299,12 @@ def resolve_agent_identity(scope: str, kwargs: Dict[str, Any]) -> str:
     chat session reads and writes the same memory. ``session`` keeps the per-chat owner."""
     if scope == "shared":
         # A caller that names its own memory owner (verify, tests) keeps it; a chat
-        # session's per-chat key does not split the shared memory.
+        # session's per-chat key does not split the shared memory. Otherwise the owner
+        # is the profile, so two profiles on one database never share memory.
         explicit = kwargs.get("agent_identity")
         if explicit and explicit not in (SHARED_AGENT_IDENTITY, kwargs.get("gateway_session_key")):
             return str(explicit)
-        return SHARED_AGENT_IDENTITY
+        return profile_owner(kwargs.get("hermes_home"))
     explicit = kwargs.get("agent_identity")
     if explicit == SHARED_AGENT_IDENTITY:
         explicit = None
@@ -314,3 +315,16 @@ def resolve_agent_identity(scope: str, kwargs: Dict[str, Any]) -> str:
         or kwargs.get("agent_identity")
         or SHARED_AGENT_IDENTITY
     )
+
+
+def profile_owner(hermes_home: Any) -> str:
+    """Stable memory owner for a Hermes home: the profile name for ``.../profiles/<name>``,
+    ``default`` for the root home (or when no home is given)."""
+    if not hermes_home:
+        return SHARED_AGENT_IDENTITY
+    normalized = os.path.normpath(os.path.expanduser(str(hermes_home)))
+    name = os.path.basename(normalized)
+    parent = os.path.basename(os.path.dirname(normalized))
+    if parent == "profiles" and name:
+        return name
+    return SHARED_AGENT_IDENTITY

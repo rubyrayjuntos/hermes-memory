@@ -16,6 +16,7 @@ import argparse
 import datetime
 import hashlib
 import io
+import json
 import os
 import re
 import secrets
@@ -54,6 +55,7 @@ CONFIG_PATHS = (
     HERMES_HOME / "profiles" / "librarian" / "config.yaml",
 )
 VERSION_FILENAME = ".hermes-memory-version"
+PIN_FILE = "HERMES_PIN.json"  # read by hermes_build_info.py when the archive has no .git
 INSTALLED_COMPOSE_PROJECT = "hermes-memory-installed"
 INSTALLED_CONTAINER = "hermes-memory-postgres-installed"
 INSTALLED_PORT = "5452"
@@ -633,6 +635,9 @@ def main(argv: list[str] | None = None) -> int:
                 src_pkg = Path(__file__).resolve().parent
             else:
                 export_pin(REPO_ROOT, sha, export)
+                # git archive has no .git, so the build cannot read the commit. Record the
+                # pinned commit for setup.py (hermes_build_info.PIN_FILE) to keep its provenance.
+                (export / PIN_FILE).write_text(json.dumps({"sha": sha, "ref": ref}), encoding="utf-8")
                 src_pkg = export / "src" / "hermes_memory"
             skill_src = export / "skills" / "librarian-setup"
 

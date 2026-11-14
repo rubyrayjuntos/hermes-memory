@@ -6,32 +6,23 @@ Metadata lives in pyproject.toml. This file only adds ``hermes_memory/_bundle``
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 from setuptools import setup
 from setuptools.command.build_py import build_py as _build_py
 
 ROOT = Path(__file__).resolve().parent
+
+# Load by path: pip's in-process backend does not put this directory on sys.path.
+_spec = importlib.util.spec_from_file_location("hermes_build_info", ROOT / "hermes_build_info.py")
+_build_info_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_build_info_module)
+build_info = _build_info_module.build_info
 BUNDLE = ROOT / "src" / "hermes_memory" / "_bundle"
 SOURCES = ("docker", "sql/migrations", "scripts/migrate.py", "skills/librarian-setup")
-
-
-def _git(*args: str) -> str | None:
-    try:
-        result = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=False)
-    except OSError:
-        return None
-    return result.stdout.strip() if result.returncode == 0 else None
-
-
-def build_info() -> dict:
-    sha = _git("rev-parse", "HEAD") or "unknown"
-    exact_tag = _git("describe", "--tags", "--exact-match", "HEAD")
-    dirty = bool(_git("status", "--porcelain", "--untracked-files=no"))
-    return {"sha": sha, "ref": exact_tag or sha[:12], "dirty": dirty}
 
 
 class build_py(_build_py):
@@ -45,7 +36,7 @@ class build_py(_build_py):
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
-        (BUNDLE / "build_info.json").write_text(json.dumps(build_info(), indent=2) + "\n", encoding="utf-8")
+        (BUNDLE / "build_info.json").write_text(json.dumps(build_info(ROOT), indent=2) + "\n", encoding="utf-8")
         super().run()
 
 
