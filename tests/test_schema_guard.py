@@ -51,12 +51,16 @@ def test_missing_versions_reports_gap_in_file_order() -> None:
     assert missing_versions(["V7", "V8", "V9", "V10", "V11"], expected) == []
 
 
-def test_github_cd_does_not_migrate_live() -> None:
-    """GHA cannot reach 127.0.0.1:5450. Cutover migrate is process start, not CD."""
-    cd = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "cd.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "migrate.py" not in cd
+def test_github_release_workflow_does_not_migrate_live() -> None:
+    """Release automation must not apply migrations to a live local database."""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+    release_start = workflow.find("\n  release:")
+    assert release_start != -1
+    release = workflow[release_start:]
+    assert "migrate.py" not in release
+    assert "127.0.0.1:5450" not in release
     assert DEPLOY_TOPOLOGY["github_cd_migrates_live"] is False
     assert DEPLOY_TOPOLOGY["process_start_applies_migrations"] is True
     assert DEPLOY_TOPOLOGY["require_schema_head_is_backstop"] is True
@@ -172,4 +176,3 @@ def test_head_versions_include_claims_evidence() -> None:
     assert "V18" in CONSUMER_HEAD_VERSIONS
     assert "V19" in CONSUMER_HEAD_VERSIONS
     assert "V20" in CONSUMER_HEAD_VERSIONS
-
