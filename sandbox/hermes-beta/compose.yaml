@@ -1,0 +1,55 @@
+name: hermes-memory-beta
+
+services:
+  docker:
+    image: docker:29.7.2-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: /certs
+    volumes:
+      - docker-data:/var/lib/docker
+      - docker-certs-client:/certs/client
+    ports:
+      - "127.0.0.1:${PANE_HOST_PORT:-17890}:17890"
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  hermes:
+    image: hermes-memory-beta-hermes
+    build:
+      context: ${HERMES_AGENT_SOURCE:?Set HERMES_AGENT_SOURCE to a Hermes Agent checkout}
+      dockerfile: Dockerfile
+      args:
+        HERMES_BOT_DESKTOP: "0"
+    depends_on:
+      docker:
+        condition: service_healthy
+    network_mode: service:docker
+    environment:
+      DOCKER_HOST: tcp://localhost:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
+      HOME: /opt/data
+      HERMES_HOME: /opt/data/.hermes
+      HERMES_MEMORY_DOCS: /opt/hermes-memory-test/docs/graph
+    volumes:
+      - hermes-home:/opt/data
+      - docker-certs-client:/certs/client:ro
+      - ../../docs/graph:/opt/hermes-memory-test/docs/graph:ro
+      - ../../docs/graph/fountain.html:/opt/hermes-memory-test/fountain.html:ro
+      - ./pane_proxy.py:/opt/hermes-memory-test/pane_proxy.py:ro
+      - ${UV_BIN:?Set UV_BIN to the host uv executable}:/usr/local/bin/uv:ro
+      - ${DOCKER_COMPOSE_PLUGIN:?Set DOCKER_COMPOSE_PLUGIN to the host Compose plugin}:/usr/local/lib/docker/cli-plugins/docker-compose:ro
+    command:
+      - /usr/bin/python3
+      - /opt/hermes-memory-test/pane_proxy.py
+      - --html
+      - /opt/hermes-memory-test/fountain.html
+
+volumes:
+  docker-data:
+  docker-certs-client:
+  hermes-home:

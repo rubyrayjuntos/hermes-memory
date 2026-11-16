@@ -414,9 +414,10 @@ same `embed_model`/`embed_dim` versioning already built for nomic (§2).
 - `OC-MVP-3`: written bar in `RELEASE_CRITERIA.md` only. **Open.** Honesty rows do not
   close it. Needs a level-6 human artifact against the Given/when/then, not a non-null
   graph JSON.
-- `OC-MVP-4`: interaction spec §§1–3. Code landed on `main`; **Open** until a new
-  level-6 pass and [#80](https://github.com/rubyrayjuntos/hermes-memory/issues/80)
-  (click panel is still a `#hook` dump).
+- `OC-MVP-4`: interaction spec §§1–3. The active frontend is Graph Explorer;
+  the interaction spec and existing level-6 reports concern the retired Fountain
+  UI. **Open** until the required interactions are mapped to Graph Explorer and
+  a fresh level-6 pass demonstrates them.
 - Epistemic notice, bi-temporal invalidation, and Pre-Compress Checkpoint API V2 are
   **not on `origin/main`**. They are §6 proposals. There is nothing left to “confirm merge.”
 - Run the Gromov δ-hyperbolicity measurement (§7) — not executed; script not in this repo.

@@ -2,7 +2,10 @@
 
 ## Supported versions
 
-This project is **Alpha** (`0.1.x` on `main`). Only the latest `main` is supported.
+This project is **Alpha**. Only the latest commit on `main` is supported.
+Version tags are not supported unless a release announcement says otherwise.
+In particular, `v0.9.0` was an install-testing pre-release and is not a public
+supported release.
 
 ## Reporting a vulnerability
 

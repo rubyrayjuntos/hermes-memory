@@ -43,8 +43,10 @@ Archived documents are kept in [`docs/archive/`](archive/README.md) for historic
 - [`docs/archive/research/`](archive/research/README.md) — Research swarm briefs (some findings were disproven).
 - [`docs/archive/superseded/`](archive/superseded/README.md) — Superseded specs (`architecture.md`, `persistent-memory-spec.md`).
 - `docs/superpowers/` — Working session notes from the Superpowers planning skill.
-- `docs/pane-prototype.html`, `docs/hermes_librarian_traversal_expansion_simulator.html`, `docs/dashboard/`, `docs/graph/3d.html` — Prototypes / legacy demos. **Not** the live Fountain pane.
+- `docs/pane-prototype.html`, `docs/hermes_librarian_traversal_expansion_simulator.html`, `docs/dashboard/`, `docs/graph/3d.html` — Prototypes / legacy demos. **Not** the live Graph Explorer (`ui/graph-explorer`, built to `docs/graph/explorer/`); Fountain is retired.
 
 MVP still **Open** (do not wiki-copy as done): `OC-MVP-3` (session meaning),
-`OC-MVP-4` (interaction spec §§1–3; click chrome is [#80](https://github.com/rubyrayjuntos/hermes-memory/issues/80)).
+`OC-MVP-4` (interaction spec §§1–3; current source needs a fresh level-6
+demonstration). The agreed Beta entry bar is in
+[`RELEASE_CRITERIA.md`](../RELEASE_CRITERIA.md).
 Delivery fail-loud / ingest stamps landed on `main`; honesty rows `OC-MVP-1`/`OC-MVP-2` are Met in the criteria table, not in this file.

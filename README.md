@@ -7,6 +7,9 @@ combining PostgreSQL + pgvector for semantic recall and Apache AGE for knowledge
 
 This is an **unofficial community plugin** (provider name `hybrid-age`). Status: **Alpha**. Tested against Hermes Agent v0.20.x. All database and API bindings are **loopback only** (`127.0.0.1`).
 
+Beta has not been declared. Its entry bar and remaining blockers are tracked in
+[`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
+
 > *A librarian doesn't just store books — she knows where everything is, retrieves the right volume at the right moment, and quietly discards what's stale.*
 
 Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
@@ -38,7 +41,10 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 
 ## 🚀 Plugin User Guide
 
-You do **not** need to clone this repository to use the plugin. The package bundles all installation and migration assets directly into its release wheel.
+You do **not** need to clone this repository to use the plugin. Source builds
+bundle the installation and migration assets into the wheel. The Alpha install
+path is Git-based; the CD workflow creates GitHub Releases for tagged commits
+but does not publish a wheel to a package index.
 
 ### Prerequisites
 
@@ -49,11 +55,16 @@ Embeddings run **in-process** via ONNX (`fastembed` + `nomic-embed-text`, 768-d)
 
 ### Installation
 
-Run this single command to install and set up the plugin:
+Install from an immutable Git revision rather than the moving `main` branch.
+This command uses the current Alpha snapshot reviewed here; use a
+maintainer-announced release tag or full commit SHA when one is available:
 
 ```bash
-pip install "git+https://github.com/rubyrayjuntos/hermes-memory" && hermes-memory-install --yes
+pip install "git+https://github.com/rubyrayjuntos/hermes-memory@c4f200587136521a8cdd666f9056af4c50cc3bc5" && hermes-memory-install --yes
 ```
+
+`v0.9.0` is an earlier pre-release for install testing, not the current Alpha
+snapshot or a public release.
 
 The installer automatically:
 - Probes Docker and confirms the daemon is healthy.
