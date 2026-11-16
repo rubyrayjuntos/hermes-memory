@@ -34,6 +34,7 @@ try:
 except ImportError:  # running outside the Hermes runtime (tests, CI)
     MemoryProvider = object  # type: ignore[assignment,misc]
 
+from . import extraction_worker
 from .about_concepts import (  # noqa: F401 — re-export for existing tests
     SNAP_COSINE,
     _extract_concepts,
@@ -42,7 +43,6 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
     should_purge_concept,
 )
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config, resolve_agent_identity
-from . import extraction_worker
 from .embed import Embedder, vec_to_literal
 from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
@@ -669,11 +669,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
             from .extraction_jobs import job_specs
 
             owner = item.get("agent_identity") or self._agent_identity
+            event_time = item.get("captured_at")
+            if isinstance(event_time, str):
+                event_time = datetime.datetime.fromisoformat(event_time.replace("Z", "+00:00"))
             for kind, op_id, payload in job_specs(int(conv_id)):
                 await job_add(
                     owner, kind, op_id, payload,
                     session_id=item.get("session_id"),
-                    event_time=item.get("captured_at"),
+                    event_time=event_time,
                     priority=0,
                 )
         except Exception:

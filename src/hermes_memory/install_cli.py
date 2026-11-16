@@ -476,7 +476,7 @@ def ensure_local_embed_model(model_name: str) -> None:
     print(f"    Warming in-process embedder '{model_name}' (ONNX; first run may download)…")
     try:
         warm_local_embedder(model_name)
-        print(f"    Embedder ready (in-process, 768-d).")
+        print("    Embedder ready (in-process, 768-d).")
     except Exception as exc:
         print(
             f"    WARNING: could not warm embedder: {exc}. "

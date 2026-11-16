@@ -5,6 +5,7 @@ Requires --migrate; skipped otherwise.
 from __future__ import annotations
 
 import datetime
+import uuid
 
 import pytest
 
@@ -21,13 +22,14 @@ async def test_compaction_dedup_ordering_and_weight(db_pool, store, clean_hermes
     # Use merge_vertices with weight=1 and created_at now
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     old_iso = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10)).isoformat()
+    run_id = uuid.uuid4().hex
 
     # Create 3 Concepts: two near-duplicate names (we will treat as duplicate via cosine fallback),
     # but for this DB test we directly exercise merge_concept_pair + weight/bridge behavior
     vids = await store.merge_vertices_batched([
-        ("Concept", {"name": "Graph Neural Network", "weight": 1, "created_at": now_iso}),
-        ("Concept", {"name": "Graph Neural Networks", "weight": 1, "created_at": now_iso}),
-        ("Concept", {"name": "Lonely Orphan Concept", "weight": 1, "created_at": old_iso}),
+        ("Concept", {"name": f"Graph Neural Network {run_id}", "weight": 1, "created_at": now_iso}),
+        ("Concept", {"name": f"Graph Neural Networks {run_id}", "weight": 1, "created_at": now_iso}),
+        ("Concept", {"name": f"Lonely Orphan Concept {run_id}", "weight": 1, "created_at": old_iso}),
     ])
     assert all(v is not None for v in vids), f"vertex creation failed {vids}"
     c1, c2, orphan = int(vids[0]), int(vids[1]), int(vids[2])

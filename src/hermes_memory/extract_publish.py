@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 from typing import Awaitable, Callable, Sequence
 
-from .reception import extract_assertions
 from .extraction_jobs import MODEL_VERSION
+from .reception import extract_assertions
 from .store_claims import (
     RULES_EXTRACTOR,
     RULES_VERSION,

@@ -14,7 +14,14 @@ from typing import Any, Iterable, Optional, Sequence
 
 import asyncpg
 
-from .entities import SELF_NAME, SELF_NORM, classify_object, is_abstained, is_first_person, normalize_name
+from .entities import (
+    SELF_NAME,
+    SELF_NORM,
+    classify_object,
+    is_abstained,
+    is_first_person,
+    normalize_name,
+)
 from .timeline import Event, rebuild
 
 logger = logging.getLogger("hermes_memory.store_claims")

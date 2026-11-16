@@ -16,6 +16,12 @@ versioning follows [SemVer](https://semver.org/).
 - Harness metrics: entity coverage, cross-owner leakage, and a burst/shutdown/replay durability mode (`--durability N`).
 
 ### Changed
+- Local integration smoke tests honor pytest's explicit `--dsn` and reject targets
+  outside the isolated `hermes_test` database.
+- Extraction jobs convert captured ISO timestamps to timezone-aware datetimes before
+  binding them to PostgreSQL `timestamptz` parameters.
+- `hermes-memory-verify --dsn` now uses that DSN for the provider write path as
+  well as direct probes, preventing split-target verification.
 - Claims are owner-scoped and derived from evidence (`claim_evidence`); `status` replaces `valid`, which is now a read-only mirror. Contradictory statements resolve to the newer one instead of being held back.
 - Functional facts (lives in, works for, based in, …) keep an event-time history; corrections restore the previous value.
 - Write capture uses the new `durable_job` table; `write_outbox` is no longer written.
@@ -100,3 +106,4 @@ First tagged release. Six kanban cards ([docs/plans/board.md](docs/plans/board.m
 |---|---|---|---|---|
 | 1.1 | 2026-08-24 | 2026-11-13 | Codex | Record packaging and lifecycle contract documentation. |
 | 1.2 | 2026-08-24 | 2026-11-14 | Claude | Put `[Unreleased]` above `[0.9.0]`; moved items already in tag `v0.9.0` into the 0.9.0 section; added eval harness and Phase 0 entries. |
+| 1.3 | 2026-08-24 | 2026-11-14 | Codex | Record isolated explicit-DSN support for the integration smoke suite. |

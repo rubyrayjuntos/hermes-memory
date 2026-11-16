@@ -63,7 +63,14 @@ def _can_connect(dsn: str) -> bool:
 
 
 @pytest.fixture(scope="module")
-def live_dsn() -> str:
+def live_dsn(request: pytest.FixtureRequest) -> str:
+    cli_dsn = request.config.getoption("--dsn")
+    if cli_dsn:
+        if "hermes_test" not in cli_dsn or "hermes_memory" in cli_dsn:
+            pytest.fail("--dsn for integration smoke must target the isolated hermes_test database")
+        if not _can_connect(cli_dsn):
+            pytest.fail("--dsn for integration smoke is unreachable")
+        return cli_dsn
     env_dsn = os.environ.get("HYBRID_AGE_DSN")
     if env_dsn and _can_connect(env_dsn):
         return env_dsn

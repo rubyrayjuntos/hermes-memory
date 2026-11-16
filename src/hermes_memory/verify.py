@@ -92,6 +92,10 @@ async def run_verify(dsn: Optional[str] = None,
         or cfg.dsn.replace("{pg_password}", pw)
                   .replace("***", pw)          # legacy masked default
     )
+    # The CLI target is authoritative for every verification layer. Without
+    # this assignment raw probes use --dsn while the provider silently starts
+    # against the configured/default database.
+    cfg.dsn = dsn
     result = VerifyResult()
     marker = f"c5-verify-{int(time.time())}"
     must_embed = require_embed and not skip_embed
@@ -246,7 +250,8 @@ async def run_verify(dsn: Optional[str] = None,
         result.add("pipeline-execution", False, repr(exc)[:200])
     finally:
         try:
-            from .claims_migration import NAME as CLAIMS_MIGRATION, legacy_check
+            from .claims_migration import NAME as CLAIMS_MIGRATION
+            from .claims_migration import legacy_check
             from .store_claims import claims_counts_on_conn, repair_drift_on_conn
             from .store_jobs import JOB_MAX_ATTEMPTS
 

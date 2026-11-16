@@ -2,7 +2,8 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from hermes_memory.timeline import Event, rebuild
 

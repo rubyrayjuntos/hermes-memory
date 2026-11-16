@@ -1,3 +1,5 @@
+import datetime
+
 from hermes_memory.extraction_jobs import job_specs
 
 
@@ -40,7 +42,11 @@ async def test_enqueue_adds_both_jobs_with_session_and_event_time():
         ("a", "extract_model", "42:model:1"),
     ]
     for _o, _k, _op, _payload, kw in store.calls:
-        assert kw == {"session_id": "s1", "event_time": "2026-01-01T00:00:00Z", "priority": 0}
+        assert kw == {
+            "session_id": "s1",
+            "event_time": datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            "priority": 0,
+        }
 
 
 async def test_enqueue_swallows_failure_and_skips_store_without_job_add():

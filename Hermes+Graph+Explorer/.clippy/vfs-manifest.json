@@ -1,0 +1,18 @@
+[
+  {
+    "path": "App.tsx",
+    "file": {
+      "file_name": "/mnt/data/src/App.tsx",
+      "storage_handle": "",
+      "storage_type": "BASE64"
+    }
+  },
+  {
+    "path": "index.css",
+    "file": {
+      "file_name": "/mnt/data/src/index.css",
+      "storage_handle": "",
+      "storage_type": "BASE64"
+    }
+  }
+]

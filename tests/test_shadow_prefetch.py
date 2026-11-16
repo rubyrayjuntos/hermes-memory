@@ -8,7 +8,6 @@ import pytest
 from hermes_memory import shadow
 from hermes_memory.shadow import query_key, record_shadow, schedule_shadow
 
-
 # -- query_key ---------------------------------------------------------------
 
 

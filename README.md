@@ -208,6 +208,11 @@ The system operates across three coordinated tiers:
 2. **Semantic Knowledge & Claims**: Typed owner-scoped claims (`claims`), evidence rows, and entities (`V18`), populated by decoupled background workers (`extraction_worker.py`, `V19`).
 3. **Retrieval & Shadow Logging**: HNSW vector search combined with bounded 2-hop claim walks, fused via Reciprocal Rank Fusion (RRF) and Maximal Marginal Relevance (MMR), evaluated against live traffic in shadow mode (`V20`, `shadow.py`).
 
+The conversation-manifold walker has one authoritative relevance formula:
+`beam_score = (0.4 * sim + 0.4 * (src_align * tgt_align) * prov_boost + 0.2 * decay) * (magnitude / 8)`.
+It is computed at query time; the inspector displays returned components and does not
+recompute or persist a competing score.
+
 ### Governing Specifications ("The Immune System")
 
 Do not guess or assume architectural rules. Consult the authoritative references:
@@ -234,3 +239,9 @@ Do not guess or assume architectural rules. Consult the authoritative references
 ## License
 
 MIT © 2026 The Hermes Librarian Authors.
+
+## Document changelog
+
+| Version | Created | Modified | Author | Notes |
+|---|---|---|---|---|
+| 1.0 | 2026-11-14 | 2026-11-14 | Codex | Restore the authoritative beam-score contract and add document provenance. |
