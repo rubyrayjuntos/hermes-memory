@@ -124,11 +124,22 @@ def _mark_code(text: str, kind: list[str]) -> None:
         i = close
 
 
+_SHELL_PROMPT_RE = re.compile(r"^[\w.-]+@[\w.-]+\S*\s+\$")
+
+
+def _mark_shell_session(text: str, kind: list[str]) -> None:
+    for start, _end, line in _line_spans(text):
+        if _SHELL_PROMPT_RE.match(line):
+            _mark_range(kind, start, len(text), "code")
+            return
+
+
 def segment_turn(text: str) -> list[Segment]:
     if not text:
         return []
     kind = ["authored"] * len(text)
     _mark_code(text, kind)
+    _mark_shell_session(text, kind)
     _mark_email(text, kind)
     _mark_logs(text, kind)
     _mark_tables(text, kind)

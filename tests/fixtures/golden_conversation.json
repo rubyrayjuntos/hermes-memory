@@ -114,5 +114,13 @@
     {"id": "paste_not_user", "kind": "paste_not_user", "text": "What did I say Bob owns?", "expected_answer": "Unknown; that text was pasted.", "expect_contains": [], "expect_absent": ["Bob is the owner"], "expect_claim": null},
     {"id": "assistant_unconfirmed", "kind": "assistant_unconfirmed", "text": "What is my remote-work preference?", "expected_answer": "Unknown.", "expect_contains": [], "expect_absent": ["Fridays"], "expect_claim": null},
     {"id": "abstain", "kind": "abstain", "text": "Which office did I visit last week?", "expected_answer": "Unknown.", "expect_contains": [], "expect_absent": [], "expect_claim": null}
+  ],
+  "junk_strings": [
+    "working",
+    "a call`",
+    "Acme` → `works_for Acme` polarity `positive`",
+    "staff engineer\"` and `\"I'm tired\"` unchanged",
+    "Acme anymore\"` → **negative**",
+    "Acme anymore\""
   ]
 }
