@@ -347,7 +347,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
     ) -> None:
         sid = session_id or self._session_id or "default"
         for role, content in (("user", user_content), ("assistant", assistant_content)):
-            if not content or _is_noise(content):
+            if not content or _is_noise(content, role=role):
                 continue
             self._enqueue_write({
                 "type": "turn",
