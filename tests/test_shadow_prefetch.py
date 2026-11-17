@@ -168,3 +168,46 @@ async def test_sync_prefetch_is_unchanged_when_hook_raises_synchronously():
 
     baseline = await make_provider()._aprefetch("q")
     assert await make_provider(sync_boom)._aprefetch("q") == baseline
+
+
+async def test_vector_and_shadow_modes_keep_the_existing_prompt_block():
+    baseline = await make_provider()._aprefetch("what does Acme use?")
+    for mode in ("vector", "shadow"):
+        provider = make_provider()
+        provider.config.retrieval_mode = mode
+        assert await provider._aprefetch("what does Acme use?") == baseline
+
+
+async def test_hybrid_retrieval_shares_prefetch_deadline(monkeypatch):
+    p = make_provider()
+    p.config.retrieval_mode = "hybrid"
+    p.config.prefetch_timeout_s = 0.2
+
+    class SlowEmbedder:
+        async def embed_text(self, text, *, as_query: bool = False):
+            await asyncio.sleep(0.06)
+            return [0.1, 0.2, 0.3]
+
+    class SlowStore(FakeStore):
+        async def vector_search(self, lit, k, agent_identity=None):
+            await asyncio.sleep(0.06)
+            return []
+
+    cancelled = asyncio.Event()
+
+    async def slow_hybrid(*_args, **_kwargs):
+        try:
+            await asyncio.sleep(1)
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr("hermes_memory.retrieve_hybrid.retrieve_hybrid", slow_hybrid)
+    p.embedder = SlowEmbedder()
+    p.store = SlowStore()
+
+    started = asyncio.get_running_loop().time()
+    result = await asyncio.wait_for(p._aprefetch("what does Acme use?"), timeout=0.28)
+
+    assert result == ""
+    assert cancelled.is_set()
+    assert asyncio.get_running_loop().time() - started < 0.28

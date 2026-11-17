@@ -42,6 +42,32 @@ def test_load_config_defaults_to_rules_only_and_rejects_unknown_mode(monkeypatch
         load_config("/nonexistent/config.yaml")
 
 
+def test_retrieval_mode_defaults_to_vector_and_validates_settings(monkeypatch) -> None:
+    monkeypatch.setattr("hermes_memory.config.load_dotenv_files", lambda: None)
+    monkeypatch.setattr("hermes_memory.config._load_yaml_block", lambda *a, **k: {})
+    monkeypatch.setenv("HYBRID_AGE_DSN", "postgres://localhost/hermes_memory")
+    monkeypatch.delenv("HYBRID_AGE_RETRIEVAL_MODE", raising=False)
+    monkeypatch.delenv("HYBRID_AGE_SHADOW_SAMPLE_RATE", raising=False)
+
+    cfg = load_config("/nonexistent/config.yaml")
+    assert cfg.retrieval_mode == "vector"
+    assert cfg.shadow_sample_rate == 0.2
+
+    monkeypatch.setenv("HYBRID_AGE_RETRIEVAL_MODE", "shadow")
+    monkeypatch.setenv("HYBRID_AGE_SHADOW_SAMPLE_RATE", "1.0")
+    cfg = load_config("/nonexistent/config.yaml")
+    assert cfg.retrieval_mode == "shadow"
+    assert cfg.shadow_sample_rate == 1.0
+
+    monkeypatch.setenv("HYBRID_AGE_RETRIEVAL_MODE", "automatic")
+    with pytest.raises(ValueError, match="invalid retrieval_mode"):
+        load_config("/nonexistent/config.yaml")
+    monkeypatch.setenv("HYBRID_AGE_RETRIEVAL_MODE", "vector")
+    monkeypatch.setenv("HYBRID_AGE_SHADOW_SAMPLE_RATE", "1.1")
+    with pytest.raises(ValueError, match="shadow_sample_rate"):
+        load_config("/nonexistent/config.yaml")
+
+
 def test_load_dotenv_files_clone_wins_over_hermes_home(tmp_path, monkeypatch) -> None:
     clone = tmp_path / "hermes-memory"
     clone.mkdir()

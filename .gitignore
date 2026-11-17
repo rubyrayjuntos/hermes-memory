@@ -25,6 +25,7 @@ Thumbs.db
 *.swoop
 
 # Tooling caches
+.rigour/
 .hypothesis/
 .pytest_cache/
 .worktrees/

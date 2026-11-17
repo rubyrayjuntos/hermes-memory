@@ -33,13 +33,13 @@ def walk(
             for claim_id, neighbour in outgoing:
                 if hop_claims >= per_hop:
                     break
-                if neighbour in visited:
-                    continue
-                visited.add(neighbour)
-                nxt.append(neighbour)
                 if claim_id not in seen_claims:
                     seen_claims.add(claim_id)
                     claims.append(claim_id)
                     hop_claims += 1
+                if neighbour in visited:
+                    continue
+                visited.add(neighbour)
+                nxt.append(neighbour)
         frontier = nxt
     return claims

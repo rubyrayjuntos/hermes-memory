@@ -519,6 +519,204 @@ class StoreClaimsMixin:
 
     pool: Any
 
+    async def claim_vector_search(self, owner: str, vec_literal: str, limit: int = 24) -> list[dict]:
+        if limit <= 0:
+            return []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                rows = await conn.fetch(
+                    """
+                    SELECT claim_id, subject_id, object_id, fact_text, fact_vec::text AS fact_vec,
+                           span_id, valid_from,
+                           1 - (fact_vec <=> $2::vector) AS similarity
+                      FROM claims
+                     WHERE owner = $1 AND status = 'grounded' AND valid_to IS NULL
+                       AND fact_vec IS NOT NULL AND act = 'assert'
+                     ORDER BY fact_vec <=> $2::vector
+                     LIMIT $3
+                    """,
+                    owner, vec_literal, int(limit),
+                )
+        return [dict(row) for row in rows]
+
+    async def link_entities(
+        self, owner: str, phrases: Sequence[str], vec_literal: str | None = None, limit: int = 20,
+    ) -> list[dict]:
+        if not phrases and not vec_literal:
+            return []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                rows = await conn.fetch(
+                    """
+                    WITH terms AS (
+                        SELECT DISTINCT unnest($2::text[]) AS term
+                    ),
+                    candidates AS (
+                        SELECT coalesce(e.merged_into, e.id) AS entity_id,
+                               CASE WHEN a.surface_norm = t.term THEN 2 ELSE 1 END AS exact,
+                               greatest(similarity(a.surface_norm, t.term),
+                                        similarity(e.name_norm, t.term)) AS trigram
+                          FROM terms t
+                          JOIN entity_alias a ON a.owner = $1 AND a.state = 'live'
+                           AND (a.surface_norm = t.term OR a.surface_norm % t.term)
+                          JOIN entity e ON e.owner = a.owner AND e.id = a.entity_id
+                        UNION ALL
+                        SELECT coalesce(e.merged_into, e.id) AS entity_id,
+                               CASE WHEN e.name_norm = t.term THEN 2 ELSE 1 END AS exact,
+                               similarity(e.name_norm, t.term) AS trigram
+                          FROM terms t
+                          JOIN entity e ON e.owner = $1
+                           AND (e.name_norm = t.term OR e.name_norm % t.term)
+                    ),
+                    ranked AS (
+                        SELECT entity_id, max(exact) AS exact, max(trigram) AS trigram
+                          FROM candidates
+                         GROUP BY entity_id
+                    ),
+                    name_vectors AS (
+                        SELECT id AS entity_id, 0 AS exact, 0::real AS trigram,
+                               1 - (name_vec <=> $3::vector) AS name_similarity
+                          FROM entity
+                         WHERE owner = $1 AND merged_into IS NULL
+                           AND name_vec IS NOT NULL AND $3::vector IS NOT NULL
+                         ORDER BY name_vec <=> $3::vector
+                         LIMIT 3
+                    ),
+                    combined AS (
+                        SELECT entity_id, exact, trigram, 0::real AS name_similarity
+                          FROM ranked
+                         WHERE exact = 2 OR trigram >= 0.6
+                        UNION ALL
+                        SELECT entity_id, exact, trigram, name_similarity
+                          FROM name_vectors
+                         WHERE name_similarity >= 0.8
+                    )
+                    SELECT e.id AS entity_id, e.name, max(c.exact) AS exact,
+                           max(c.trigram) AS trigram, max(c.name_similarity) AS name_similarity
+                      FROM combined c
+                      JOIN entity e ON e.owner = $1 AND e.id = c.entity_id
+                     WHERE e.merged_into IS NULL
+                     GROUP BY e.id, e.name
+                     ORDER BY max(c.exact) DESC, max(c.name_similarity) DESC,
+                              max(c.trigram) DESC, e.id
+                     LIMIT $4
+                    """,
+                    owner, list(phrases), vec_literal, int(limit),
+                )
+        return [dict(row) for row in rows]
+
+    async def turn_entities(self, owner: str, span_ids: Sequence[int]) -> list[dict]:
+        ids = sorted({int(value) for value in span_ids})
+        if not ids:
+            return []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                rows = await conn.fetch(
+                    """
+                    SELECT te.span_id, te.entity_id, e.name
+                      FROM turn_entity te
+                      JOIN entity e ON e.owner = te.owner AND e.id = te.entity_id
+                     WHERE te.owner = $1 AND te.span_id = ANY($2::bigint[])
+                       AND e.merged_into IS NULL
+                     ORDER BY te.span_id, te.entity_id
+                    """,
+                    owner, ids,
+                )
+        return [dict(row) for row in rows]
+
+    async def claims_for_turns(self, owner: str, span_ids: Sequence[int]) -> list[str]:
+        ids = sorted({int(value) for value in span_ids})
+        if not ids:
+            return []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT c.claim_id
+                      FROM claims c
+                      JOIN claim_evidence ev ON ev.owner = c.owner AND ev.claim_id = c.claim_id
+                     WHERE c.owner = $1 AND c.status = 'grounded' AND c.valid_to IS NULL
+                       AND ev.state = 'live' AND ev.act = 'assert'
+                       AND ev.span_id = ANY($2::bigint[])
+                     ORDER BY c.claim_id
+                    """,
+                    owner, ids,
+                )
+        return [str(row["claim_id"]) for row in rows]
+
+    async def claim_edges(
+        self, owner: str, entity_ids: Sequence[int], vec_literal: str, per_node: int = 8,
+    ) -> list[dict]:
+        ids = sorted({int(value) for value in entity_ids})
+        if not ids or per_node <= 0:
+            return []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                rows = await conn.fetch(
+                    """
+                    WITH frontier AS (SELECT unnest($2::bigint[]) AS entity_id),
+                    candidates AS (
+                        SELECT f.entity_id AS source_id, c.claim_id,
+                               c.object_id AS neighbour_id, c.fact_text,
+                               c.fact_vec::text AS fact_vec
+                          FROM frontier f
+                          JOIN claims c ON c.owner = $1 AND c.subject_id = f.entity_id
+                         WHERE c.status = 'grounded' AND c.valid_to IS NULL
+                           AND c.object_id IS NOT NULL AND c.fact_vec IS NOT NULL
+                        UNION ALL
+                        SELECT f.entity_id AS source_id, c.claim_id,
+                               c.subject_id AS neighbour_id, c.fact_text,
+                               c.fact_vec::text AS fact_vec
+                          FROM frontier f
+                          JOIN claims c ON c.owner = $1 AND c.object_id = f.entity_id
+                         WHERE c.status = 'grounded' AND c.valid_to IS NULL
+                           AND c.subject_id IS NOT NULL AND c.fact_vec IS NOT NULL
+                    ),
+                    edges AS (
+                        SELECT *, row_number() OVER (
+                            PARTITION BY source_id
+                            ORDER BY fact_vec::vector <=> $3::vector, claim_id
+                        ) AS node_rank
+                          FROM candidates
+                    )
+                    SELECT source_id, claim_id, neighbour_id, fact_text, fact_vec
+                      FROM edges
+                     WHERE node_rank <= $4
+                     ORDER BY source_id, node_rank, claim_id
+                    """,
+                    owner, ids, vec_literal, int(per_node),
+                )
+        return [dict(row) for row in rows]
+
+    async def claims_by_ids(self, owner: str, claim_ids: Sequence[int | str]) -> list[dict]:
+        ids = sorted({int(value) for value in claim_ids})
+        if not ids:
+            return []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                rows = await conn.fetch(
+                    """
+                    SELECT c.claim_id, c.fact_text, c.fact_vec::text AS fact_vec,
+                           c.subject, c.verb, c.object, c.status,
+                           ev.span_id, ev.event_time, cv.role, cv.content, cv.ts, cv.session_id
+                      FROM claims c
+                      JOIN claim_evidence ev ON ev.owner = c.owner AND ev.claim_id = c.claim_id
+                      JOIN conversations cv ON cv.agent_identity = ev.owner AND cv.id = ev.span_id
+                     WHERE c.owner = $1 AND c.claim_id = ANY($2::bigint[])
+                       AND c.status = 'grounded' AND c.valid_to IS NULL
+                       AND ev.state = 'live' AND ev.act = 'assert'
+                     ORDER BY c.claim_id, ev.event_time, ev.span_id
+                    """,
+                    owner, ids,
+                )
+        return [dict(row) for row in rows]
+
     async def delete_spans(self, owner: str, span_ids: Sequence[int]) -> int:
         async with self.pool.acquire() as conn:
             async with conn.transaction():

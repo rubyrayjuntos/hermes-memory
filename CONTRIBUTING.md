@@ -46,6 +46,8 @@ hermes-memory-verify           # end-to-end pipeline smoke check; exit non-zero 
 
 **Requirements for a PR:** the property suite must pass. Integration tests and
 `verify.py` require a running `docker compose` stack (`HERMES_PG_PASSWORD` set).
+If the development database rejects that password, use a throwaway Postgres container
+and pass its `hermes_test` DSN with `--dsn`; do not change credentials on a shared DB.
 
 ## Migration / DDL rules
 

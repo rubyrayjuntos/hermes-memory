@@ -1309,6 +1309,7 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMi
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(hnsw_ef_search_sql(ef))
+                await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
                 rows = await conn.fetch(sql, vec_literal, k, agent_identity)
         out = [dict(r) for r in rows]
         logger.info("vector_search k=%s hnsw.ef_search=%s hits=%s", k, ef, len(out))

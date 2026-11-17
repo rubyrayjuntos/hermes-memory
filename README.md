@@ -105,11 +105,11 @@ as candidates and inspect them before relying on them for high-stakes decisions.
 ### Installation
 
 Install from an immutable Git revision rather than the moving `main` branch.
-This command uses the current Alpha snapshot reviewed here; use a
-maintainer-announced release tag or full commit SHA when one is available:
+This command uses the current reviewed snapshot; use a maintainer-announced
+release tag or full commit SHA when one is available:
 
 ```bash
-pip install "git+https://github.com/rubyrayjuntos/hermes-memory@c4f200587136521a8cdd666f9056af4c50cc3bc5" && hermes-memory-install --yes
+pip install "git+https://github.com/rubyrayjuntos/hermes-memory@f2a02a527103907bc8e704288476bb6393e66e33" && hermes-memory-install --yes
 ```
 
 `v0.9.0` is an earlier pre-release for install testing, not the current Alpha
@@ -235,6 +235,11 @@ python scripts/release_gate.py
 
 `hermes-memory-install` writes default settings to `~/.hermes/config.yaml`. Knobs under `hybrid_age:` include:
 
+> **Phase 3 retrieval options are unreleased.** They are implemented after the
+> `f2a02a5` baseline and are not included in the pinned install command above
+> until this work is merged and the pin is updated. `vector` remains the served
+> default; keep `hybrid` opt-in until the §9 evaluation gates pass.
+
 | Key | Default | Description |
 | :--- | :--- | :--- |
 | `dsn_env` | `HYBRID_AGE_DSN` | Environment variable containing the Postgres DSN |
@@ -244,6 +249,8 @@ python scripts/release_gate.py
 | `extract_model` | empty | Model name for claim extraction |
 | `extract_mode` | `rules_only` | `rules_only` or opt-in `rules_then_model`; eligible user turns are batched (8 turns, 10-minute idle, or session close) |
 | `extract_timeout_s` | `60` | Timeout for one model extraction batch request, in seconds |
+| `retrieval_mode` | `vector` | `vector` serves current recall, `shadow` compares hybrid in the background, `hybrid` serves grounded claim facts |
+| `shadow_sample_rate` | `0.2` | Fraction of queries compared when `retrieval_mode: shadow` |
 | `graph` | `hermes_knowledge` | Apache AGE graph name |
 | `vector_k` | `12` | Top-$k$ nearest neighbors for vector recall |
 | `min_similarity` | `0.55` | Cosine similarity cutoff floor |
@@ -258,19 +265,18 @@ Contributors must adhere to the architectural invariants and release criteria de
 ### Architectural Core
 
 ```text
-Prompt Turn ──► vector_search (pgvector HNSW) ──► 2-hop Claim Walk (claim_walk.py)
-                     │                                      │
-                     ▼                                      ▼
-             RRF Ranking Fusion ──► MMR Diversification ──► <memory> Injection Block
+Prompt Turn ──► vector_search (pgvector HNSW) ──► <memory> Injection Block
                      │
-                     ▼
-             retrieval_shadow (V20 Shadow Log)
+                     ├── shadow mode: claim ANN + entity linking + 2-hop walk
+                     │                + RRF/MMR, logged without changing prompt
+                     │
+                     └── hybrid mode: grounded facts + cited supporting turns
 ```
 
 The system operates across three coordinated tiers:
 1. **Episodic & Conversational Storage**: Postgres `conversations` table, Apache AGE `Session`/`Turn` flower structure, and outbox queues (`write_outbox`).
 2. **Semantic Knowledge & Claims**: Typed owner-scoped claims (`claims`), evidence rows, and entities (`V18`), populated by decoupled background workers (`extraction_worker.py`, `V19`).
-3. **Retrieval & Shadow Logging**: HNSW vector search combined with bounded 2-hop claim walks, fused via Reciprocal Rank Fusion (RRF) and Maximal Marginal Relevance (MMR), evaluated against live traffic in shadow mode (`V20`, `shadow.py`).
+3. **Retrieval & Shadow Logging**: `vector` remains the default served path. `shadow` computes owner-scoped claim retrieval (HNSW, batched entity linking, bounded 2-hop walk, RRF/MMR) off the prompt path and writes HMAC-keyed comparisons to `retrieval_shadow` (`V20`/`V21`). `hybrid` is opt-in and serves grounded facts with source spans; do not make it the default until the §9 evaluation gates pass.
 
 The conversation-manifold walker has one authoritative relevance formula:
 `beam_score = (0.4 * sim + 0.4 * (src_align * tgt_align) * prov_boost + 0.2 * decay) * (magnitude / 8)`.

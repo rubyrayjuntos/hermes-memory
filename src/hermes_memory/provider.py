@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import socket
 import threading
@@ -83,6 +84,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._thread: Optional[threading.Thread] = None
         self._drain_task: Optional[asyncio.Task] = None
         self._initialized = False
+        self._shadow_hook = None
+        self._shadow_enabled = False
+        self._shadow_busy = False
         self._session_id = ""
         self._agent_identity = ""
         self._write_queue: Optional[asyncio.Queue] = None
@@ -230,6 +234,49 @@ class HybridAgeMemoryProvider(MemoryProvider):
             hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
         )
         await self.store.require_schema_head()
+        self._shadow_hook = None
+        self._shadow_enabled = False
+        self._shadow_busy = False
+        if self.config.retrieval_mode == "shadow" and self.config.shadow_sample_rate > 0:
+            secret_hex = os.environ.get("HYBRID_AGE_SHADOW_HMAC_KEY", "")
+            try:
+                shadow_secret = bytes.fromhex(secret_hex)
+            except ValueError:
+                shadow_secret = b""
+            if len(shadow_secret) < 32:
+                logger.warning(
+                    "shadow retrieval disabled: HYBRID_AGE_SHADOW_HMAC_KEY is missing or invalid"
+                )
+            else:
+                async def record_hybrid_shadow(
+                    query: str, vector_ids: list, latency_ms: dict,
+                    vec_literal: str, vector_seeds: list[dict], owner: str,
+                ) -> None:
+                    if self._shadow_busy:
+                        logger.debug("shadow retrieval skipped: prior comparison still running")
+                        return
+                    self._shadow_busy = True
+                    try:
+                        from .retrieve_hybrid import retrieve_hybrid
+                        from .shadow import query_key, record_shadow
+
+                        result = await retrieve_hybrid(
+                            self.store, owner, query, vec_literal, vector_seeds,
+                        )
+                        async with pool.acquire() as conn:
+                            await record_shadow(
+                                conn,
+                                owner,
+                                query_key(shadow_secret, query),
+                                vector_ids,
+                                result["ids"],
+                                {**latency_ms, **result["latency_ms"]},
+                            )
+                    finally:
+                        self._shadow_busy = False
+
+                self._shadow_hook = record_hybrid_shadow
+                self._shadow_enabled = True
         extract_url = str(getattr(self.config, "extract_url", "") or "").strip()
         extract_model = str(getattr(self.config, "extract_model", "") or "").strip()
         extract_mode = str(getattr(self.config, "extract_mode", "rules_only"))
@@ -433,7 +480,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         try:
             asyncio.run_coroutine_threadsafe(store.outbox_unclaim(outbox_id, fence, reason), loop)
         except Exception:
-            logger.debug("outbox defer failed", exc_info=True)
+            logger.warning("outbox defer failed", exc_info=True)
 
     async def _settle_outbox(self, item: dict) -> None:
         """Delete the outbox row once the write landed; otherwise hand it back."""
@@ -1052,8 +1099,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
     async def _aprefetch(self, query: str) -> str:
         t0 = time.perf_counter()
+        deadline = asyncio.get_running_loop().time() + self.config.prefetch_timeout_s
         try:
-            async with asyncio.timeout(self.config.prefetch_timeout_s):
+            async with asyncio.timeout_at(deadline):
                 enriched = self._enrich_query(query)
                 from .tokens import QUERY_TOKEN_CAP, truncate_tokens
 
@@ -1114,7 +1162,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
         bodies: dict[int, dict] = {}
         fetcher = getattr(self.store, "conversations_by_ids", None)
         if extra_ids and callable(fetcher):
-            for row in await fetcher(extra_ids):
+            try:
+                async with asyncio.timeout_at(deadline):
+                    fetched_rows = await fetcher(extra_ids)
+            except TimeoutError:
+                logger.warning("prefetch timeout query=%r", query[:80])
+                return ""
+            for row in fetched_rows:
                 try:
                     bodies[int(row["id"])] = row
                 except (TypeError, ValueError, KeyError):
@@ -1187,8 +1241,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
         neighbor_map: dict = {}
         if selected and callable(neighbor_fetcher):
             try:
-                hit_turn_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
-                neighbor_map = await neighbor_fetcher(hit_turn_ids)
+                async with asyncio.timeout_at(deadline):
+                    hit_turn_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
+                    neighbor_map = await neighbor_fetcher(hit_turn_ids)
+            except TimeoutError:
+                logger.warning("prefetch timeout query=%r", query[:80])
+                return ""
             except Exception:
                 logger.exception("neighbor fetch failed")
                 neighbor_map = {}
@@ -1218,9 +1276,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
         )
         if selected and callable(overlay_fetcher):
             try:
-                overlay_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
-                overlays = await overlay_fetcher(overlay_ids)
+                async with asyncio.timeout_at(deadline):
+                    overlay_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
+                    overlays = await overlay_fetcher(overlay_ids)
             except Exception as exc:
+                if isinstance(exc, TimeoutError):
+                    logger.warning("prefetch timeout query=%r", query[:80])
+                    return ""
                 # 42P01 undefined_table = pre-migration store: quiet skip.
                 # Anything else is a real failure and stays loud.
                 if getattr(exc, "sqlstate", "") == "42P01":
@@ -1237,9 +1299,33 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     s["retracted"] = ov["retracted"]
         from .tokens import injection_token_cap
 
-        block = format_span_injection(
-            selected, token_budget=injection_token_cap(self.config.max_tokens)
-        )
+        if getattr(self.config, "retrieval_mode", "vector") == "hybrid":
+            try:
+                from .provider_helpers import format_facts
+                from .retrieve_hybrid import retrieve_hybrid
+
+                async with asyncio.timeout_at(deadline):
+                    hybrid_result = await retrieve_hybrid(
+                        self.store,
+                        self._agent_identity,
+                        query,
+                        vec_to_literal(emb),
+                        kept_seeds,
+                    )
+                block = format_facts(
+                    hybrid_result["facts"],
+                    total_token_budget=injection_token_cap(self.config.max_tokens),
+                )
+            except TimeoutError:
+                logger.warning("hybrid prefetch timeout query=%r", query[:80])
+                return ""
+            except Exception:
+                logger.exception("hybrid prefetch failed")
+                return ""
+        else:
+            block = format_span_injection(
+                selected, token_budget=injection_token_cap(self.config.max_tokens)
+            )
         if not (block or "").strip():
             logger.info("prefetch empty recall")
         graph_n = sum(len(s.get("paths") or []) for s in selected)
@@ -1250,12 +1336,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
             (t_embed - t0) * 1000, (t_vec - t_embed) * 1000,
             (t_graph - t_vec) * 1000, (time.perf_counter() - t0) * 1000,
         )
-        if self._shadow_hook is not None:
+        shadow_rate = float(getattr(self.config, "shadow_sample_rate", 0.2))
+        if self._shadow_hook is not None and (
+            not getattr(self, "_shadow_enabled", False) or random.random() < shadow_rate
+        ):
             try:
                 from .shadow import schedule_shadow
 
-                schedule_shadow(
-                    self._shadow_hook,
+                shadow_args = (
                     query,
                     [s.get("id") for s in selected],
                     {
@@ -1264,6 +1352,16 @@ class HybridAgeMemoryProvider(MemoryProvider):
                         "total": round((time.perf_counter() - t0) * 1000, 1),
                     },
                 )
+                if getattr(self, "_shadow_enabled", False):
+                    schedule_shadow(
+                        self._shadow_hook,
+                        *shadow_args,
+                        vec_to_literal(emb),
+                        kept_seeds,
+                        self._agent_identity,
+                    )
+                else:
+                    schedule_shadow(self._shadow_hook, *shadow_args)
             except Exception:
                 logger.warning("shadow hook not scheduled", exc_info=True)
         return block
