@@ -25,7 +25,10 @@ _EXTRACT_MODES = ("rules_only", "rules_then_model")
 
 
 def _norm(value: str | None) -> str:
-    return re.sub(r"\s+", " ", (value or "").strip().lower())
+    s = re.sub(r"\s+", " ", (value or "").strip().lower())
+    if s in {"(self)", "self"}:
+        return "i"
+    return s
 
 
 def _turn_admission(turns: list[dict]) -> tuple[int, list[dict]]:

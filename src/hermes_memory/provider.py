@@ -649,6 +649,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             classify_repair,
             extract_alias_equations,
             extract_assertions,
+            extract_self_assertions,
             is_deictic_repair,
         )
         from .turn_filter import segment_turn
@@ -696,6 +697,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     continue
                 piece = content[seg.start:seg.end]
                 claims = extract_assertions(piece)
+                if seg.kind == "authored":
+                    # SPEC2: extract_self_assertions after extract_assertions (authored only)
+                    claims.extend(extract_self_assertions(piece))
                 if not claims:
                     continue
                 if seg.kind == "authored":

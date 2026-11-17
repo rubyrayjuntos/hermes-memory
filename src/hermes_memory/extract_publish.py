@@ -9,7 +9,7 @@ import json
 from typing import Awaitable, Callable, Sequence
 
 from .extraction_jobs import MODEL_VERSION
-from .reception import extract_assertions
+from .reception import extract_assertions, extract_self_assertions
 from .store_claims import (
     RULES_EXTRACTOR,
     RULES_VERSION,
@@ -54,7 +54,11 @@ async def publish_rules(conn, store_embed: StoreEmbed, job_id: int, fence: int) 
             for seg in segment_turn(content):
                 if seg.kind == "code":
                     continue
-                claims = extract_assertions(content[seg.start:seg.end])
+                piece = content[seg.start:seg.end]
+                claims = extract_assertions(piece)
+                if seg.kind == "authored":
+                    # SPEC2: extract_self_assertions after extract_assertions (authored only)
+                    claims.extend(extract_self_assertions(piece))
                 if not claims:
                     continue
                 if seg.kind == "authored":
