@@ -651,6 +651,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             extract_assertions,
             is_deictic_repair,
         )
+        from .turn_filter import segment_turn
 
         async def _stamp(status: str) -> str:
             try:
@@ -661,8 +662,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
         if role != "user" or not (content or "").strip():
             return await _stamp("none")
+        segments = segment_turn(content)
+        authored = "".join(
+            content[seg.start:seg.end] for seg in segments if seg.kind == "authored"
+        )
         wrote = False
-        for surface, canon in extract_alias_equations(content):
+        for surface, canon in extract_alias_equations(authored):
             try:
                 if await store.record_alias_equation(conv_id, canon, surface):
                     wrote = True
@@ -674,7 +679,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         except Exception:
             logger.warning("previous turn lookup failed", exc_info=True)
         verdict = (
-            classify_repair(str(prior.get("content") or ""), content)
+            classify_repair(str(prior.get("content") or ""), authored)
             if prior is not None
             else "unknown"
         )
@@ -686,14 +691,32 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 logger.warning("uptake write failed", exc_info=True)
         parsed: list[dict] = []
         try:
-            parsed = extract_assertions(content)
-            if parsed and await store.record_rule_claims(conv_id, parsed):
-                wrote = True
+            for seg in segments:
+                if seg.kind == "code":
+                    continue
+                piece = content[seg.start:seg.end]
+                claims = extract_assertions(piece)
+                if not claims:
+                    continue
+                if seg.kind == "authored":
+                    parsed.extend(claims)
+                    extra = {"seg_start": seg.start, "seg_end": seg.end}
+                    if await store.record_rule_claims(conv_id, claims, **extra):
+                        wrote = True
+                else:
+                    extra = {
+                        "speaker": "document",
+                        "extractor": "rules_document",
+                        "seg_start": seg.start,
+                        "seg_end": seg.end,
+                    }
+                    if await store.record_rule_claims(conv_id, claims, **extra):
+                        wrote = True
         except Exception:
             logger.warning("claim write failed", exc_info=True)
         if prior is not None and verdict == "repaired":
             try:
-                deictic = not parsed and is_deictic_repair(content)
+                deictic = not parsed and is_deictic_repair(authored)
                 if await store.record_repair(
                     int(prior["id"]), conv_id, deictic=deictic, new_claims=parsed
                 ):

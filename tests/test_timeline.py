@@ -85,6 +85,16 @@ def test_user_confirmation_grounds_the_same_row_with_both_evidence():
         (7, "grounded", (a.evidence_id, u.evidence_id))]
 
 
+def test_document_evidence_never_closes_a_user_interval():
+    plan = rebuild(
+        [ev(1, "e:nyc"), ev(2, "e:austin", speaker="document")],
+        [],
+        functional=True,
+    )
+    assert current(plan) == [("e:nyc", "positive")]
+    assert [r.status for r in plan.rows if r.object_key == "e:austin"] == ["unconfirmed"]
+
+
 def test_user_retraction_of_assistant_claim_is_retracted():
     plan = rebuild([ev(1, "e:atlas", speaker="assistant"), ev(2, "e:atlas", act="retract")], [], functional=False)
     assert [r.status for r in plan.rows] == ["retracted"]

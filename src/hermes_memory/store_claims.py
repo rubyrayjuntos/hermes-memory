@@ -94,9 +94,11 @@ async def ensure_entity(conn, owner: str, surface: str, type_: str = "other") ->
 
 
 RULES_EXTRACTOR = "rules"
-RULES_VERSION = "1"
+DOCUMENT_EXTRACTOR = "rules_document"
+RULES_VERSION = "2"
 OBJECT_KEY_SQL = "(CASE WHEN object_id IS NOT NULL THEN 'e:' || object_id::text ELSE 'l:' || object_canon END)"
 _SPEAKERS = {"user": "user", "assistant": "assistant"}
+_ALLOWED_SPEAKERS = frozenset({"user", "assistant", "document"})
 
 
 @dataclass(frozen=True)
@@ -188,12 +190,31 @@ async def placeholder_claim(conn, owner: str, subject_id: int, verb: str, object
         subject_id, oid, "orphaned", None, None, None))
 
 
-async def add_evidence(conn, info: SpanInfo, span_id: int, claim: dict, *, act: str = "assert",
-                       extractor: str = RULES_EXTRACTOR, version: str = RULES_VERSION):
-    speaker = _SPEAKERS.get(info.role)
-    subject, obj = str(claim.get("subject") or ""), str(claim.get("object") or "")
-    if speaker is None or is_abstained(subject):
+async def _validated_seg_offsets(conn, span_id: int, seg_start, seg_end):
+    if seg_start is None and seg_end is None:
+        return None, None
+    if seg_start is None or seg_end is None:
         return None
+    length = await conn.fetchval(
+        "SELECT char_length(content) FROM conversations WHERE id = $1", int(span_id))
+    start, end = int(seg_start), int(seg_end)
+    if 0 <= start <= end <= int(length or 0):
+        return start, end
+    return None
+
+
+async def add_evidence(conn, info: SpanInfo, span_id: int, claim: dict, *, act: str = "assert",
+                       extractor: str = RULES_EXTRACTOR, version: str = RULES_VERSION,
+                       speaker: str | None = None, seg_start: int | None = None,
+                       seg_end: int | None = None):
+    resolved = speaker or _SPEAKERS.get(info.role)
+    subject, obj = str(claim.get("subject") or ""), str(claim.get("object") or "")
+    if resolved not in _ALLOWED_SPEAKERS or is_abstained(subject):
+        return None
+    offsets = await _validated_seg_offsets(conn, span_id, seg_start, seg_end)
+    if offsets is None:
+        return None
+    seg_start, seg_end = offsets
     vrec = await verb_row(conn, str(claim.get("verb") or ""))
     if vrec is None:
         logger.info("unknown verb skipped: %r", claim.get("verb"))
@@ -207,12 +228,13 @@ async def add_evidence(conn, info: SpanInfo, span_id: int, claim: dict, *, act: 
     holder = await placeholder_claim(conn, info.owner, subject_id, vrec["verb"], object_key, polarity, span_id)
     ev_id = await conn.fetchval(
         "INSERT INTO claim_evidence (owner, claim_id, span_id, speaker, act, polarity, subject_surface, "
-        "object_surface, subject_id, verb, object_key, extractor, extractor_version, event_time) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) "
+        "object_surface, subject_id, verb, object_key, extractor, extractor_version, event_time, "
+        "seg_start, seg_end) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) "
         "ON CONFLICT (owner, span_id, extractor, extractor_version, subject_id, verb, object_key, polarity, act) "
         "WHERE state = 'live' DO NOTHING RETURNING id",
-        info.owner, holder, int(span_id), speaker, act, polarity, subject, obj, subject_id, vrec["verb"],
-        object_key, extractor, version, claim.get("event_time") or info.ts)
+        info.owner, holder, int(span_id), resolved, act, polarity, subject, obj, subject_id, vrec["verb"],
+        object_key, extractor, version, claim.get("event_time") or info.ts, seg_start, seg_end)
     if ev_id is None:
         ev_id = await conn.fetchval(
             "SELECT id FROM claim_evidence WHERE owner = $1 AND span_id = $2 AND extractor = $3 "
@@ -487,7 +509,9 @@ async def write_fact_vectors(conn, rows: Sequence[tuple[int, list[float]]], embe
 
 
 async def record_rule_claims_on_conn(conn, span_id: int, claims: Sequence[dict],
-                                     extractor: str = RULES_EXTRACTOR, version: str = RULES_VERSION) -> list[int]:
+                                     extractor: str = RULES_EXTRACTOR, version: str = RULES_VERSION,
+                                     *, speaker: str | None = None, seg_start: int | None = None,
+                                     seg_end: int | None = None) -> list[int]:
     """Place one span's claims as evidence and rebuild their timelines on the caller's transaction.
 
     Distinct timeline locks are taken in sorted (owner, subject_id, verb) order
@@ -501,7 +525,8 @@ async def record_rule_claims_on_conn(conn, span_id: int, claims: Sequence[dict],
             locks.add(ident)
     for owner, subject_id, verb in sorted(locks):
         await lock_timeline(conn, owner, subject_id, verb)
-    added = [await add_evidence(conn, info, span_id, c, extractor=extractor, version=version)
+    added = [await add_evidence(conn, info, span_id, c, extractor=extractor, version=version,
+                                speaker=speaker, seg_start=seg_start, seg_end=seg_end)
              for c in claims]
     kept = [a for a in added if a is not None]
     if not kept:
@@ -732,7 +757,9 @@ class StoreClaimsMixin:
             return await resolve_entity(conn, owner, surface)
 
     async def record_rule_claims(self, span_id: int, claims: Sequence[dict], *,
-                                 extractor: str = RULES_EXTRACTOR, version: str = RULES_VERSION) -> list[int]:
+                                 extractor: str = RULES_EXTRACTOR, version: str = RULES_VERSION,
+                                 speaker: str | None = None, seg_start: int | None = None,
+                                 seg_end: int | None = None) -> list[int]:
         """Publish one span's extracted claims as evidence and rebuild their timelines.
 
         One transaction (spec §5.2 step 3, Phase 1 inline form). Abstained
@@ -744,16 +771,20 @@ class StoreClaimsMixin:
         """
         for attempt in range(3):
             try:
-                return await self._record_rule_claims_once(span_id, claims, extractor, version)
+                return await self._record_rule_claims_once(
+                    span_id, claims, extractor, version, speaker, seg_start, seg_end)
             except asyncpg.exceptions.DeadlockDetectedError:
                 if attempt == 2:
                     raise
         return []
 
-    async def _record_rule_claims_once(self, span_id, claims, extractor, version) -> list[int]:
+    async def _record_rule_claims_once(self, span_id, claims, extractor, version,
+                                       speaker=None, seg_start=None, seg_end=None) -> list[int]:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                return await record_rule_claims_on_conn(conn, span_id, claims, extractor, version)
+                return await record_rule_claims_on_conn(
+                    conn, span_id, claims, extractor, version,
+                    speaker=speaker, seg_start=seg_start, seg_end=seg_end)
 
     async def record_repair(self, prior_span_id: int, repair_span_id: int, *, deictic: bool,
                             new_claims: Sequence[dict] = ()) -> int:

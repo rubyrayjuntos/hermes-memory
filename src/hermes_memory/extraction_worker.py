@@ -28,6 +28,7 @@ EmbedFn = Callable[[Sequence[str]], Awaitable[list]]
 
 async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> Optional[ModelBatchInput]:
     from .reception import extract_assertions
+    from .turn_filter import segment_turn
 
     turns = []
     rule_findings = []
@@ -40,9 +41,14 @@ async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> 
         if span is None or span["role"] != "user" or not (span["content"] or "").strip():
             continue
         text = str(span["content"])
-        turns.append({"span_id": int(span_id), "text": text})
+        authored = "".join(
+            text[seg.start:seg.end] for seg in segment_turn(text) if seg.kind == "authored"
+        )
+        if not authored.strip():
+            continue
+        turns.append({"span_id": int(span_id), "text": authored})
         rule_findings.extend(
-            {"span_id": int(span_id), **claim} for claim in extract_assertions(text)
+            {"span_id": int(span_id), **claim} for claim in extract_assertions(authored)
         )
     if not turns:
         return None

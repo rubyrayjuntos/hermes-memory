@@ -201,6 +201,33 @@ async def test_batch_includes_rule_findings_and_only_grounds_claims_to_source_tu
     assert [(c["span_id"], c["verb"]) for c in claims] == [(9, "uses"), (10, "works_on")]
 
 
+async def test_model_batch_sends_authored_segments_only(monkeypatch):
+    paste = (
+        "From: alice@example.com\n"
+        "Subject: infra\n"
+        "\n"
+        "Config uses Redis.\n"
+    )
+    mixed = "Nightingale uses Atlas.\n\n" + paste
+    store = FakeStore(
+        turns={9: ("o", "s", mixed), 10: ("o", "s", paste)},
+        jobs={"extract_model": [(2, 1, {"span_ids": [9, 10]})]},
+    )
+    seen = {}
+
+    async def model(batch):
+        seen["batch"] = batch
+        return {"claims": []}
+
+    _patch_publish(monkeypatch)
+    await extraction_worker.run_extraction_once(object(), store, embed=_embed, model=model)
+
+    assert [turn["span_id"] for turn in seen["batch"].turns] == [9]
+    assert seen["batch"].turns[0]["text"] == "Nightingale uses Atlas.\n\n"
+    assert [finding["span_id"] for finding in seen["batch"].rule_findings] == [9]
+    assert all("Redis" not in finding.get("object", "") for finding in seen["batch"].rule_findings)
+
+
 async def test_failure_is_logged_not_raised_and_other_kind_still_runs(monkeypatch, caplog):
     store = FakeStore()
 
