@@ -95,7 +95,7 @@ async def ensure_entity(conn, owner: str, surface: str, type_: str = "other") ->
 
 RULES_EXTRACTOR = "rules"
 DOCUMENT_EXTRACTOR = "rules_document"
-RULES_VERSION = "2"
+RULES_VERSION = "3"
 OBJECT_KEY_SQL = "(CASE WHEN object_id IS NOT NULL THEN 'e:' || object_id::text ELSE 'l:' || object_canon END)"
 _SPEAKERS = {"user": "user", "assistant": "assistant"}
 _ALLOWED_SPEAKERS = frozenset({"user", "assistant", "document"})

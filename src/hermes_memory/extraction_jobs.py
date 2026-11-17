@@ -9,7 +9,7 @@ from .extract_nouns import extract_nouns
 from .reception import extract_assertions
 from .turn_filter import segment_turn
 
-RULES_VERSION = "2"
+RULES_VERSION = "3"
 MODEL_VERSION = "1"
 
 _ACKNOWLEDGEMENT_RE = re.compile(
