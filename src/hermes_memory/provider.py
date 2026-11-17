@@ -649,6 +649,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             classify_repair,
             extract_alias_equations,
             extract_assertions,
+            extract_self_assertions,
             is_deictic_repair,
         )
 
@@ -687,6 +688,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         parsed: list[dict] = []
         try:
             parsed = extract_assertions(content)
+            # SPEC2: extract_self_assertions after extract_assertions (merge: authored segments only)
+            parsed.extend(extract_self_assertions(content))
             if parsed and await store.record_rule_claims(conv_id, parsed):
                 wrote = True
         except Exception:

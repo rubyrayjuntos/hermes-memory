@@ -27,7 +27,7 @@ EmbedFn = Callable[[Sequence[str]], Awaitable[list]]
 
 
 async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> Optional[ModelBatchInput]:
-    from .reception import extract_assertions
+    from .reception import extract_assertions, extract_self_assertions
 
     turns = []
     rule_findings = []
@@ -43,6 +43,10 @@ async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> 
         turns.append({"span_id": int(span_id), "text": text})
         rule_findings.extend(
             {"span_id": int(span_id), **claim} for claim in extract_assertions(text)
+        )
+        # SPEC2: extract_self_assertions after extract_assertions (merge: authored segments only)
+        rule_findings.extend(
+            {"span_id": int(span_id), **claim} for claim in extract_self_assertions(text)
         )
     if not turns:
         return None

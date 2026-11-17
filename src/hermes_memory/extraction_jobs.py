@@ -8,7 +8,7 @@ from .entities import normalize_name
 from .extract_nouns import extract_nouns
 from .reception import extract_assertions
 
-RULES_VERSION = "1"
+RULES_VERSION = "2"
 MODEL_VERSION = "1"
 
 _ACKNOWLEDGEMENT_RE = re.compile(

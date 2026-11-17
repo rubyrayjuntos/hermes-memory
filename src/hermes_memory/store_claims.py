@@ -94,7 +94,7 @@ async def ensure_entity(conn, owner: str, surface: str, type_: str = "other") ->
 
 
 RULES_EXTRACTOR = "rules"
-RULES_VERSION = "1"
+RULES_VERSION = "2"
 OBJECT_KEY_SQL = "(CASE WHEN object_id IS NOT NULL THEN 'e:' || object_id::text ELSE 'l:' || object_canon END)"
 _SPEAKERS = {"user": "user", "assistant": "assistant"}
 
