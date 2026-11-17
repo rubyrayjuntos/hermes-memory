@@ -702,20 +702,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     claims.extend(extract_self_assertions(piece))
                 if not claims:
                     continue
+                extra: dict[str, object] = {"seg_start": seg.start, "seg_end": seg.end}
                 if seg.kind == "authored":
                     parsed.extend(claims)
-                    extra = {"seg_start": seg.start, "seg_end": seg.end}
-                    if await store.record_rule_claims(conv_id, claims, **extra):
-                        wrote = True
                 else:
-                    extra = {
-                        "speaker": "document",
-                        "extractor": "rules_document",
-                        "seg_start": seg.start,
-                        "seg_end": seg.end,
-                    }
-                    if await store.record_rule_claims(conv_id, claims, **extra):
-                        wrote = True
+                    extra["speaker"] = "document"
+                    extra["extractor"] = "rules_document"
+                if await store.record_rule_claims(conv_id, claims, **extra):
+                    wrote = True
         except Exception:
             logger.warning("claim write failed", exc_info=True)
         if prior is not None and verdict == "repaired":
