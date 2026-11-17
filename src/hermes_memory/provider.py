@@ -480,7 +480,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         try:
             asyncio.run_coroutine_threadsafe(store.outbox_unclaim(outbox_id, fence, reason), loop)
         except Exception:
-            logger.debug("outbox defer failed", exc_info=True)
+            logger.warning("outbox defer failed", exc_info=True)
 
     async def _settle_outbox(self, item: dict) -> None:
         """Delete the outbox row once the write landed; otherwise hand it back."""
@@ -1099,8 +1099,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
     async def _aprefetch(self, query: str) -> str:
         t0 = time.perf_counter()
+        deadline = asyncio.get_running_loop().time() + self.config.prefetch_timeout_s
         try:
-            async with asyncio.timeout(self.config.prefetch_timeout_s):
+            async with asyncio.timeout_at(deadline):
                 enriched = self._enrich_query(query)
                 from .tokens import QUERY_TOKEN_CAP, truncate_tokens
 
@@ -1161,7 +1162,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
         bodies: dict[int, dict] = {}
         fetcher = getattr(self.store, "conversations_by_ids", None)
         if extra_ids and callable(fetcher):
-            for row in await fetcher(extra_ids):
+            try:
+                async with asyncio.timeout_at(deadline):
+                    fetched_rows = await fetcher(extra_ids)
+            except TimeoutError:
+                logger.warning("prefetch timeout query=%r", query[:80])
+                return ""
+            for row in fetched_rows:
                 try:
                     bodies[int(row["id"])] = row
                 except (TypeError, ValueError, KeyError):
@@ -1234,8 +1241,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
         neighbor_map: dict = {}
         if selected and callable(neighbor_fetcher):
             try:
-                hit_turn_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
-                neighbor_map = await neighbor_fetcher(hit_turn_ids)
+                async with asyncio.timeout_at(deadline):
+                    hit_turn_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
+                    neighbor_map = await neighbor_fetcher(hit_turn_ids)
+            except TimeoutError:
+                logger.warning("prefetch timeout query=%r", query[:80])
+                return ""
             except Exception:
                 logger.exception("neighbor fetch failed")
                 neighbor_map = {}
@@ -1265,9 +1276,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
         )
         if selected and callable(overlay_fetcher):
             try:
-                overlay_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
-                overlays = await overlay_fetcher(overlay_ids)
+                async with asyncio.timeout_at(deadline):
+                    overlay_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
+                    overlays = await overlay_fetcher(overlay_ids)
             except Exception as exc:
+                if isinstance(exc, TimeoutError):
+                    logger.warning("prefetch timeout query=%r", query[:80])
+                    return ""
                 # 42P01 undefined_table = pre-migration store: quiet skip.
                 # Anything else is a real failure and stays loud.
                 if getattr(exc, "sqlstate", "") == "42P01":
@@ -1289,7 +1304,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 from .provider_helpers import format_facts
                 from .retrieve_hybrid import retrieve_hybrid
 
-                async with asyncio.timeout(self.config.prefetch_timeout_s):
+                async with asyncio.timeout_at(deadline):
                     hybrid_result = await retrieve_hybrid(
                         self.store,
                         self._agent_identity,

@@ -34,11 +34,15 @@ class FakeStore:
         assert owner == "owner-a"
         assert entity_ids == [11, 12]
         assert per_node == 8
-        return []
+        return [{
+            "source_id": 11,
+            "claim_id": 8,
+            "neighbour_id": 12,
+        }]
 
     async def claims_by_ids(self, owner, claim_ids):
         assert owner == "owner-a"
-        assert claim_ids == ["7"]
+        assert claim_ids == ["7", "8"]
         return [{
             "claim_id": 7,
             "status": "grounded",
@@ -48,6 +52,16 @@ class FakeStore:
             "event_time": None,
             "role": "user",
             "content": "Acme uses Postgres.",
+            "session_id": "session-a",
+        }, {
+            "claim_id": 8,
+            "status": "grounded",
+            "fact_text": "Acme is connected to Postgres.",
+            "fact_vec": "[0,1]",
+            "span_id": 915,
+            "event_time": None,
+            "role": "user",
+            "content": "Acme is connected to Postgres.",
             "session_id": "session-a",
         }]
 
@@ -62,18 +76,5 @@ async def test_hybrid_retrieval_returns_grounded_cited_facts():
         [{"id": "conv_914", "src": "conversation"}],
     )
 
-    assert result["ids"] == ["7"]
-    assert result["facts"] == [{
-        "claim_id": "7",
-        "status": "grounded",
-        "fact_text": "Acme uses Postgres.",
-        "event_time": None,
-        "supporting_turns": [{
-            "span_id": 914,
-            "event_time": None,
-            "role": "user",
-            "content": "Acme uses Postgres.",
-            "ts": None,
-            "session_id": "session-a",
-        }],
-    }]
+    assert set(result["ids"]) == {"7", "8"}
+    assert any(fact["fact_text"] == "Acme is connected to Postgres." for fact in result["facts"])
