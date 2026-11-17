@@ -8,9 +8,7 @@ from .entities import normalize_name
 from .extract_nouns import extract_nouns
 from .reception import extract_assertions
 from .turn_filter import segment_turn
-
-RULES_VERSION = "3"
-MODEL_VERSION = "1"
+from .versions import MODEL_VERSION, RULES_VERSION
 
 _ACKNOWLEDGEMENT_RE = re.compile(
     r"^(?:ok(?:ay)?|thanks?(?:\s+you)?|got\s+it|understood|sounds\s+good|"

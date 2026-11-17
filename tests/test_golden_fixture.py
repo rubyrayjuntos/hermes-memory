@@ -104,6 +104,19 @@ def test_is_junk_strings_produce_no_claims():
     assert _authored_claims("Nightingale uses Postgres")[0]["verb"] == "uses"
 
 
+def test_mixed_case_proper_names_extract_as_is_subjects():
+    for text, subject in (
+        ("OpenAI is my employer", "OpenAI"),
+        ("McDonald is a restaurant", "McDonald"),
+        ("iPhone is a phone", "iPhone"),
+        ("GitHub is a forge", "GitHub"),
+    ):
+        claims = _authored_claims(text)
+        assert claims, text
+        assert claims[0]["subject"] == subject, (text, claims)
+        assert claims[0]["verb"] == "is"
+
+
 def test_fixture_questions_have_typed_expectations():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     required = {

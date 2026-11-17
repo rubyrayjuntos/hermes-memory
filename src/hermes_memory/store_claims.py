@@ -23,6 +23,7 @@ from .entities import (
     normalize_name,
 )
 from .timeline import Event, rebuild
+from .versions import RULES_VERSION
 
 logger = logging.getLogger("hermes_memory.store_claims")
 
@@ -95,7 +96,6 @@ async def ensure_entity(conn, owner: str, surface: str, type_: str = "other") ->
 
 RULES_EXTRACTOR = "rules"
 DOCUMENT_EXTRACTOR = "rules_document"
-RULES_VERSION = "3"
 OBJECT_KEY_SQL = "(CASE WHEN object_id IS NOT NULL THEN 'e:' || object_id::text ELSE 'l:' || object_canon END)"
 _SPEAKERS = {"user": "user", "assistant": "assistant"}
 _ALLOWED_SPEAKERS = frozenset({"user", "assistant", "document"})

@@ -81,7 +81,8 @@ _STOP_FIRST = frozenset({
     "here", "there", "what", "which", "who", "how", "when", "where", "why",
     "pipeline", "want", "got", "per", "one", "all", "both", "with", "from",
 })
-_PROPER_SUBJECT = re.compile(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*$")
+_PROPER_SUBJECT = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:\s+[A-Za-z][A-Za-z0-9]*)*$")
+_ALLCAPS_ACRONYM = re.compile(r"^[A-Z]{2,4}$")
 _SUBJECT_OPENERS = frozenset({"running", "verify", "using", "making", "adding"})
 _VERSION_TOKEN = re.compile(r"\bV\d+\b")
 
@@ -90,8 +91,8 @@ _VERSION_TOKEN = re.compile(r"\bV\d+\b")
 # corrections travel through the repair-cue path instead.
 _NEGATION = re.compile(r"^(not|no|never|neither)\b", re.IGNORECASE)
 _ASSERTION_RES = [
-    ("is", re.compile(r"\b([A-Z][\w\-]+(?:\s+[A-Z][\w\-]+){0,3})\s+is\s+([^.\n]{2,120})")),
-    ("uses", re.compile(r"\b([A-Z][\w\-]+(?:\s+[A-Z][\w\-]+){0,3})\s+uses\s+([^.\n]{2,120})")),
+    ("is", re.compile(r"\b([A-Za-z][\w\-]+(?:\s+[A-Za-z][\w\-]+){0,3})\s+is\s+([^\.\n]{2,120})")),
+    ("uses", re.compile(r"\b([A-Za-z][\w\-]+(?:\s+[A-Za-z][\w\-]+){0,3})\s+uses\s+([^\.\n]{2,120})")),
 ]
 
 
@@ -158,6 +159,8 @@ def extract_assertions(text: str) -> list[dict]:
             if subject.split()[0].lower() in _STOP_FIRST:
                 continue
             if not _PROPER_SUBJECT.fullmatch(subject):
+                continue
+            if _ALLCAPS_ACRONYM.fullmatch(subject.split()[0]):
                 continue
             if subject.split()[0].casefold() in _SUBJECT_OPENERS:
                 continue
