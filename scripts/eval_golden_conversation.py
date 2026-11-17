@@ -53,7 +53,8 @@ async def run(dsn: str, fixture_path: Path) -> dict:
     for user, assistant in paired:
         prov.sync_turn(user["content"], assistant["content"], session_id=session)
     conn = await asyncpg.connect(dsn)
-    deadline = time.monotonic() + 180
+    deadline = time.monotonic() + 900
+    n = 0
     while time.monotonic() < deadline:
         n = await conn.fetchval(
             "select count(*) from conversations where agent_identity=$1 and drain_status='complete'",
@@ -109,12 +110,14 @@ async def run(dsn: str, fixture_path: Path) -> dict:
                 "missing": contains,
                 "unexpected": absent,
                 "chars": len(injected),
+                "expected_answer": q.get("expected_answer"),
             }
         questions.append(row)
     await conn.close()
     prov.shutdown()
     return {
         "owner": owner,
+        "extract_mode": "rules_only",
         "complete_rows": n,
         "expected_rows": expected_rows,
         "jobs_left": jobs_left,

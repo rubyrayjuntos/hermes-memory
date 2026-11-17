@@ -110,6 +110,56 @@ def pct(values, q):
     return s[min(len(s) - 1, int(round(q * (len(s) - 1))))]
 
 
+PROBE_CITIES = ("NYC", "Reykjavik", "NYC")  # not in CITIES planted corpus
+
+
+async def seed_lives_in_probe(dsn: str, owner: str) -> dict:
+    """Write NYC->Reykjavik->NYC as functional lives_in claims; assert current object."""
+    import asyncpg
+
+    from hermes_memory.store import Store
+
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+    store = Store(pool, graph_name="hermes_knowledge")
+    try:
+        for minute, city in enumerate(PROBE_CITIES, start=1):
+            tid = await store.insert_turn(
+                "eval-super-lives-in",
+                owner,
+                "user",
+                f"Raul lives in {city} (probe {minute}).",
+                None,
+                ts=f"2026-01-01T00:{minute:02d}:00+00:00",
+            )
+            if isinstance(tid, tuple):
+                tid = tid[0]
+            if tid is None:
+                raise RuntimeError("lives_in probe insert_turn returned None")
+            await store.record_rule_claims(
+                int(tid),
+                [{"subject": "Raul", "verb": "lives in", "object": city}],
+            )
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT c.object FROM claims c "
+                "JOIN entity s ON s.owner = c.owner AND s.id = c.subject_id "
+                "WHERE c.owner = $1 AND s.name_norm = 'raul' AND c.verb = 'lives_in' "
+                "AND c.status = 'grounded' AND c.valid_to IS NULL "
+                "ORDER BY c.claim_id",
+                owner,
+            )
+        current_objects = [r["object"] for r in rows]
+        return {
+            "sequence": "NYC->Reykjavik->NYC",
+            "verb": "lives_in",
+            "probe_cities": list(PROBE_CITIES),
+            "current_objects": current_objects,
+            "current_is_nyc": current_objects == ["NYC"],
+        }
+    finally:
+        await pool.close()
+
+
 async def run(args) -> dict:
     import asyncpg
 
@@ -151,35 +201,12 @@ async def run(args) -> dict:
             if complete >= expected_rows:
                 break
             await asyncio.sleep(0.5)
-    super_turns = [
-        (
-            "Home is NYC.",
-            "Noted: Home is NYC.",
-        ),
-        (
-            "Home is Austin.",
-            "Noted: Home is Austin.",
-        ),
-        (
-            "Home is NYC.",
-            "Noted: Home is NYC again.",
-        ),
-    ]
-    for user, assistant in super_turns:
-        prov.sync_turn(user, assistant, session_id=f"eval-super-{args.seed}")
-    expected_rows += 2 * len(super_turns)
-    while time.monotonic() < deadline:
-        complete = await conn.fetchval(
-            "select count(*) from conversations where drain_status='complete' and agent_identity=$1",
-            identity,
-        )
-        if complete >= expected_rows:
-            break
-        await asyncio.sleep(0.5)
     drain_s = time.perf_counter() - t_ingest
     await conn.close()
     prov.shutdown()
     expected = len(turns)
+
+    supersession = await seed_lives_in_probe(args.dsn, identity)
 
     # Second owner on the same database: its names must never reach the first owner's answers.
     other_facts, _ = build_corpus(args.other_facts, 0, args.seed + 101)
@@ -245,20 +272,6 @@ async def run(args) -> dict:
                           timeout=args.prefetch_timeout)
         raw = " ".join(str(s.get("content") or "") for s in seeds)
         results["vector_only_recall"].append(all(g.lower() in raw.lower() for g in gold_names))
-
-    super_q = "Where is my city now?"
-    t0 = time.perf_counter()
-    super_injected = prov.prefetch(super_q, session_id=f"eval-query-{args.seed}") or ""
-    super_ms = (time.perf_counter() - t0) * 1000
-    lower = super_injected.lower()
-    supersession = {
-        "query": super_q,
-        "sequence": "NYC->Austin->NYC",
-        "latency_ms": round(super_ms, 1),
-        "has_nyc": "nyc" in lower,
-        "has_austin": "austin" in lower,
-        "injected_chars": len(super_injected),
-    }
     prov.shutdown()
 
     def frac(xs):

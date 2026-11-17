@@ -46,13 +46,13 @@
     {"subject": "Role", "verb": "is", "object": "architect", "event_time": "2024-10-01T10:00:00+00:00", "current": true}
   ],
   "questions": [
-    {"id": "city_now", "text": "Where is my city now?", "expect_contains": ["NYC"], "expect_absent": ["Austin"]},
-    {"id": "spot", "text": "What kind of dog is Spot?", "expect_contains": ["poodle"], "expect_absent": ["beagle"]},
-    {"id": "role", "text": "What is my role?", "expect_contains": ["architect"], "expect_absent": ["engineer"]},
-    {"id": "nightingale_pg", "text": "What database does Nightingale use?", "expect_contains": ["Postgres"], "expect_absent": []},
-    {"id": "nightingale_redis", "text": "Does Nightingale use Redis?", "expect_contains": ["Redis"], "expect_absent": []},
-    {"id": "acme", "text": "What does Acme use?", "expect_contains": ["Kubernetes"], "expect_absent": []},
-    {"id": "austin_alias", "text": "What is Austin also called?", "expect_contains": ["Austin"], "expect_absent": []},
-    {"id": "home_history", "text": "Did Home used to be Austin?", "expect_contains": ["Austin"], "expect_absent": []}
+    {"id": "city_now", "text": "Where is my city now?", "expected_answer": "NYC", "expect_contains": ["NYC"], "expect_absent": ["Austin"]},
+    {"id": "spot", "text": "What kind of dog is Spot?", "expected_answer": "poodle", "expect_contains": ["poodle"], "expect_absent": ["beagle"]},
+    {"id": "role", "text": "What is my role?", "expected_answer": "architect", "expect_contains": ["architect"], "expect_absent": ["engineer"]},
+    {"id": "nightingale_pg", "text": "What database does Nightingale use?", "expected_answer": "Postgres", "expect_contains": ["Postgres"], "expect_absent": []},
+    {"id": "nightingale_redis", "text": "Does Nightingale use Redis?", "expected_answer": "Redis", "expect_contains": ["Redis"], "expect_absent": []},
+    {"id": "acme", "text": "What does Acme use?", "expected_answer": "Kubernetes", "expect_contains": ["Kubernetes"], "expect_absent": []},
+    {"id": "austin_alias", "text": "What is Austin also called?", "expected_answer": "Austin TX", "expect_contains": ["Austin"], "expect_absent": []},
+    {"id": "home_history", "text": "Did Home used to be Austin?", "expected_answer": "yes, Austin", "expect_contains": ["Austin"], "expect_absent": []}
   ]
 }

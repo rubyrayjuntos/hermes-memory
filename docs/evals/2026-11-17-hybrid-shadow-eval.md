@@ -441,3 +441,54 @@ release_gate_exit=0
 default_retrieval_mode= vector
 ```
 
+## Review follow-up (V22 reverted)
+
+V22 (`is` functional globally) was reverted. City probe uses functional `lives_in` and cities not in planted `CITIES` (NYC, Reykjavik). Substring `has_nyc`/`has_austin` removed; eval reports `current_objects` / `current_is_nyc` from SQL.
+
+### Tests
+```
+9 passed in 0.92s
+```
+(`test_hybrid_supersession` on `lives_in`; 19 migrations, no V22)
+
+### Hybrid eval JSON
+```json
+{
+  "retrieval_mode": "hybrid",
+  "supersession_nyc_austin_nyc": {
+    "sequence": "NYC->Reykjavik->NYC",
+    "verb": "lives_in",
+    "probe_cities": ["NYC", "Reykjavik", "NYC"],
+    "current_objects": ["NYC"],
+    "current_is_nyc": true
+  },
+  "ingest": {"drain_seconds": 43.5, "turns_per_s": 3.68, "complete_rows": 320, "expected_rows": 320},
+  "recall_prefetch": 1.0,
+  "recall_vector_only": 1.0,
+  "noise_projects_per_answer_mean": 5.97,
+  "latency_ms": {"p50": 200.1, "p95": 245.9}
+}
+```
+
+### Shadow tokens (facts-only vs total)
+```json
+{
+  "turns_read": 183,
+  "p95_facts_tokens": 400.0,
+  "p95_total_tokens": 635.0,
+  "p50_vector_latency_ms": 51.459704991430044,
+  "p95_vector_latency_ms": 59.37370518222451,
+  "p50_hybrid_latency_ms": 161.62225999869406,
+  "p95_hybrid_latency_ms": 176.44013208337128
+}
+```
+
+### Golden (`rules_only`)
+Still running at 250s with `conversations=6`, `claims=0`. `claims=0` is recorded as the rules_only finding so far. Questions JSON with `expected_answer` is in `tests/fixtures/golden_conversation.json`. No completed runner JSON yet.
+
+### Backfill
+Hold. 62 user turns not enqueued.
+
+### Installed
+No write. V22 not on `:5452`.
+

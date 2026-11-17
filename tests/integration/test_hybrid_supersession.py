@@ -1,4 +1,4 @@
-"""NYC -> Austin -> NYC must leave only the latest NYC claim current and injected."""
+"""NYC -> Reykjavik -> NYC must leave only the latest NYC lives_in claim current."""
 from __future__ import annotations
 
 import pytest
@@ -31,28 +31,26 @@ async def _embed_current(db_pool, owner: str) -> None:
         )
 
 
+def lives(city: str) -> dict:
+    return {"subject": "Raul", "verb": "lives in", "object": city}
+
+
 @pytest.mark.asyncio
-async def test_is_city_timeline_only_latest_nyc_is_current(db_pool, store, clean_hermes_test_db):
-    for minute, city in [(1, "NYC"), (2, "Austin"), (3, "NYC")]:
-        await store.record_rule_claims(
-            await span(store, "alice", minute),
-            [{"subject": "Home", "verb": "is", "object": city}],
-        )
-    assert await history(db_pool, "alice", "home", "is") == [
+async def test_lives_in_timeline_only_latest_nyc_is_current(db_pool, store, clean_hermes_test_db):
+    for minute, city in [(1, "NYC"), (2, "Reykjavik"), (3, "NYC")]:
+        await store.record_rule_claims(await span(store, "alice", minute), [lives(city)])
+    assert await history(db_pool, "alice", "raul", "lives_in") == [
         ("NYC", "grounded", False),
-        ("Austin", "grounded", False),
+        ("Reykjavik", "grounded", False),
         ("NYC", "grounded", True),
     ]
-    assert await current(db_pool, "alice", "home", "is") == [("NYC", "positive")]
+    assert await current(db_pool, "alice", "raul", "lives_in") == [("NYC", "positive")]
 
 
 @pytest.mark.asyncio
-async def test_hybrid_injects_current_nyc_not_austin(db_pool, store, clean_hermes_test_db):
-    for minute, city in [(1, "NYC"), (2, "Austin"), (3, "NYC")]:
-        await store.record_rule_claims(
-            await span(store, "alice", minute),
-            [{"subject": "Home", "verb": "is", "object": city}],
-        )
+async def test_hybrid_injects_current_nyc_not_prior_city(db_pool, store, clean_hermes_test_db):
+    for minute, city in [(1, "NYC"), (2, "Reykjavik"), (3, "NYC")]:
+        await store.record_rule_claims(await span(store, "alice", minute), [lives(city)])
     await _embed_current(db_pool, "alice")
     query = "Where is my city now?"
     vec = vec_to_literal(_vec(query))
@@ -60,8 +58,7 @@ async def test_hybrid_injects_current_nyc_not_austin(db_pool, store, clean_herme
     block = format_facts(result["facts"])
     texts = [str(fact.get("fact_text") or "") for fact in result["facts"]]
     assert any("NYC" in text for text in texts), result
-    assert all("Austin" not in text for text in texts), result
+    assert all("Reykjavik" not in text for text in texts), result
     assert "NYC" in block
-    assert "Austin" not in block
-    statuses = {str(fact.get("status")) for fact in result["facts"]}
-    assert statuses <= {"grounded"}
+    assert "Reykjavik" not in block
+    assert {str(fact.get("status")) for fact in result["facts"]} <= {"grounded"}

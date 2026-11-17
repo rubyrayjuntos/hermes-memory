@@ -71,6 +71,12 @@ def percentile(values: list[float], q: float) -> float:
     return ordered[min(len(ordered) - 1, int(round(q * (len(ordered) - 1))))]
 
 
+def facts_block_and_total_tokens(block: str) -> tuple[int, int]:
+    text = block or ""
+    fact_block = text.split("<supporting_turns>", 1)[0].strip()
+    return count_tokens(fact_block), count_tokens(text)
+
+
 def jaccard(a: list[str], b: list[str]) -> float:
     set_a, set_b = set(a), set(b)
     if not set_a and not set_b:
@@ -253,11 +259,14 @@ async def compute_hybrid_path(
             if span not in seen:
                 seen.add(span)
                 spans.append(span)
+    fact_tokens, total_tokens = facts_block_and_total_tokens(block)
     return {
         "ids": [str(item) for item in result["ids"]],
         "spans": spans,
         "latency_ms": latency_ms,
-        "tokens": count_tokens(block or ""),
+        "tokens": total_tokens,
+        "facts_tokens": fact_tokens,
+        "total_tokens": total_tokens,
         "block": block or "",
         "arm_latency_ms": dict(result.get("latency_ms") or {}),
     }
@@ -279,7 +288,8 @@ async def replay_turns(
     rows: list[dict[str, Any]] = []
     v_latencies: list[float] = []
     h_latencies: list[float] = []
-    token_counts: list[int] = []
+    facts_token_counts: list[int] = []
+    total_token_counts: list[int] = []
     overlaps: list[float] = []
     hybrid_adds = 0
 
@@ -312,7 +322,9 @@ async def replay_turns(
                 "vector": round(vector["latency_ms"], 1),
                 "hybrid": round(hybrid["latency_ms"], 1),
                 "vector_tokens": vector["tokens"],
-                "hybrid_tokens": hybrid["tokens"],
+                "hybrid_tokens": hybrid["total_tokens"],
+                "hybrid_facts_tokens": hybrid["facts_tokens"],
+                "hybrid_total_tokens": hybrid["total_tokens"],
                 "jaccard_spans": overlap,
                 **{f"hybrid_{key}": value for key, value in hybrid["arm_latency_ms"].items()},
             }
@@ -327,7 +339,8 @@ async def replay_turns(
                 )
             v_latencies.append(vector["latency_ms"])
             h_latencies.append(hybrid["latency_ms"])
-            token_counts.append(hybrid["tokens"])
+            facts_token_counts.append(hybrid["facts_tokens"])
+            total_token_counts.append(hybrid["total_tokens"])
             overlaps.append(overlap)
             if hybrid_only:
                 hybrid_adds += 1
@@ -362,7 +375,8 @@ async def replay_turns(
         "p95_vector_latency_ms": percentile(v_latencies, 0.95),
         "p50_hybrid_latency_ms": percentile(h_latencies, 0.5),
         "p95_hybrid_latency_ms": percentile(h_latencies, 0.95),
-        "p95_facts_tokens": percentile([float(v) for v in token_counts], 0.95),
+        "p95_facts_tokens": percentile([float(v) for v in facts_token_counts], 0.95),
+        "p95_total_tokens": percentile([float(v) for v in total_token_counts], 0.95),
         "dry_run": dry_run,
     }
     return report
