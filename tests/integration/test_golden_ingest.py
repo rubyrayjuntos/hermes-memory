@@ -32,7 +32,7 @@ async def test_golden_provider_ingest_drains_and_is_owner_scoped(
     assert report["extraction_jobs"]["rules"] == report["expected_rows"]
     assert report["extraction_jobs"]["pending"] == 0
     assert report["extraction_jobs"]["failed"] == 0
-    assert report["claim_metrics"]["expected"] == 11
+    assert report["claim_metrics"]["expected"] == 12
     assert report["claim_metrics"]["recall"] > 0.455
     assert report["claim_metrics"]["precision"] >= 0.556
     assert report["mode_label_claim_metrics"]["expected"] == 5
