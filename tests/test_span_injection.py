@@ -138,3 +138,26 @@ def test_facts_escape_markup_and_enforce_complete_fact_budget():
     assert "<b>" not in out
     assert count_tokens(fact_block) <= 80
     assert count_tokens(out) <= 120
+
+
+def test_thirty_long_grounded_facts_stay_within_400_and_max_tokens():
+    facts = []
+    filler = "word " * 40
+    for i in range(30):
+        body = f"Org{i} uses Tool{i}."
+        facts.append({
+            "claim_id": i + 1,
+            "status": "grounded",
+            "fact_text": body,
+            "supporting_turns": [{
+                "span_id": 1000 + i,
+                "role": "user",
+                "content": f"{body} {filler}",
+            }],
+        })
+    out = format_facts(facts, fact_token_budget=400, total_token_budget=1200, max_facts=30)
+    assert out
+    fact_block = out.split("<supporting_turns>", 1)[0].strip()
+    assert count_tokens(fact_block) <= 400
+    assert count_tokens(out) <= 1200
+    assert fact_block.startswith("<grounded_facts")

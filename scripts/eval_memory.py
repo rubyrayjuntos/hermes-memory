@@ -110,6 +110,56 @@ def pct(values, q):
     return s[min(len(s) - 1, int(round(q * (len(s) - 1))))]
 
 
+PROBE_CITIES = ("NYC", "Reykjavik", "NYC")  # not in CITIES planted corpus
+
+
+async def seed_lives_in_probe(dsn: str, owner: str) -> dict:
+    """Write NYC->Reykjavik->NYC as functional lives_in claims; assert current object."""
+    import asyncpg
+
+    from hermes_memory.store import Store
+
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+    store = Store(pool, graph_name="hermes_knowledge")
+    try:
+        for minute, city in enumerate(PROBE_CITIES, start=1):
+            tid = await store.insert_turn(
+                "eval-super-lives-in",
+                owner,
+                "user",
+                f"Raul lives in {city} (probe {minute}).",
+                None,
+                ts=f"2026-01-01T00:{minute:02d}:00+00:00",
+            )
+            if isinstance(tid, tuple):
+                tid = tid[0]
+            if tid is None:
+                raise RuntimeError("lives_in probe insert_turn returned None")
+            await store.record_rule_claims(
+                int(tid),
+                [{"subject": "Raul", "verb": "lives in", "object": city}],
+            )
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT c.object FROM claims c "
+                "JOIN entity s ON s.owner = c.owner AND s.id = c.subject_id "
+                "WHERE c.owner = $1 AND s.name_norm = 'raul' AND c.verb = 'lives_in' "
+                "AND c.status = 'grounded' AND c.valid_to IS NULL "
+                "ORDER BY c.claim_id",
+                owner,
+            )
+        current_objects = [r["object"] for r in rows]
+        return {
+            "sequence": "NYC->Reykjavik->NYC",
+            "verb": "lives_in",
+            "probe_cities": list(PROBE_CITIES),
+            "current_objects": current_objects,
+            "current_is_nyc": current_objects == ["NYC"],
+        }
+    finally:
+        await pool.close()
+
+
 async def run(args) -> dict:
     import asyncpg
 
@@ -120,7 +170,11 @@ async def run(args) -> dict:
     if not re.search(r"(_eval\b|hermes_release_gate_)", args.dsn):
         raise SystemExit("refusing: DSN must name an *_eval or hermes_release_gate_* database")
 
-    cfg = HybridAgeConfig(dsn=args.dsn, prefetch_timeout_s=args.prefetch_timeout)
+    cfg = HybridAgeConfig(
+        dsn=args.dsn,
+        prefetch_timeout_s=args.prefetch_timeout,
+        retrieval_mode=args.retrieval_mode,
+    )
     prov = HybridAgeMemoryProvider(config=cfg)
     identity = "eval"
     facts, chatter = build_corpus(args.facts, args.chatter, args.seed)
@@ -151,6 +205,8 @@ async def run(args) -> dict:
     await conn.close()
     prov.shutdown()
     expected = len(turns)
+
+    supersession = await seed_lives_in_probe(args.dsn, identity)
 
     # Second owner on the same database: its names must never reach the first owner's answers.
     other_facts, _ = build_corpus(args.other_facts, 0, args.seed + 101)
@@ -222,6 +278,8 @@ async def run(args) -> dict:
         return round(sum(xs) / len(xs), 3) if xs else None
 
     summary = {
+        "retrieval_mode": args.retrieval_mode,
+        "supersession_nyc_austin_nyc": supersession,
         "corpus": {"facts": args.facts, "chatter": args.chatter, "turns": expected, "queries": len(queries)},
         "ingest": {"drain_seconds": round(drain_s, 1), "turns_per_s": round(expected / drain_s, 2),
                    "complete_rows": complete, "expected_rows": expected_rows},
@@ -295,6 +353,12 @@ def main(argv=None) -> int:
     p.add_argument("--chunk", type=int, default=100)
     p.add_argument("--other-facts", type=int, default=50, help="facts for a second owner (leakage check)")
     p.add_argument("--durability", type=int, default=0, help="run only the burst/shutdown/replay check with N turns")
+    p.add_argument(
+        "--retrieval-mode",
+        choices=("vector", "hybrid"),
+        default="vector",
+        help="Instance retrieval_mode for this eval only; does not change package defaults.",
+    )
     p.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
     summary = asyncio.run(run_durability(args) if args.durability else run(args))
