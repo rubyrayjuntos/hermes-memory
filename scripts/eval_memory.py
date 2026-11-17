@@ -153,16 +153,16 @@ async def run(args) -> dict:
             await asyncio.sleep(0.5)
     super_turns = [
         (
-            "My city is NYC for the supersession probe.",
-            "Noted: your city is NYC for the supersession probe.",
+            "Home is NYC.",
+            "Noted: Home is NYC.",
         ),
         (
-            "My city is Austin for the supersession probe.",
-            "Noted: your city is Austin for the supersession probe.",
+            "Home is Austin.",
+            "Noted: Home is Austin.",
         ),
         (
-            "My city is NYC again for the supersession probe.",
-            "Noted: your city is NYC again for the supersession probe.",
+            "Home is NYC.",
+            "Noted: Home is NYC again.",
         ),
     ]
     for user, assistant in super_turns:

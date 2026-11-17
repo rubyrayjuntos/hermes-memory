@@ -350,3 +350,94 @@ The completing runs used `--facts 40 --chatter 80 --queries 40`, not the spec-si
 | Filtered recall with many owners | “no drop”. “Eval owner < 5% of rows versus a single-owner database.” | Not run. | Unmeasurable |
 | Observability | “present”. “Health and verify report extraction jobs pending / leased / retryable / failed, blocked sessions, claims by status (including orphaned), and stale-status drift.” | Not run. | Unmeasurable |
 | Secret redaction (Phase 6) | “100% of the secret corpus redacted on every surface; ≤ 2% of the look-alike corpus redacted”. | Phase 6 not implemented. | Unmeasurable |
+
+## Post-fix (`hybrid-fixes`)
+
+Root cause: `verb.is` was `functional=false`, so timeline keys include `object_key`. `Home is NYC` and `Home is Austin` are separate current claims; ANN can inject Austin after NYC was re-asserted. `lives_in` was already functional (existing `test_nyc_austin_nyc_timeline`). V22 sets `is` functional. Claim ANN (`valid_to IS NULL` + V21 partial HNSW) was already current-only.
+
+`format_facts` already stops adding facts when the next fact would exceed 400 tokens including the `<grounded_facts spans=...>` header. Full injection (facts + supporting turns) still uses `total_token_budget` (1200). Shadow `p95_facts_tokens` counts that whole block.
+
+### Tests
+
+```
+.venv-replay/bin/python -m pytest -q tests/integration/test_hybrid_supersession.py tests/test_span_injection.py::test_thirty_long_grounded_facts_stay_within_400_and_max_tokens tests/test_timeline.py --migrate --dsn "$TEST_DSN" -o addopts= --tb=short
+16 passed in 0.83s
+```
+
+### Golden conversation
+
+```
+golden_start=2026-11-17T05:42:12-06:00
+[Command timed out after 180s]
+```
+
+After timeout: `conversations n=6 complete=6`, `claims=0`, `durable_job=6`. No question JSON.
+
+Fixture: `tests/fixtures/golden_conversation.json`. Runner: `scripts/eval_golden_conversation.py`.
+
+### Installed claims backfill (no write)
+
+```
+conversations_user|66
+conversations_all|142
+claims|0
+claim_evidence|0
+extract_rules_jobs|14
+extract_rules_pending|0
+extract_model_jobs|2
+user_turns_without_rules_job|62
+```
+
+Backup: `/home/rswan/hermes-memory-backups/pre-claims-backfill-202611170545.dump` size 3207417.
+
+Stopped before enqueue/publish on `:5452`. `:5450` untouched. V22 not applied to installed.
+
+### Completing eval after V22
+
+vector (`drain-timeout 300`; ingest `complete_rows=320` `expected_rows=326` — supersession pair may be missing):
+
+```json
+{
+  "retrieval_mode": "vector",
+  "supersession_nyc_austin_nyc": {
+    "query": "Where is my city now?",
+    "sequence": "NYC->Austin->NYC",
+    "latency_ms": 44.7,
+    "has_nyc": false,
+    "has_austin": true,
+    "injected_chars": 3092
+  },
+  "recall_prefetch": 1.0,
+  "recall_vector_only": 1.0,
+  "noise_projects_per_answer_mean": 6.9,
+  "latency_ms": {"p50": 48.6, "p95": 68.8}
+}
+```
+
+hybrid eval: no JSON (command timeout; `conversations complete=320`, empty `eval-hybrid-post.json`).
+
+shadow_replay on that eval DB (160 user turns):
+
+```json
+{
+  "turns_read": 160,
+  "vector_errors": 0,
+  "hybrid_errors": 0,
+  "mean_jaccard_spans": 0.09565806299636559,
+  "median_jaccard_spans": 0.0,
+  "pct_hybrid_adds_span": 100.0,
+  "p50_vector_latency_ms": 52.386455005034804,
+  "p95_vector_latency_ms": 62.26480705663562,
+  "p50_hybrid_latency_ms": 164.6010261029005,
+  "p95_hybrid_latency_ms": 184.1722170356661,
+  "p95_facts_tokens": 634.0
+}
+```
+
+`docker rm -f hermes-eval-pg` done.
+
+```
+release_gate_exit=0
+default_retrieval_mode= vector
+```
+
