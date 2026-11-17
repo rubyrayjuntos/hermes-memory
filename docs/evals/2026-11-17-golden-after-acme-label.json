@@ -1,0 +1,439 @@
+{
+  "owner_id": "golden-17e275b5ff75",
+  "extract_mode": "rules_only",
+  "fixture_turn_count": 42,
+  "complete_rows": 27,
+  "expected_rows": 27,
+  "dropped_turns": [
+    {
+      "turn_id": "t02",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t04",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t06",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t08",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t10",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t12",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t14",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t16",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t18",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t20",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t22",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t26",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t28",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t30",
+      "role": "assistant",
+      "reason": "short_non_user"
+    },
+    {
+      "turn_id": "t42",
+      "role": "assistant",
+      "reason": "short_non_user"
+    }
+  ],
+  "drop_reason_counts": {
+    "short_non_user": 15
+  },
+  "extraction_jobs": {
+    "rules": 27,
+    "model": 0,
+    "pending": 0,
+    "failed": 0
+  },
+  "claim_metrics": {
+    "expected": 11,
+    "actual": 11,
+    "matched": 11,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "mode_label_claim_metrics": {
+    "expected": 5,
+    "actual": 11,
+    "matched": 5,
+    "precision": 0.455,
+    "recall": 1.0,
+    "f1": 0.625
+  },
+  "timeline_status_agreement": {
+    "expected": 11,
+    "matched": 11,
+    "agreement": 1.0
+  },
+  "mode_label_timeline_status_agreement": {
+    "expected": 5,
+    "matched": 5,
+    "agreement": 1.0
+  },
+  "evidence_metrics": {
+    "expected": 5,
+    "actual": 12,
+    "matched": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "segment_offsets_supported": false,
+    "segment_offsets_null": 12
+  },
+  "event_time_agreement": {
+    "matched_turns": 0,
+    "compared_pairs": 0,
+    "agreement": null
+  },
+  "pasted_span_false_grounding_count": 0,
+  "assistant_grounded_evidence_count": 0,
+  "question_pass_rate": {
+    "vector": 0.5,
+    "hybrid": 0.7
+  },
+  "question_diagnostics": {
+    "missing_expected_claim_ids": [],
+    "context_mode_disagreement_ids": [
+      "city_now",
+      "city_history",
+      "role",
+      "austin_alias",
+      "paste_not_user",
+      "assistant_unconfirmed"
+    ]
+  },
+  "questions": [
+    {
+      "id": "city_now",
+      "kind": "functional_current",
+      "text": "Where do I live now?",
+      "vector": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [
+          "Austin"
+        ],
+        "chars": 2902,
+        "total_injection_tokens": 900,
+        "facts_tokens": 0,
+        "expected_answer": "NYC"
+      },
+      "hybrid": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "NYC"
+      }
+    },
+    {
+      "id": "city_history",
+      "kind": "history",
+      "text": "Did I used to live in Austin?",
+      "vector": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [],
+        "chars": 2955,
+        "total_injection_tokens": 915,
+        "facts_tokens": 0,
+        "expected_answer": "Yes, Austin."
+      },
+      "hybrid": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": true,
+        "missing": [
+          "Austin"
+        ],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "Yes, Austin."
+      }
+    },
+    {
+      "id": "spot",
+      "kind": "non_functional",
+      "text": "What kinds of dog have I mentioned for Spot?",
+      "vector": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [],
+        "chars": 2918,
+        "total_injection_tokens": 903,
+        "facts_tokens": 0,
+        "expected_answer": "beagle and poodle"
+      },
+      "hybrid": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "beagle and poodle"
+      }
+    },
+    {
+      "id": "role",
+      "kind": "functional_current",
+      "text": "What is my role?",
+      "vector": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [
+          "engineer"
+        ],
+        "chars": 2867,
+        "total_injection_tokens": 895,
+        "facts_tokens": 0,
+        "expected_answer": "architect"
+      },
+      "hybrid": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "architect"
+      }
+    },
+    {
+      "id": "nightingale_pg",
+      "kind": "non_functional",
+      "text": "What database does Nightingale use?",
+      "vector": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [],
+        "chars": 2973,
+        "total_injection_tokens": 907,
+        "facts_tokens": 0,
+        "expected_answer": "Postgres"
+      },
+      "hybrid": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "Postgres"
+      }
+    },
+    {
+      "id": "austin_alias",
+      "kind": "alias",
+      "text": "What is Austin also called?",
+      "vector": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": null,
+        "missing": [],
+        "unexpected": [],
+        "chars": 2905,
+        "total_injection_tokens": 899,
+        "facts_tokens": 0,
+        "expected_answer": "Austin TX"
+      },
+      "hybrid": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": null,
+        "missing": [
+          "Austin TX"
+        ],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "Austin TX"
+      }
+    },
+    {
+      "id": "work_negation",
+      "kind": "negation",
+      "text": "Do I still work at Acme?",
+      "vector": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": true,
+        "missing": [],
+        "unexpected": [
+          "I work at Acme"
+        ],
+        "chars": 2875,
+        "total_injection_tokens": 888,
+        "facts_tokens": 0,
+        "expected_answer": "No."
+      },
+      "hybrid": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": true,
+        "missing": [
+          "No"
+        ],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "No."
+      }
+    },
+    {
+      "id": "paste_not_user",
+      "kind": "paste_not_user",
+      "text": "What did I say Bob owns?",
+      "vector": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": null,
+        "missing": [],
+        "unexpected": [
+          "Bob is the owner"
+        ],
+        "chars": 3035,
+        "total_injection_tokens": 925,
+        "facts_tokens": 0,
+        "expected_answer": "Unknown; that text was pasted."
+      },
+      "hybrid": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": null,
+        "missing": [],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "Unknown; that text was pasted."
+      }
+    },
+    {
+      "id": "assistant_unconfirmed",
+      "kind": "assistant_unconfirmed",
+      "text": "What is my remote-work preference?",
+      "vector": {
+        "pass": false,
+        "context_pass": false,
+        "claim_present": null,
+        "missing": [],
+        "unexpected": [
+          "Fridays"
+        ],
+        "chars": 2983,
+        "total_injection_tokens": 917,
+        "facts_tokens": 0,
+        "expected_answer": "Unknown."
+      },
+      "hybrid": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": null,
+        "missing": [],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "Unknown."
+      }
+    },
+    {
+      "id": "abstain",
+      "kind": "abstain",
+      "text": "Which office did I visit last week?",
+      "vector": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": null,
+        "missing": [],
+        "unexpected": [],
+        "chars": 2913,
+        "total_injection_tokens": 902,
+        "facts_tokens": 0,
+        "expected_answer": "Unknown."
+      },
+      "hybrid": {
+        "pass": true,
+        "context_pass": true,
+        "claim_present": null,
+        "missing": [],
+        "unexpected": [],
+        "chars": 1149,
+        "total_injection_tokens": 441,
+        "facts_tokens": 441,
+        "expected_answer": "Unknown."
+      }
+    }
+  ]
+}
