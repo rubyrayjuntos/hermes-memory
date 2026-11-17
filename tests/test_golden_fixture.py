@@ -21,7 +21,7 @@ def test_fixture_expected_claims_use_seeded_verbs_and_separate_evidence():
         assert all("speaker" in item and "source_turn_id" in item for item in evidence)
         assert all(claim in ideal_claims for claim in claims)
 
-    assert len(ideal_claims) == 12
+    assert len(ideal_claims) == 11
     assert len(ideal_claims) > len(fixture["expected_claims"]["rules_only"])
     assert any(claim["subject"] == "I" and claim["verb"] == "lives_in" for claim in ideal_claims)
     assert {
@@ -33,6 +33,20 @@ def test_fixture_expected_claims_use_seeded_verbs_and_separate_evidence():
         "status": "grounded",
         "event_time": "2024-01-10T12:00:00+00:00",
     } in ideal_claims
+    acme_jobs = [
+        claim for claim in ideal_claims
+        if claim["subject"] == "I" and claim["verb"] == "works_for" and claim["object"] == "Acme"
+    ]
+    assert acme_jobs == [{
+        "subject": "I",
+        "verb": "works_for",
+        "object": "Acme",
+        "polarity": "positive",
+        "current": False,
+        "status": "grounded",
+        "event_time": "2024-09-01T10:00:00+00:00",
+    }]
+    assert not any(claim["verb"] == "works_for" and claim["current"] for claim in ideal_claims)
 
 
 def test_fixture_questions_have_typed_expectations():
