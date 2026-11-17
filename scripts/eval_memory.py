@@ -120,7 +120,11 @@ async def run(args) -> dict:
     if not re.search(r"(_eval\b|hermes_release_gate_)", args.dsn):
         raise SystemExit("refusing: DSN must name an *_eval or hermes_release_gate_* database")
 
-    cfg = HybridAgeConfig(dsn=args.dsn, prefetch_timeout_s=args.prefetch_timeout)
+    cfg = HybridAgeConfig(
+        dsn=args.dsn,
+        prefetch_timeout_s=args.prefetch_timeout,
+        retrieval_mode=args.retrieval_mode,
+    )
     prov = HybridAgeMemoryProvider(config=cfg)
     identity = "eval"
     facts, chatter = build_corpus(args.facts, args.chatter, args.seed)
@@ -147,6 +151,31 @@ async def run(args) -> dict:
             if complete >= expected_rows:
                 break
             await asyncio.sleep(0.5)
+    super_turns = [
+        (
+            "My city is NYC for the supersession probe.",
+            "Noted: your city is NYC for the supersession probe.",
+        ),
+        (
+            "My city is Austin for the supersession probe.",
+            "Noted: your city is Austin for the supersession probe.",
+        ),
+        (
+            "My city is NYC again for the supersession probe.",
+            "Noted: your city is NYC again for the supersession probe.",
+        ),
+    ]
+    for user, assistant in super_turns:
+        prov.sync_turn(user, assistant, session_id=f"eval-super-{args.seed}")
+    expected_rows += 2 * len(super_turns)
+    while time.monotonic() < deadline:
+        complete = await conn.fetchval(
+            "select count(*) from conversations where drain_status='complete' and agent_identity=$1",
+            identity,
+        )
+        if complete >= expected_rows:
+            break
+        await asyncio.sleep(0.5)
     drain_s = time.perf_counter() - t_ingest
     await conn.close()
     prov.shutdown()
@@ -216,12 +245,28 @@ async def run(args) -> dict:
                           timeout=args.prefetch_timeout)
         raw = " ".join(str(s.get("content") or "") for s in seeds)
         results["vector_only_recall"].append(all(g.lower() in raw.lower() for g in gold_names))
+
+    super_q = "Where is my city now?"
+    t0 = time.perf_counter()
+    super_injected = prov.prefetch(super_q, session_id=f"eval-query-{args.seed}") or ""
+    super_ms = (time.perf_counter() - t0) * 1000
+    lower = super_injected.lower()
+    supersession = {
+        "query": super_q,
+        "sequence": "NYC->Austin->NYC",
+        "latency_ms": round(super_ms, 1),
+        "has_nyc": "nyc" in lower,
+        "has_austin": "austin" in lower,
+        "injected_chars": len(super_injected),
+    }
     prov.shutdown()
 
     def frac(xs):
         return round(sum(xs) / len(xs), 3) if xs else None
 
     summary = {
+        "retrieval_mode": args.retrieval_mode,
+        "supersession_nyc_austin_nyc": supersession,
         "corpus": {"facts": args.facts, "chatter": args.chatter, "turns": expected, "queries": len(queries)},
         "ingest": {"drain_seconds": round(drain_s, 1), "turns_per_s": round(expected / drain_s, 2),
                    "complete_rows": complete, "expected_rows": expected_rows},
@@ -295,6 +340,12 @@ def main(argv=None) -> int:
     p.add_argument("--chunk", type=int, default=100)
     p.add_argument("--other-facts", type=int, default=50, help="facts for a second owner (leakage check)")
     p.add_argument("--durability", type=int, default=0, help="run only the burst/shutdown/replay check with N turns")
+    p.add_argument(
+        "--retrieval-mode",
+        choices=("vector", "hybrid"),
+        default="vector",
+        help="Instance retrieval_mode for this eval only; does not change package defaults.",
+    )
     p.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
     summary = asyncio.run(run_durability(args) if args.durability else run(args))
