@@ -9,7 +9,7 @@ import json
 from typing import Awaitable, Callable, Sequence
 
 from .extraction_jobs import MODEL_VERSION
-from .reception import extract_assertions
+from .reception import extract_assertions, extract_self_assertions
 from .store_claims import (
     RULES_EXTRACTOR,
     RULES_VERSION,
@@ -24,6 +24,7 @@ from .store_claims import (
     write_fact_vectors,
 )
 from .store_jobs import job_fence_check
+from .turn_filter import segment_turn
 
 FACT_EMBED_MODEL = "nomic-embed-text"
 MODEL_EXTRACTOR = "model"
@@ -49,10 +50,27 @@ async def publish_rules(conn, store_embed: StoreEmbed, job_id: int, fence: int) 
             span_id, job["owner"])
         claim_ids: list[int] = []
         if turn is not None and turn["role"] == "user" and (turn["content"] or "").strip():
-            claims = extract_assertions(turn["content"])
-            if claims:
-                claim_ids = list(dict.fromkeys(await record_rule_claims_on_conn(
-                    conn, span_id, claims, RULES_EXTRACTOR, RULES_VERSION)))
+            content = str(turn["content"])
+            for seg in segment_turn(content):
+                if seg.kind == "code":
+                    continue
+                piece = content[seg.start:seg.end]
+                claims = extract_assertions(piece)
+                if seg.kind == "authored":
+                    # SPEC2: extract_self_assertions after extract_assertions (authored only)
+                    claims.extend(extract_self_assertions(piece))
+                if not claims:
+                    continue
+                if seg.kind == "authored":
+                    ids = await record_rule_claims_on_conn(
+                        conn, span_id, claims, RULES_EXTRACTOR, RULES_VERSION,
+                        seg_start=seg.start, seg_end=seg.end)
+                else:
+                    ids = await record_rule_claims_on_conn(
+                        conn, span_id, claims, "rules_document", RULES_VERSION,
+                        speaker="document", seg_start=seg.start, seg_end=seg.end)
+                claim_ids.extend(ids)
+            claim_ids = list(dict.fromkeys(claim_ids))
         missing = await claims_missing_vectors(conn, job["owner"], claim_ids)
         if missing:
             vectors = await store_embed([text for _, text in missing])

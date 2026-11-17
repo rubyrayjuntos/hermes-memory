@@ -16,8 +16,8 @@ class FakeStore:
         self.aliases.append((surface, canon, "user_span"))
         return True
 
-    async def record_rule_claims(self, span_id: int, claims: list) -> list:
-        self.claim_inserts.append((span_id, claims))
+    async def record_rule_claims(self, span_id: int, claims: list, **kw) -> list:
+        self.claim_inserts.append((span_id, claims, kw))
         return [next(self._ids) for _ in claims]
 
     async def previous_turn(
@@ -118,3 +118,72 @@ async def test_catch_up_reaps_pending():
     assert n == 1
     assert (7, "ready") in store.stamped
     assert store.claim_inserts[0][0] == 7
+
+
+PASTED_EMAIL = (
+    "From: alice@example.com\n"
+    "Subject: ownership\n"
+    "\n"
+    "Bob is the owner.\n"
+    "> quoted leftover\n"
+    "-- \n"
+    "Sent from my iPhone\n"
+    "No, I meant Friday.\n"
+)
+
+
+def _user_claim_batches(store):
+    return [
+        claims for _span, claims, kw in store.claim_inserts
+        if kw.get("speaker") in (None, "user")
+    ]
+
+
+def _document_claim_batches(store):
+    return [
+        (claims, kw) for _span, claims, kw in store.claim_inserts
+        if kw.get("speaker") == "document"
+    ]
+
+
+async def test_pasted_email_writes_no_user_claims_or_repairs():
+    store = FakeStore(prior={"id": 10, "content": "Meeting is Thursday."})
+    await make_provider()._reception_stage(store, 11, "s", "user", PASTED_EMAIL)
+    assert _user_claim_batches(store) == []
+    assert store.retractions == []
+    assert store.uptakes == [(10, 11, "unknown")]
+    docs = _document_claim_batches(store)
+    assert docs, "pasted assertion may be recorded as document evidence"
+    subjects = [c["subject"] for claims, _kw in docs for c in claims]
+    assert "Bob" in subjects
+    for _claims, kw in docs:
+        assert kw.get("extractor") == "rules_document"
+        assert kw.get("seg_start") is not None and kw.get("seg_end") is not None
+
+
+async def test_code_fence_does_not_extract_assertions():
+    store = FakeStore(prior=None)
+    await make_provider()._reception_stage(
+        store, 11, "s", "user", "```\nConfig uses Redis\n```")
+    assert store.claim_inserts == []
+
+
+async def test_mixed_turn_extracts_authored_user_claim_and_document_paste():
+    text = "Nightingale uses Postgres. Can you clean this up?\n\n" + PASTED_EMAIL
+    store = FakeStore(prior=None)
+    await make_provider()._reception_stage(store, 11, "s", "user", text)
+    user_subjects = [c["subject"] for claims in _user_claim_batches(store) for c in claims]
+    assert user_subjects == ["Nightingale"]
+    docs = _document_claim_batches(store)
+    assert docs
+    for claims, kw in docs:
+        assert kw.get("speaker") == "document"
+        assert all(c["subject"] != "Nightingale" for c in claims)
+
+
+async def test_short_authored_repair_still_fires():
+    store = FakeStore(prior={"id": 10, "content": "Spot is a labrador."})
+    await make_provider()._reception_stage(
+        store, 11, "s", "user", "No, I meant Spot is a poodle.")
+    assert store.uptakes == [(10, 11, "repaired")]
+    assert len(store.retractions) == 1

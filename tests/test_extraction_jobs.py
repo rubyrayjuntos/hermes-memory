@@ -6,7 +6,7 @@ from hermes_memory.extraction_jobs import job_specs, should_enqueue_model
 def test_default_job_specs_only_enqueue_rules():
     specs = job_specs(42)
     assert specs == (
-        ("extract_rules", "42:rules:1", {"span_id": 42, "extractor": "rules", "version": "1"}),
+        ("extract_rules", "42:rules:3", {"span_id": 42, "extractor": "rules", "version": "3"}),
     )
     for _kind, _op, payload in specs:
         assert set(payload) == {"span_id", "extractor", "version"}
@@ -33,6 +33,18 @@ def test_model_filter_keeps_unstructured_facts_and_uncovered_entities():
     assert should_enqueue_model(
         "Nightingale uses Atlas and collaborates with Project Zephyr."
     )
+
+
+def test_model_filter_scores_authored_segments_only():
+    paste = (
+        "From: alice@example.com\n"
+        "Subject: infra\n"
+        "\n"
+        "Ray Swan met Alice Chen at the 2026 AI Summit.\n"
+    )
+    assert not should_enqueue_model(paste)
+    mixed = "Ray Swan met Alice Chen at the 2026 AI Summit.\n\n" + paste
+    assert should_enqueue_model(mixed)
 
 
 class _JobStore:
@@ -66,7 +78,7 @@ async def test_enqueue_defaults_to_rules_only_with_session_and_event_time():
     item = {"session_id": "s1", "captured_at": "2026-01-01T00:00:00Z", "agent_identity": "a"}
     await _provider()._enqueue_extraction_jobs(store, 42, item)
     assert [(c[0], c[1], c[2]) for c in store.calls] == [
-        ("a", "extract_rules", "42:rules:1"),
+        ("a", "extract_rules", "42:rules:3"),
     ]
     for _o, _k, _op, _payload, kw in store.calls:
         assert kw == {

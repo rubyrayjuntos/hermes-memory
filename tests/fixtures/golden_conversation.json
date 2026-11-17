@@ -69,6 +69,7 @@
     ]
   },
   "ideal_claims": [
+    {"subject": "I", "verb": "lives_in", "object": "NYC", "polarity": "positive", "current": false, "status": "grounded", "event_time": "2024-01-10T12:00:00+00:00"},
     {"subject": "I", "verb": "lives_in", "object": "Austin", "polarity": "positive", "current": false, "status": "grounded", "event_time": "2024-03-15T15:00:00+00:00"},
     {"subject": "I", "verb": "lives_in", "object": "NYC", "polarity": "positive", "current": true, "status": "grounded", "event_time": "2024-03-16T10:00:00+00:00"},
     {"subject": "I", "verb": "works_for", "object": "Acme", "polarity": "positive", "current": false, "status": "grounded", "event_time": "2024-09-01T10:00:00+00:00"},

@@ -162,3 +162,116 @@ def extract_assertions(text: str) -> list[dict]:
                     "act": "assert",
                 })
     return out
+
+
+_TIME_TRAIL = re.compile(
+    r"\s+(?:last week|now|anymore)\s*$",
+    re.IGNORECASE,
+)
+_NEG_MARK = re.compile(r"\b(don'?t|do not|no longer|not)\b", re.IGNORECASE)
+_NOT_ANYMORE = re.compile(r"\bnot\b.{0,80}\banymore\b", re.IGNORECASE)
+_QUESTION_START = re.compile(
+    r"^\s*(?:do|does|did|am|are|is|have|has|can|could|would|will|should)\b",
+    re.IGNORECASE,
+)
+_HYPOTHETICAL = re.compile(r"^\s*if\b", re.IGNORECASE)
+_REPORTED = re.compile(r"\b(?:said|says|told)\b", re.IGNORECASE)
+_ROLE_HEDGE = re.compile(r"^(?:bit|little|tad|somewhat)\b", re.IGNORECASE)
+_SENT_START = re.compile(r"[.!?…]\s*")
+SELF_TEMPLATES: dict[str, tuple[re.Pattern, ...]] = {
+    "lives_in": (
+        re.compile(
+            r"\bI\s+(?:(?:don't|do not|no longer)\s+)?live\s+in\s+(?P<obj>[^\n.]{1,120})",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\bI\s+moved\s+to\s+(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+        re.compile(r"\bI\s+relocated\s+to\s+(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+        re.compile(r"\bI(?:'m|\s+am)\s+back\s+in\s+(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+        re.compile(
+            r"\bI\s+left\s+\S.{0,40}?\s+for\s+(?P<obj>[^\n.]{1,120})",
+            re.IGNORECASE,
+        ),
+    ),
+    "based_in": (
+        re.compile(r"\bI(?:'m|\s+am)\s+based\s+in\s+(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+    ),
+    "works_for": (
+        re.compile(
+            r"\bI\s+(?:(?:don't|do not|no longer)\s+)?work\s+(?:at|for)\s+(?P<obj>[^\n.]{1,120})",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\bI\s+joined\s+(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+        re.compile(
+            r"\bI(?:'m|\s+am)\s+(?:not\s+)?employed\s+by\s+(?P<obj>[^\n.]{1,120})",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\bI\s+quit\b.{0,60}?\b(?:to\s+join|for)\s+(?P<obj>[^\n.]{1,120})",
+            re.IGNORECASE,
+        ),
+    ),
+    "role_is": (
+        re.compile(r"\bMy\s+role\s+is\s+(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+        re.compile(r"\bI(?:'m|\s+am)\s+an?\s+(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+        re.compile(r"\bI\s+work\s+as\s+(?:an?\s+)?(?P<obj>[^\n.]{1,120})", re.IGNORECASE),
+    ),
+}
+
+
+def _trim_self_object(raw: str) -> str:
+    obj = (raw or "").strip().rstrip(".").rstrip("?!…").strip()
+    obj = _TIME_TRAIL.sub("", obj).strip().rstrip(".").rstrip("?!…").strip()
+    return obj
+
+
+def _self_polarity(matched: str) -> str:
+    if _NEG_MARK.search(matched) or _NOT_ANYMORE.search(matched):
+        return "negative"
+    return "positive"
+
+
+def _abstain_context(text: str, start: int, end: int) -> bool:
+    prev = 0
+    for m in _SENT_START.finditer(text, 0, start):
+        prev = m.end()
+    nxt = len(text)
+    n = _SENT_START.search(text, end)
+    if n is not None:
+        nxt = n.start()
+    sent = text[prev:nxt]
+    stripped = sent.strip()
+    if stripped.endswith("?") or "?" in stripped[max(0, end - prev):]:
+        return True
+    if _QUESTION_START.match(stripped) or _HYPOTHETICAL.match(stripped):
+        return True
+    if _REPORTED.search(text[prev:start]):
+        return True
+    return False
+
+
+def extract_self_assertions(text: str) -> list[dict]:
+    """First-person functional claims. Conservative: abstain when evidence is thin."""
+    out: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for verb, patterns in SELF_TEMPLATES.items():
+        for rx in patterns:
+            for m in rx.finditer(text or ""):
+                if _abstain_context(text or "", m.start(), m.end()):
+                    continue
+                obj = _trim_self_object(m.group("obj"))
+                if not obj or len(obj.split()) > 6:
+                    continue
+                if verb == "role_is" and _ROLE_HEDGE.match(obj):
+                    continue
+                polarity = _self_polarity(m.group(0))
+                key = (verb, obj.lower(), polarity)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({
+                    "subject": "I",
+                    "verb": verb,
+                    "object": obj,
+                    "polarity": polarity,
+                })
+    return out

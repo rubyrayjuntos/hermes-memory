@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from scripts.eval_golden_conversation import (
     _build_config,
+    _claim_key,
     _drained,
     _event_time_agreement,
     _expected_rows,
@@ -69,6 +70,18 @@ def test_precision_recall_f1_are_counted_separately():
         "recall": 0.5,
         "f1": 0.5,
     }
+
+
+def test_self_entity_subject_matches_first_person_ideal():
+    ideal = _claim_key({
+        "subject": "I", "verb": "lives_in", "object": "NYC",
+        "polarity": "positive", "current": True,
+    })
+    stored = _claim_key({
+        "subject": "(self)", "verb": "lives_in", "object": "NYC",
+        "polarity": "positive", "current": True,
+    })
+    assert stored == ideal
 
 
 def test_event_time_agreement_scores_order_not_fixture_wall_clock():

@@ -7,8 +7,9 @@ from difflib import SequenceMatcher
 from .entities import normalize_name
 from .extract_nouns import extract_nouns
 from .reception import extract_assertions
+from .turn_filter import segment_turn
 
-RULES_VERSION = "1"
+RULES_VERSION = "3"
 MODEL_VERSION = "1"
 
 _ACKNOWLEDGEMENT_RE = re.compile(
@@ -39,7 +40,11 @@ def should_enqueue_model(text: str, recent_texts=()) -> bool:
     The rules extractor is deliberately narrow; model work is reserved for
     unstructured facts or entity mentions the rules did not cover.
     """
-    value = (text or "").strip()
+    raw = text or ""
+    authored = "".join(
+        raw[seg.start:seg.end] for seg in segment_turn(raw) if seg.kind == "authored"
+    )
+    value = authored.strip()
     if not value or _ACKNOWLEDGEMENT_RE.fullmatch(value):
         return False
     if value.endswith("?") or _QUESTION_RE.match(value):
