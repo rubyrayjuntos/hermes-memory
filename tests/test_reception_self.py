@@ -67,6 +67,11 @@ def test_role_is_abstains_stative():
     assert extract_self_assertions("I'm not sure") == []
 
 
+def test_role_is_abstains_hedged_stative():
+    assert extract_self_assertions("I'm a bit tired") == []
+    assert extract_self_assertions("I'm a little late") == []
+
+
 def test_based_in_is_separate_slot():
     assert extract_self_assertions("I'm based in Seattle.") == [{
         "subject": "I",
@@ -85,6 +90,29 @@ def test_dont_work_at_anymore_is_negative():
         "verb": "works_for",
         "object": "Acme",
         "polarity": "negative",
+    }]
+
+
+def test_not_employed_by_is_not_positive():
+    claims = extract_self_assertions("I'm not employed by Acme")
+    assert all(
+        not (c["verb"] == "works_for" and c["object"] == "Acme" and c["polarity"] == "positive")
+        for c in claims
+    )
+    assert claims == [] or claims == [{
+        "subject": "I",
+        "verb": "works_for",
+        "object": "Acme",
+        "polarity": "negative",
+    }]
+
+
+def test_am_employed_by_is_positive():
+    assert extract_self_assertions("I am employed by Acme") == [{
+        "subject": "I",
+        "verb": "works_for",
+        "object": "Acme",
+        "polarity": "positive",
     }]
 
 

@@ -168,7 +168,7 @@ _TIME_TRAIL = re.compile(
     r"\s+(?:last week|now|anymore)\s*$",
     re.IGNORECASE,
 )
-_NEG_MARK = re.compile(r"\b(don'?t|do not|no longer)\b", re.IGNORECASE)
+_NEG_MARK = re.compile(r"\b(don'?t|do not|no longer|not)\b", re.IGNORECASE)
 _NOT_ANYMORE = re.compile(r"\bnot\b.{0,80}\banymore\b", re.IGNORECASE)
 _QUESTION_START = re.compile(
     r"^\s*(?:do|does|did|am|are|is|have|has|can|could|would|will|should)\b",
@@ -176,6 +176,7 @@ _QUESTION_START = re.compile(
 )
 _HYPOTHETICAL = re.compile(r"^\s*if\b", re.IGNORECASE)
 _REPORTED = re.compile(r"\b(?:said|says|told)\b", re.IGNORECASE)
+_ROLE_HEDGE = re.compile(r"^(?:bit|little|tad|somewhat)\b", re.IGNORECASE)
 _SENT_START = re.compile(r"[.!?…]\s*")
 SELF_TEMPLATES: dict[str, tuple[re.Pattern, ...]] = {
     "lives_in": (
@@ -259,6 +260,8 @@ def extract_self_assertions(text: str) -> list[dict]:
                     continue
                 obj = _trim_self_object(m.group("obj"))
                 if not obj or len(obj.split()) > 6:
+                    continue
+                if verb == "role_is" and _ROLE_HEDGE.match(obj):
                     continue
                 polarity = _self_polarity(m.group(0))
                 key = (verb, obj.lower(), polarity)
