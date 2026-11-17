@@ -483,8 +483,12 @@ V22 (`is` functional globally) was reverted. City probe uses functional `lives_i
 }
 ```
 
-### Golden (`rules_only`)
-Still running at 250s with `conversations=6`, `claims=0`. `claims=0` is recorded as the rules_only finding so far. Questions JSON with `expected_answer` is in `tests/fixtures/golden_conversation.json`. No completed runner JSON yet.
+### Golden (`rules_only`) — completed
+```
+golden_exit=0
+complete_rows=6 expected_rows=30 claims_got=[] extra=[] jobs_left=0
+```
+`claims=0` / all 10 expected claims in `missing` (rules_only on a 6/30 drain). Hybrid every question `chars=0`. Vector pass only `austin_alias` and `home_history`. Full JSON: scratch `golden.json`.
 
 ### Backfill
 Hold. 62 user turns not enqueued.
