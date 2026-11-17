@@ -81,6 +81,9 @@ _STOP_FIRST = frozenset({
     "here", "there", "what", "which", "who", "how", "when", "where", "why",
     "pipeline", "want", "got", "per", "one", "all", "both", "with", "from",
 })
+_PROPER_SUBJECT = re.compile(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*$")
+_SUBJECT_OPENERS = frozenset({"running", "verify", "using", "making", "adding"})
+_VERSION_TOKEN = re.compile(r"\bV\d+\b")
 
 # A negated object ("is not a guidance bus") must never become a positive
 # claim. Negation is span-only until explicit polarity extraction lands;
@@ -153,6 +156,10 @@ def extract_assertions(text: str) -> list[dict]:
             if not _object_usable(obj):
                 continue
             if subject.split()[0].lower() in _STOP_FIRST:
+                continue
+            if not _PROPER_SUBJECT.fullmatch(subject):
+                continue
+            if subject.split()[0].casefold() in _SUBJECT_OPENERS:
                 continue
             if _NEGATION.match(obj):
                 continue
@@ -234,6 +241,16 @@ def _object_usable(obj: str) -> bool:
     if _JUNK_OBJECT_RE.search(obj):
         return False
     if obj.casefold() in _STATIVE_OBJECT:
+        return False
+    if "," in obj or _VERSION_TOKEN.search(obj):
+        return False
+    parts = obj.split()
+    if (
+        len(parts) >= 2
+        and parts[0].isupper()
+        and parts[0].isalpha()
+        and all(part.islower() for part in parts[1:])
+    ):
         return False
     return True
 

@@ -87,6 +87,23 @@ def test_junk_strings_produce_no_claims():
             assert _authored_claims(text) == [], (s, wrap, _authored_claims(text))
 
 
+def test_is_junk_strings_produce_no_claims():
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    junk = fixture["is_junk_strings"]
+    assert junk == [
+        "DB is still at V21",
+        "Running V22 is a write, so it needs your OK too",
+        "Home is NYC variants",
+    ]
+    for text in junk:
+        assert _authored_claims(text) == [], (text, _authored_claims(text))
+    assert _authored_claims("Home is NYC") == [
+        {"subject": "Home", "verb": "is", "object": "NYC", "polarity": "positive", "act": "assert"},
+    ]
+    assert _authored_claims("Spot is a beagle")[0]["object"] == "a beagle"
+    assert _authored_claims("Nightingale uses Postgres")[0]["verb"] == "uses"
+
+
 def test_fixture_questions_have_typed_expectations():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     required = {
