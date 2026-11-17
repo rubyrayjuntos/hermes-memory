@@ -1,6 +1,6 @@
 # Memory lifecycle and graph layer — design
 
-**Status:** v0.5.1, approved 2026-11-14. Phase 0 is implemented on `phase0/scoping-durability` (§8). Nothing in §4–§7 is implemented. This document is the single contract for the graph layer; the implementation plan is re-derived from it after approval.
+**Status:** v0.5.1, approved 2026-11-14. Phases 0–2 are implemented on `main`. Phase 3 retrieval is being implemented with `vector` still the default; its §9 shadow evaluation gate is pending. Phase 4 and later are not implemented. This document is the single contract for the graph layer.
 
 **Supersedes:** v0.1 of this file (which proposed a separate `fact` table and wrongly said `claims` had no writer), and in `2026-09-03-conversation-manifold-design.md`: §2 non-goal "LLM extraction in the drain loop", §6 noun extraction, §7 walker, §8.2.1 injection.
 

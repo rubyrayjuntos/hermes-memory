@@ -176,3 +176,4 @@ def test_head_versions_include_claims_evidence() -> None:
     assert "V18" in CONSUMER_HEAD_VERSIONS
     assert "V19" in CONSUMER_HEAD_VERSIONS
     assert "V20" in CONSUMER_HEAD_VERSIONS
+    assert "V21" in CONSUMER_HEAD_VERSIONS

@@ -168,3 +168,11 @@ async def test_sync_prefetch_is_unchanged_when_hook_raises_synchronously():
 
     baseline = await make_provider()._aprefetch("q")
     assert await make_provider(sync_boom)._aprefetch("q") == baseline
+
+
+async def test_vector_and_shadow_modes_keep_the_existing_prompt_block():
+    baseline = await make_provider()._aprefetch("what does Acme use?")
+    for mode in ("vector", "shadow"):
+        provider = make_provider()
+        provider.config.retrieval_mode = mode
+        assert await provider._aprefetch("what does Acme use?") == baseline

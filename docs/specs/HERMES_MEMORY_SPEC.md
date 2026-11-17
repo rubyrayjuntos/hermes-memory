@@ -7,7 +7,7 @@ Status of each release row lives only in [`RELEASE_CRITERIA.md`](../../RELEASE_C
 `queue_prefetch`, which is not in the tree). The destination PDF and
 `HERMES_MEMORY_OVERALL_SPEC.md` are retired as standalone files.
 
-**Last verified against:** `origin/main` @ `0322145` (narrative; PR #91 Graph Layer Phases 1–3, migrations through V20).
+**Last verified against:** `origin/main` at `f2a02a5` (Phases 0–2). The working-tree Phase 3 retrieval changes are not yet validated; §9 shadow evaluation is required before hybrid can become the default.
 Open/Met cells: [`RELEASE_CRITERIA.md`](../../RELEASE_CRITERIA.md) only.
 If code and this spec disagree, the code is right and this document is stale —
 fix the document, not the belief.
@@ -265,11 +265,11 @@ yet; the 90% margin is deliberate slack, not a solved measurement (`RQ-PROD-3`).
   follow-up 0.1), keeping the method for the inspector pane.
 - **Search endpoint alignment:** `GET /api/librarian/search` is owner-scoped and shares the
   query-embedding helper with prefetch (Phase 0 follow-up 0.2).
-- **Shadow Retrieval (V20):** Bounded 2-hop traversal over typed claims (`claim_walk.py`) and
-  candidate fusion with Reciprocal Rank Fusion (RRF) and Maximal Marginal Relevance (MMR)
-  (`fusion.py`) run in shadow mode. When `_shadow_hook` is active, results are recorded to
-  `retrieval_shadow` (V20, `shadow.py`) using HMAC-keyed query hashes, without persisting raw
-  query text and without changing the rendered prompt text until evaluation confirms quality.
+- **Retrieval modes (V20–V21):** `vector` remains the default served path. `shadow` computes
+  owner-scoped claim ANN, batched entity linking, bounded 2-hop traversal, RRF and MMR in one
+  background task; sampled results are recorded in `retrieval_shadow` using HMAC-keyed query
+  hashes, with no raw query text and no prompt change. `hybrid` serves grounded facts with cited
+  spans and supporting turns, but remains opt-in until the §9 evaluation gates pass.
 
 ### What exists vs the PDF “epistemic notice”
 

@@ -379,6 +379,7 @@ def merge_env_file(path: Path, updates: dict) -> None:
             out_lines.append(f"{k}={existing[k]}")
             seen.add(k)
     path.write_text("\n".join(out_lines) + "\n")
+    path.chmod(0o600)
 
 
 def _redact_dsn(dsn: str) -> str:
@@ -653,6 +654,9 @@ def main(argv: list[str] | None = None) -> int:
         "HYBRID_AGE_EMBED_URL": embed_url,
         "HYBRID_AGE_EMBED_MODEL": embed_model,
         "HYBRID_AGE_GRAPH": graph,
+        "HYBRID_AGE_SHADOW_HMAC_KEY": (
+            _existing_env_value("HYBRID_AGE_SHADOW_HMAC_KEY") or secrets.token_hex(32)
+        ),
     }
     parsed = urlparse(dsn)
     skill_dirs = (

@@ -1,5 +1,6 @@
 """Unit tests for the provenance-first span renderer (neighbor rule)."""
-from hermes_memory.provider_helpers import format_span_injection
+from hermes_memory.provider_helpers import format_facts, format_span_injection
+from hermes_memory.tokens import count_tokens
 
 USER = {
     "turn_id": 914,
@@ -94,3 +95,46 @@ def test_asserted_spans_outrank_slogans_and_paste():
     out = format_span_injection([slogan, paste, asserted])
     assert out.index('id="2"') < out.index('id="1"') < out.index('id="3"')
     assert 'paste="true"' in out
+
+
+def test_facts_require_grounding_and_source_spans():
+    out = format_facts([
+        {
+            "claim_id": 7,
+            "status": "grounded",
+            "fact_text": "Acme uses Postgres.",
+            "supporting_turns": [{"span_id": 914, "role": "user", "content": "Acme uses Postgres."}],
+        },
+        {
+            "claim_id": 8,
+            "status": "unconfirmed",
+            "fact_text": "Acme uses Redis.",
+            "supporting_turns": [{"span_id": 915, "role": "assistant", "content": "Acme uses Redis."}],
+        },
+        {
+            "claim_id": 9,
+            "status": "grounded",
+            "fact_text": "Missing provenance",
+            "supporting_turns": [],
+        },
+    ])
+
+    assert '<fact id="7" spans="914"' in out
+    assert '<span id="914" speaker="user">Acme uses Postgres.</span>' in out
+    assert "Acme uses Redis" not in out
+    assert "Missing provenance" not in out
+
+
+def test_facts_escape_markup_and_enforce_complete_fact_budget():
+    out = format_facts([{
+        "claim_id": '7"><script>',
+        "status": "grounded",
+        "fact_text": "<b>" + ("Long fact. " * 400),
+        "supporting_turns": [{"span_id": 914, "role": "user", "content": "source"}],
+    }], fact_token_budget=80, total_token_budget=120)
+
+    fact_block = out.split("<supporting_turns>", 1)[0].strip()
+    assert "&lt;script&gt;" in out
+    assert "<b>" not in out
+    assert count_tokens(fact_block) <= 80
+    assert count_tokens(out) <= 120

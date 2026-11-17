@@ -56,6 +56,8 @@ class HybridAgeConfig:
     extract_mode: str = "rules_only"
     extract_url_env: str = DEFAULT_EXTRACT_URL_ENV
     extract_key_env: str = DEFAULT_EXTRACT_KEY_ENV
+    retrieval_mode: str = "vector"
+    shadow_sample_rate: float = 0.2
     decay_half_life_days: float = 30.0
     hnsw_ef_search: int = 100
     # "shared": every chat session of this profile reads and writes one memory (MVP
@@ -191,6 +193,25 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
             f"invalid extract_mode {cfg.extract_mode!r}; "
             "expected 'rules_only' or 'rules_then_model'"
         )
+    cfg.retrieval_mode = str(
+        os.environ.get("HYBRID_AGE_RETRIEVAL_MODE")
+        or raw.get("retrieval_mode")
+        or cfg.retrieval_mode
+    ).strip().lower()
+    if cfg.retrieval_mode not in ("vector", "shadow", "hybrid"):
+        raise ValueError(
+            f"invalid retrieval_mode {cfg.retrieval_mode!r}; "
+            "expected 'vector', 'shadow', or 'hybrid'"
+        )
+    shadow_sample_rate = os.environ.get("HYBRID_AGE_SHADOW_SAMPLE_RATE")
+    if shadow_sample_rate is None:
+        shadow_sample_rate = raw.get("shadow_sample_rate", cfg.shadow_sample_rate)
+    try:
+        cfg.shadow_sample_rate = float(shadow_sample_rate)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("shadow_sample_rate must be a number from 0.0 to 1.0") from exc
+    if not 0.0 <= cfg.shadow_sample_rate <= 1.0:
+        raise ValueError("shadow_sample_rate must be a number from 0.0 to 1.0")
 
     explicit_dsn = os.environ.get(cfg.dsn_env) or (
         raw.get("dsn") if isinstance(raw.get("dsn"), str) else None
@@ -305,6 +326,27 @@ CONFIG_SCHEMA_FIELDS = [
         "default": "rules_only",
         "type": "text",
         "env_var": DEFAULT_EXTRACT_MODE_ENV,
+    },
+    {
+        "key": "retrieval_mode",
+        "description": "vector (default), shadow (compare without changing prompt), or hybrid",
+        "secret": False,
+        "required": False,
+        "default": "vector",
+        "type": "text",
+        "env_var": "HYBRID_AGE_RETRIEVAL_MODE",
+    },
+    {
+        "key": "shadow_sample_rate",
+        "description": "Fraction of queries evaluated in background shadow retrieval",
+        "secret": False,
+        "required": False,
+        "default": 0.2,
+        "type": "number",
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "step": 0.05,
+        "env_var": "HYBRID_AGE_SHADOW_SAMPLE_RATE",
     },
     {
         "key": "graph",

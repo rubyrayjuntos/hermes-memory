@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import socket
 import threading
@@ -83,6 +84,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._thread: Optional[threading.Thread] = None
         self._drain_task: Optional[asyncio.Task] = None
         self._initialized = False
+        self._shadow_hook = None
+        self._shadow_enabled = False
+        self._shadow_busy = False
         self._session_id = ""
         self._agent_identity = ""
         self._write_queue: Optional[asyncio.Queue] = None
@@ -230,6 +234,49 @@ class HybridAgeMemoryProvider(MemoryProvider):
             hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
         )
         await self.store.require_schema_head()
+        self._shadow_hook = None
+        self._shadow_enabled = False
+        self._shadow_busy = False
+        if self.config.retrieval_mode == "shadow" and self.config.shadow_sample_rate > 0:
+            secret_hex = os.environ.get("HYBRID_AGE_SHADOW_HMAC_KEY", "")
+            try:
+                shadow_secret = bytes.fromhex(secret_hex)
+            except ValueError:
+                shadow_secret = b""
+            if len(shadow_secret) < 32:
+                logger.warning(
+                    "shadow retrieval disabled: HYBRID_AGE_SHADOW_HMAC_KEY is missing or invalid"
+                )
+            else:
+                async def record_hybrid_shadow(
+                    query: str, vector_ids: list, latency_ms: dict,
+                    vec_literal: str, vector_seeds: list[dict], owner: str,
+                ) -> None:
+                    if self._shadow_busy:
+                        logger.debug("shadow retrieval skipped: prior comparison still running")
+                        return
+                    self._shadow_busy = True
+                    try:
+                        from .retrieve_hybrid import retrieve_hybrid
+                        from .shadow import query_key, record_shadow
+
+                        result = await retrieve_hybrid(
+                            self.store, owner, query, vec_literal, vector_seeds,
+                        )
+                        async with pool.acquire() as conn:
+                            await record_shadow(
+                                conn,
+                                owner,
+                                query_key(shadow_secret, query),
+                                vector_ids,
+                                result["ids"],
+                                {**latency_ms, **result["latency_ms"]},
+                            )
+                    finally:
+                        self._shadow_busy = False
+
+                self._shadow_hook = record_hybrid_shadow
+                self._shadow_enabled = True
         extract_url = str(getattr(self.config, "extract_url", "") or "").strip()
         extract_model = str(getattr(self.config, "extract_model", "") or "").strip()
         extract_mode = str(getattr(self.config, "extract_mode", "rules_only"))
@@ -1237,9 +1284,33 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     s["retracted"] = ov["retracted"]
         from .tokens import injection_token_cap
 
-        block = format_span_injection(
-            selected, token_budget=injection_token_cap(self.config.max_tokens)
-        )
+        if getattr(self.config, "retrieval_mode", "vector") == "hybrid":
+            try:
+                from .provider_helpers import format_facts
+                from .retrieve_hybrid import retrieve_hybrid
+
+                async with asyncio.timeout(self.config.prefetch_timeout_s):
+                    hybrid_result = await retrieve_hybrid(
+                        self.store,
+                        self._agent_identity,
+                        query,
+                        vec_to_literal(emb),
+                        kept_seeds,
+                    )
+                block = format_facts(
+                    hybrid_result["facts"],
+                    total_token_budget=injection_token_cap(self.config.max_tokens),
+                )
+            except TimeoutError:
+                logger.warning("hybrid prefetch timeout query=%r", query[:80])
+                return ""
+            except Exception:
+                logger.exception("hybrid prefetch failed")
+                return ""
+        else:
+            block = format_span_injection(
+                selected, token_budget=injection_token_cap(self.config.max_tokens)
+            )
         if not (block or "").strip():
             logger.info("prefetch empty recall")
         graph_n = sum(len(s.get("paths") or []) for s in selected)
@@ -1250,12 +1321,14 @@ class HybridAgeMemoryProvider(MemoryProvider):
             (t_embed - t0) * 1000, (t_vec - t_embed) * 1000,
             (t_graph - t_vec) * 1000, (time.perf_counter() - t0) * 1000,
         )
-        if self._shadow_hook is not None:
+        shadow_rate = float(getattr(self.config, "shadow_sample_rate", 0.2))
+        if self._shadow_hook is not None and (
+            not getattr(self, "_shadow_enabled", False) or random.random() < shadow_rate
+        ):
             try:
                 from .shadow import schedule_shadow
 
-                schedule_shadow(
-                    self._shadow_hook,
+                shadow_args = (
                     query,
                     [s.get("id") for s in selected],
                     {
@@ -1264,6 +1337,16 @@ class HybridAgeMemoryProvider(MemoryProvider):
                         "total": round((time.perf_counter() - t0) * 1000, 1),
                     },
                 )
+                if getattr(self, "_shadow_enabled", False):
+                    schedule_shadow(
+                        self._shadow_hook,
+                        *shadow_args,
+                        vec_to_literal(emb),
+                        kept_seeds,
+                        self._agent_identity,
+                    )
+                else:
+                    schedule_shadow(self._shadow_hook, *shadow_args)
             except Exception:
                 logger.warning("shadow hook not scheduled", exc_info=True)
         return block
