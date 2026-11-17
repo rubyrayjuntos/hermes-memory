@@ -122,5 +122,10 @@
     "staff engineer\"` and `\"I'm tired\"` unchanged",
     "Acme anymore\"` → **negative**",
     "Acme anymore\""
+  ],
+  "is_junk_strings": [
+    "DB is still at V21",
+    "Running V22 is a write, so it needs your OK too",
+    "Home is NYC variants"
   ]
 }
