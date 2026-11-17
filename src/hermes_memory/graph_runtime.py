@@ -34,6 +34,7 @@ from .graph_view import (
 from .schema_guard import apply_pending_migrations
 from .session_kind import is_synthetic_session
 from .store import Store, clamp_hnsw_ef_search, cypher_call, savepoint_name, validate_graph_name
+from .store_jobs import MODEL_BATCH_IDLE_S, MODEL_BATCH_MAX_WAIT_S, MODEL_BATCH_SIZE
 from .write_outcome import LEDGER
 
 logger = logging.getLogger("hermes_memory.graph_api")
@@ -186,10 +187,48 @@ class Runtime:
                 except Exception:
                     logger.warning("%s counts unavailable", key, exc_info=True)
                     extra[key] = None
+        cfg = getattr(self, "cfg", None)
+        extract_url = str(getattr(cfg, "extract_url", "") or "").strip()
+        extract_model = str(getattr(cfg, "extract_model", "") or "").strip()
+        extract_mode = str(getattr(cfg, "extract_mode", "rules_only"))
+        model_configured = (
+            extract_mode == "rules_then_model" and bool(extract_url and extract_model)
+        )
+        job_counts = extra.get("jobs") or {}
+        model_jobs = job_counts.get("extract_model") or {}
+        pending_while_disabled = (
+            int(model_jobs.get("pending", 0)) + int(model_jobs.get("retryable", 0))
+            if not model_configured else 0
+        )
+        usage = None
+        usage_counter = getattr(self.store, "model_extraction_usage", None)
+        if callable(usage_counter):
+            try:
+                usage = await usage_counter()
+            except Exception:
+                logger.warning("model extraction usage unavailable", exc_info=True)
+        disabled_reason = (
+            None if model_configured else (
+                "rules_only mode"
+                if extract_mode == "rules_only"
+                else "configure extract_url and extract_model"
+            )
+        )
         return {
             "drain_status": drain_status,
             "unpassported_count": unpassported,
             "outbox": outbox,
+            "model_extraction": {
+                "mode": extract_mode,
+                "configured": model_configured,
+                "model": extract_model if model_configured else None,
+                "disabled_reason": disabled_reason,
+                "batch_size": MODEL_BATCH_SIZE,
+                "idle_flush_seconds": MODEL_BATCH_IDLE_S,
+                "max_wait_seconds": MODEL_BATCH_MAX_WAIT_S,
+                "pending_while_disabled": pending_while_disabled,
+                "usage": usage,
+            },
             **extra,
         }
 

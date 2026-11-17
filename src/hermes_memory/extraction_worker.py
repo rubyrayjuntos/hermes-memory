@@ -12,6 +12,7 @@ import inspect
 import logging
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
+from .extract_model_client import ModelBatchInput
 from .extract_publish import publish_model, publish_rules
 from .model_extract import grounded_claims
 
@@ -19,28 +20,34 @@ logger = logging.getLogger("hermes_memory.extraction")
 
 RULES_LEASE_S = 60.0
 MODEL_LEASE_S = 120.0
-CONTEXT_TURNS = 4
-CONTEXT_CHARS = 1000
 IDLE_INTERVAL_S = 5.0
 
-ModelFn = Callable[[str, Sequence[str]], Any]
+ModelFn = Callable[[ModelBatchInput], Any]
 EmbedFn = Callable[[Sequence[str]], Awaitable[list]]
 
 
-async def _load_model_input(conn, span_id: int, owner: str) -> Optional[tuple[str, list[str], set[str]]]:
-    span = await conn.fetchrow(
-        "SELECT id, session_id, content, ts FROM conversations WHERE id = $1 AND agent_identity = $2",
-        int(span_id), owner)
-    if span is None or not (span["content"] or "").strip():
+async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> Optional[ModelBatchInput]:
+    from .reception import extract_assertions
+
+    turns = []
+    rule_findings = []
+    for span_id in span_ids:
+        span = await conn.fetchrow(
+            "SELECT id, session_id, content, role FROM conversations "
+            "WHERE id = $1 AND agent_identity = $2",
+            int(span_id), owner,
+        )
+        if span is None or span["role"] != "user" or not (span["content"] or "").strip():
+            continue
+        text = str(span["content"])
+        turns.append({"span_id": int(span_id), "text": text})
+        rule_findings.extend(
+            {"span_id": int(span_id), **claim} for claim in extract_assertions(text)
+        )
+    if not turns:
         return None
-    # Spec §5.2: four previous turns of the same owner/session by event time (ties by id).
-    prev = await conn.fetch(
-        "SELECT id, content FROM conversations WHERE agent_identity = $1 AND session_id = $2 "
-        "AND (ts, id) < ($3::timestamptz, $4) ORDER BY ts DESC, id DESC LIMIT $5",
-        owner, span["session_id"], span["ts"], int(span_id), CONTEXT_TURNS)
-    context = [(r["content"] or "")[:CONTEXT_CHARS] for r in reversed(prev)]
     verbs = {r["verb"] for r in await conn.fetch("SELECT verb FROM verb")}
-    return span["content"], context, verbs
+    return ModelBatchInput(turns=turns, rule_findings=rule_findings, verbs=verbs)
 
 
 async def _settle_failure(store, job_id: int, fence: int, kind: str, exc: Exception) -> None:
@@ -68,7 +75,8 @@ async def _run_rules(store, worker: str, embed: EmbedFn) -> int:
 
 async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn) -> int:
     claimed = await store.job_claim("extract_model", worker, 1, lease_s=MODEL_LEASE_S,
-                                    session_ordered=True, defer_backfill=True)
+                                    session_ordered=True, defer_backfill=True,
+                                    ready_model_batch=True)
     if not claimed:
         return 0
     job_id, fence, payload = claimed[0]
@@ -77,16 +85,48 @@ async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn) -> int:
         # model must not pin a pool connection that prefetch also uses.
         async with store.pool.acquire() as conn:
             owner_row = await conn.fetchrow(
-                "SELECT owner, payload FROM durable_job WHERE id = $1", int(job_id))
-            loaded = await _load_model_input(conn, int(payload["span_id"]), owner_row["owner"])
+                "SELECT owner, payload FROM durable_job WHERE id = $1", int(job_id)
+            )
+            span_ids = payload.get("span_ids", [payload.get("span_id")])
+            loaded = await _load_model_batch_input(
+                conn, [int(span_id) for span_id in span_ids if span_id is not None],
+                owner_row["owner"],
+            )
         if loaded is None:
-            # Span gone or empty: nothing to extract; settle so the queue moves on.
             return 1 if await store.job_done(job_id, fence) else 0
-        turn, context, verbs = loaded
-        raw = model(turn, context)
+        record_call = getattr(store, "job_record_model_call", None)
+        if callable(record_call) and not await record_call(job_id, fence):
+            return 0
+        raw = model(loaded)
         if inspect.isawaitable(raw):
             raw = await raw
-        claims = grounded_claims(raw, turn, context, verbs)
+        turn_text_by_id = {int(turn["span_id"]): str(turn["text"]) for turn in loaded.turns}
+        claims = []
+        raw_claims = raw.get("claims", []) if isinstance(raw, dict) else []
+        for candidate in raw_claims if isinstance(raw_claims, list) else []:
+            if not isinstance(candidate, dict):
+                continue
+            span_id = candidate.get("span_id")
+            if not isinstance(span_id, int) or isinstance(span_id, bool):
+                continue
+            turn = turn_text_by_id.get(span_id)
+            if turn is None:
+                continue
+            accepted = grounded_claims({"claims": [candidate]}, turn, [], loaded.verbs)
+            claims.extend({**claim, "span_id": span_id} for claim in accepted)
+        usage = raw.get("_usage") if isinstance(raw, dict) else None
+        if isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool):
+                prompt_tokens = None
+            if not isinstance(completion_tokens, int) or isinstance(completion_tokens, bool):
+                completion_tokens = None
+            record_tokens = getattr(store, "job_record_model_tokens", None)
+            if callable(record_tokens) and not await record_tokens(
+                job_id, fence, prompt_tokens, completion_tokens
+            ):
+                return 0
         async with store.pool.acquire() as conn:
             await publish_model(conn, embed, claims, job_id, fence)
         # publish_model embeds but does not settle; a stale fence makes this False.

@@ -25,6 +25,9 @@ from typing import Any, Dict, Optional
 
 DEFAULT_DSN_ENV = "HYBRID_AGE_DSN"
 DEFAULT_EMBED_URL_ENV = "HYBRID_AGE_EMBED_URL"
+DEFAULT_EXTRACT_URL_ENV = "HYBRID_AGE_EXTRACT_URL"
+DEFAULT_EXTRACT_KEY_ENV = "HYBRID_AGE_EXTRACT_KEY"
+DEFAULT_EXTRACT_MODE_ENV = "HYBRID_AGE_EXTRACT_MODE"
 
 # Local development default only — production sets HYBRID_AGE_DSN.
 _DEFAULT_DSN = "postgres://hermes:{pg_password}@localhost:5450/hermes_memory"
@@ -47,6 +50,12 @@ class HybridAgeConfig:
     prefetch_timeout_s: float = 2.0
     dsn_env: str = DEFAULT_DSN_ENV
     embed_url_env: str = DEFAULT_EMBED_URL_ENV
+    extract_url: str = ""
+    extract_model: str = ""
+    extract_timeout_s: float = 60.0
+    extract_mode: str = "rules_only"
+    extract_url_env: str = DEFAULT_EXTRACT_URL_ENV
+    extract_key_env: str = DEFAULT_EXTRACT_KEY_ENV
     decay_half_life_days: float = 30.0
     hnsw_ef_search: int = 100
     # "shared": every chat session of this profile reads and writes one memory (MVP
@@ -170,6 +179,18 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
 
     cfg.dsn_env = str(pick("dsn_env", "", cfg.dsn_env))
     cfg.embed_url_env = str(pick("embed_url_env", "", cfg.embed_url_env))
+    cfg.extract_url_env = str(pick("extract_url_env", "", cfg.extract_url_env))
+    cfg.extract_key_env = str(pick("extract_key_env", "", cfg.extract_key_env))
+    cfg.extract_mode = str(
+        os.environ.get(DEFAULT_EXTRACT_MODE_ENV)
+        or raw.get("extract_mode")
+        or cfg.extract_mode
+    ).strip().lower()
+    if cfg.extract_mode not in ("rules_only", "rules_then_model"):
+        raise ValueError(
+            f"invalid extract_mode {cfg.extract_mode!r}; "
+            "expected 'rules_only' or 'rules_then_model'"
+        )
 
     explicit_dsn = os.environ.get(cfg.dsn_env) or (
         raw.get("dsn") if isinstance(raw.get("dsn"), str) else None
@@ -184,6 +205,12 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
     cfg.embed_url = os.environ.get(cfg.embed_url_env) or (
         raw.get("embed_url") if isinstance(raw.get("embed_url"), str) else None
     ) or cfg.embed_url
+    cfg.extract_url = os.environ.get(cfg.extract_url_env) or (
+        raw.get("extract_url") if isinstance(raw.get("extract_url"), str) else None
+    ) or cfg.extract_url
+    cfg.extract_model = os.environ.get("HYBRID_AGE_EXTRACT_MODEL") or (
+        raw.get("extract_model") if isinstance(raw.get("extract_model"), str) else None
+    ) or cfg.extract_model
 
     if raw.get("embed_model"):
         cfg.embed_model = str(raw["embed_model"])
@@ -197,7 +224,7 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
 
     for key in ("vector_k", "min_similarity", "max_tokens", "embed_dim",
                 "queue_maxsize", "prefetch_timeout_s", "decay_half_life_days",
-                "hnsw_ef_search"):
+                "hnsw_ef_search", "extract_timeout_s"):
         if raw.get(key) is not None:
             try:
                 setattr(cfg, key, type(getattr(cfg, key))(raw[key]))
@@ -246,6 +273,38 @@ CONFIG_SCHEMA_FIELDS = [
         "required": False,
         "default": "nomic-embed-text",
         "type": "text",
+    },
+    {
+        "key": "extract_url",
+        "description": (
+            "Optional OpenAI-compatible chat-completions endpoint for background "
+            "claim extraction. This is separate from the embedding endpoint."
+        ),
+        "secret": False,
+        "required": False,
+        "default": "",
+        "env_var": "HYBRID_AGE_EXTRACT_URL",
+    },
+    {
+        "key": "extract_model",
+        "description": "Chat model name used for background claim extraction",
+        "secret": False,
+        "required": False,
+        "default": "",
+        "type": "text",
+        "env_var": "HYBRID_AGE_EXTRACT_MODEL",
+    },
+    {
+        "key": "extract_mode",
+        "description": (
+            "rules_only (default) or rules_then_model (opt-in; model fallback jobs "
+            "may invoke the configured endpoint for each new turn)"
+        ),
+        "secret": False,
+        "required": False,
+        "default": "rules_only",
+        "type": "text",
+        "env_var": DEFAULT_EXTRACT_MODE_ENV,
     },
     {
         "key": "graph",

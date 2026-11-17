@@ -403,6 +403,12 @@ def test_runtime_health_includes_delivery_sql_facts():
         async def count_unpassported_turns(self):
             return 7
 
+        async def job_counts(self):
+            return {"extract_model": {"pending": 3, "retryable": 2}}
+
+        async def model_extraction_usage(self):
+            return {"batches_completed": 1, "calls": 1, "prompt_tokens": 50}
+
     LEDGER.reset()
     runtime = Runtime.__new__(Runtime)
     runtime.loop = Loop()
@@ -415,6 +421,36 @@ def test_runtime_health_includes_delivery_sql_facts():
     assert payload["drain_status"]["unset"] == 1
     assert payload["drain_status"]["embed_null"] == 0
     assert payload["graph_degraded"] == 0
+    assert payload["model_extraction"] == {
+        "mode": "rules_only",
+        "configured": False,
+        "model": None,
+        "disabled_reason": "rules_only mode",
+        "batch_size": 8,
+        "idle_flush_seconds": 600,
+        "max_wait_seconds": 1800,
+        "pending_while_disabled": 5,
+        "usage": {"batches_completed": 1, "calls": 1, "prompt_tokens": 50},
+    }
+
+    from types import SimpleNamespace
+
+    runtime.cfg = SimpleNamespace(
+        extract_url="http://127.0.0.1:11434/v1",
+        extract_model="llama3.2:3b",
+        extract_mode="rules_then_model",
+    )
+    assert runtime.health()["model_extraction"] == {
+        "mode": "rules_then_model",
+        "configured": True,
+        "model": "llama3.2:3b",
+        "disabled_reason": None,
+        "batch_size": 8,
+        "idle_flush_seconds": 600,
+        "max_wait_seconds": 1800,
+        "pending_while_disabled": 0,
+        "usage": {"batches_completed": 1, "calls": 1, "prompt_tokens": 50},
+    }
 
 
 def test_runtime_librarian_health_merges_ledger_counts():

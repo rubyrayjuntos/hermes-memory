@@ -53,6 +53,55 @@ but does not publish a wheel to a package index.
 
 Embeddings run **in-process** via ONNX (`fastembed` + `nomic-embed-text`, 768-d). Ollama is **not** required. Optional: set `HYBRID_AGE_EMBED_URL` to an OpenAI-compatible HTTP endpoint (Ollama, OpenAI, …) if you prefer a remote embedder.
 
+Model-based claim extraction is a separate, optional service and is **not**
+automatically connected to Hermes's chat model. The default `extract_mode` is
+`rules_only`: deterministic rules run and no model-extraction jobs are enqueued.
+To opt into model fallback, set `extract_mode: rules_then_model` and configure
+an OpenAI-compatible chat-completions endpoint and model:
+
+```bash
+export HYBRID_AGE_EXTRACT_MODE=rules_then_model
+export HYBRID_AGE_EXTRACT_URL=http://127.0.0.1:11434/v1
+export HYBRID_AGE_EXTRACT_MODEL=your-model-name
+# Set this only if the endpoint requires a key:
+export HYBRID_AGE_EXTRACT_KEY=your-api-key
+```
+
+In `~/.hermes/config.yaml`, the equivalent setting is
+`hybrid_age.extract_mode: rules_then_model`. Rule extraction still runs for
+each stored turn. Model extraction is considered only for user turns where the
+rules found no claim or missed a detected entity; questions, acknowledgements,
+code/tool output, and exact or near-duplicate turns are skipped. Eligible turns
+are collected into one model job per session batch. A full batch runs as soon as it
+reaches 8 eligible turns; a partial batch runs after 10 minutes without another
+eligible turn, after 30 minutes from the batch's first turn, or when the session
+closes. This keeps model jobs independent of the per-turn rule queue. The
+provider logs each session-end callback it observes and the number of batches it
+flushes, so the Hermes lifecycle hook can be verified in logs.
+Model-found facts can therefore arrive later than rule facts. The worker runs
+off the prompt path and does not block the chat response.
+
+Switching back to `rules_only` stops new model batches and prevents queued
+batches from being processed. `/api/health` reports any pending model jobs
+while model extraction is disabled, plus cumulative model calls and reported
+prompt/completion tokens and per-completed-batch averages. Endpoints that do
+not return token usage leave those token counts unavailable rather than
+reporting zero. Ollama endpoints on port 11434 receive `keep_alive: "30m"` to
+encourage reuse of the stable system-prompt prefix.
+
+`HYBRID_AGE_EXTRACT_KEY` is optional for local compatible endpoints (the client
+uses `ollama` as the default placeholder key). These variables must be present
+in the Hermes process environment. Alternatively, `extract_url` and
+`extract_model` can be set under `hybrid_age:` in `~/.hermes/config.yaml`;
+`extract_timeout_s` (default `60`) is configurable there. The configured
+endpoint receives the eligible user turns in a batch, their rule-extracted
+findings, the allowed verb table, and compact extraction instructions. Do not
+configure a third-party endpoint unless you are comfortable sending those
+conversation turns to it. Returned claims must identify one source turn and
+pass local verb/name grounding against that turn before publication. Grounding
+does **not** prove the relationship is entailed. Treat model-extracted claims
+as candidates and inspect them before relying on them for high-stakes decisions.
+
 ### Installation
 
 Install from an immutable Git revision rather than the moving `main` branch.
@@ -191,6 +240,10 @@ python scripts/release_gate.py
 | `dsn_env` | `HYBRID_AGE_DSN` | Environment variable containing the Postgres DSN |
 | `embed_url_env` | `HYBRID_AGE_EMBED_URL` | Optional HTTP embeddings endpoint; unset = in-process fastembed |
 | `embed_model` | `nomic-embed-text` | Embedding model stamp (strictly 768-dim) |
+| `extract_url` | empty | Optional OpenAI-compatible chat-completions endpoint for claim extraction |
+| `extract_model` | empty | Model name for claim extraction |
+| `extract_mode` | `rules_only` | `rules_only` or opt-in `rules_then_model`; eligible user turns are batched (8 turns, 10-minute idle, or session close) |
+| `extract_timeout_s` | `60` | Timeout for one model extraction batch request, in seconds |
 | `graph` | `hermes_knowledge` | Apache AGE graph name |
 | `vector_k` | `12` | Top-$k$ nearest neighbors for vector recall |
 | `min_similarity` | `0.55` | Cosine similarity cutoff floor |

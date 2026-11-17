@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from hermes_memory.extract_publish import publish_model
-from hermes_memory.extraction_jobs import job_specs
 
 from .claims_helpers import current, span
 
@@ -23,10 +22,14 @@ async def _embed(texts):
 
 
 async def _model_job(store, span_id: int, owner: str = "alice"):
-    kind, op_id, payload = job_specs(span_id)[1]
-    assert kind == "extract_model"
-    await store.job_add(owner, kind, op_id, payload)
-    [(job_id, fence, _)] = await store.job_claim(kind, "w1", 1, lease_s=60)
+    await store.job_add(
+        owner,
+        "extract_model",
+        f"s:window:{span_id}:1",
+        {"span_ids": [span_id], "extractor": "model", "version": "1", "usage": {"calls": 0}},
+        session_id="s",
+    )
+    [(job_id, fence, _)] = await store.job_claim("extract_model", "w1", 1, lease_s=60)
     return job_id, fence
 
 

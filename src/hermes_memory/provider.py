@@ -27,7 +27,7 @@ import socket
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 try:
     from agent.memory_provider import MemoryProvider
@@ -44,6 +44,7 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
 )
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config, resolve_agent_identity
 from .embed import Embedder, vec_to_literal
+from .extract_model_client import OpenAIChatModelExtractor
 from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
 from .session_kind import classify_session_kind
@@ -91,7 +92,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # Own task, separate from prefetch and the write drain (spec §5.2).
         self._extraction_task: Optional[asyncio.Task] = None
         # Optional `model(turn, context) -> dict`; without it only the rules tier runs.
-        self._extraction_model = None
+        self._extraction_model: Optional[Callable[[str, Sequence[str]], Any]] = None
         self._primary_context = True  # writes allowed until told otherwise
         # Session context — rolling window of recent topics/turns for query enrichment
         self._recent_topics: List[str] = []
@@ -101,6 +102,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         self._last_recall_count = 0
         self._unavailable_reason = ""
         self._last_turn_id: Dict[str, int] = {}
+        self._session_end_callbacks = 0
 
     # -- identity -------------------------------------------------------------
 
@@ -228,6 +230,41 @@ class HybridAgeMemoryProvider(MemoryProvider):
             hnsw_ef_search=int(getattr(self.config, "hnsw_ef_search", 100)),
         )
         await self.store.require_schema_head()
+        extract_url = str(getattr(self.config, "extract_url", "") or "").strip()
+        extract_model = str(getattr(self.config, "extract_model", "") or "").strip()
+        extract_mode = str(getattr(self.config, "extract_mode", "rules_only"))
+        if extract_mode == "rules_then_model" and extract_url and extract_model:
+            from openai import AsyncOpenAI
+
+            extract_key_env = str(getattr(self.config, "extract_key_env", "HYBRID_AGE_EXTRACT_KEY"))
+            client = AsyncOpenAI(
+                base_url=extract_url,
+                api_key=os.environ.get(extract_key_env, "ollama"),
+            )
+            self._extraction_model = OpenAIChatModelExtractor(
+                client,
+                extract_model,
+                timeout_s=float(getattr(self.config, "extract_timeout_s", 60.0)),
+                ollama_keep_alive=(
+                    "30m" if "11434" in extract_url.lower() or "ollama" in extract_url.lower()
+                    else None
+                ),
+            )
+            logger.info("model extraction configured with model=%s", extract_model)
+        elif extract_mode != "rules_then_model":
+            self._extraction_model = None
+            logger.info("model extraction disabled by extract_mode=rules_only")
+        else:
+            self._extraction_model = None
+            missing = "URL and model" if not extract_url and not extract_model else (
+                "model" if not extract_model else "URL"
+            )
+            logger.warning(
+                "model extraction disabled; configure %s (HYBRID_AGE_EXTRACT_URL and "
+                "HYBRID_AGE_EXTRACT_MODEL). New extract_model jobs will not be enqueued; "
+                "any existing pending jobs remain queued",
+                missing,
+            )
         try:
             from .claims_migration import migrate_legacy_claims
 
@@ -681,6 +718,41 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 )
         except Exception:
             logger.warning("extraction job enqueue failed", exc_info=True)
+            return
+
+        config = getattr(self, "config", None)
+        if (
+            getattr(config, "extract_mode", "rules_only") != "rules_then_model"
+            or not str(getattr(config, "extract_url", "") or "").strip()
+            or not str(getattr(config, "extract_model", "") or "").strip()
+            or item.get("role", "user") != "user"
+        ):
+            return
+        add_batch = getattr(store, "job_add_model_batch", None)
+        if not callable(add_batch):
+            logger.error("model extraction batch storage is unavailable")
+            return
+        try:
+            from .extraction_jobs import should_enqueue_model
+
+            content = str(item.get("content") or "")
+            session_id = str(item.get("session_id") or self._session_id or "default")
+            recent_texts = []
+            pool = getattr(store, "pool", None)
+            if pool is not None and owner and session_id:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT content FROM conversations WHERE agent_identity = $1 "
+                        "AND session_id = $2 AND role = 'user' AND id <> $3 "
+                        "ORDER BY ts DESC, id DESC LIMIT 20",
+                        owner, session_id, int(conv_id),
+                    )
+                recent_texts = [row["content"] or "" for row in rows]
+            if not should_enqueue_model(content, recent_texts):
+                return
+            await add_batch(owner, session_id, int(conv_id), event_time=event_time)
+        except Exception:
+            logger.warning("model extraction batch enqueue failed", exc_info=True)
 
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
@@ -1107,7 +1179,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # Neighbors are packed context (never embedded); uptake stays unknown
         # until the classifier runs. Revert to format_injection(selected) below
         # to restore seed+path rendering.
-        from collections.abc import Awaitable, Callable
+        from collections.abc import Awaitable
 
         neighbor_fetcher: Callable[[list], Awaitable[dict]] | None = getattr(
             self.store, "conversations_neighbors", None
@@ -1356,7 +1428,39 @@ class HybridAgeMemoryProvider(MemoryProvider):
         return "Hybrid AGE memory is active. Relevant facts are auto-injected each turn."
 
     def on_session_end(self, messages: Any) -> None:
-        return None
+        self._session_end_callbacks = getattr(self, "_session_end_callbacks", 0) + 1
+        logger.info(
+            "model extraction session-end callback observed count=%d",
+            self._session_end_callbacks,
+        )
+        store = self.store
+        loop = self._loop
+        owner = self._agent_identity
+        session_id = self._session_id
+        if store is None or loop is None or not loop.is_running() or not owner or not session_id:
+            return
+        flush = getattr(store, "job_flush_model_batches", None)
+        if not callable(flush):
+            logger.error("model extraction session flush is unavailable")
+            return
+        try:
+            if self._write_queue is not None:
+                asyncio.run_coroutine_threadsafe(
+                    self._write_queue.join(), loop
+                ).result(timeout=SHUTDOWN_DRAIN_S)
+            flushed = asyncio.run_coroutine_threadsafe(
+                flush(owner, session_id), loop
+            ).result(timeout=2.0)
+            logger.info(
+                "model extraction session-end flush completed batches=%s callbacks=%d",
+                flushed,
+                self._session_end_callbacks,
+            )
+        except Exception:
+            logger.warning(
+                "model extraction session flush failed; idle flush remains available",
+                exc_info=True,
+            )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return []  # pure context mode — no tools

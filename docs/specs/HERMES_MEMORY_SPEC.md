@@ -70,7 +70,7 @@ Background drain on a dedicated asyncio loop thread
     ├─► Session/Turn flower MERGE (AGE)
     ├─► extract_nouns + noun passports
     ├─► SQL mentions chain (semantic_edge)
-    └─► Enqueue durable extraction jobs (V19): rules & model extraction
+    └─► Enqueue durable extraction jobs (V19): rules; model only in opt-in mode
             │
             ▼
         Extraction Worker (extraction_worker.py, off prompt path)
@@ -93,9 +93,28 @@ Background drain on a dedicated asyncio loop thread
   `outbox_id` into its row metadata, and `insert_turn` checks it, so a turn is never written
   twice. The drain deletes the outbox row once the write has landed.
 - Extraction worker: Heavy model extraction runs asynchronously via durable background jobs (V19,
-  `extraction_worker.py`). The worker claims jobs with `SKIP LOCKED`, releases the database
-  connection during LLM inference (`model_extract.py`), enforces polarity/grounding checks,
-  writes evidence rows (V18), and embeds current fact text into `fact_vec`.
+  `extraction_worker.py`). Per-turn rules jobs and model batches have separate queue ordering, so
+  model inference never blocks the next rules job. Model batches contain eligible user turns only:
+  no rule claims, or rule findings that leave a detected entity uncovered. Questions,
+  acknowledgements, code/tool output, and exact or near-duplicate turns are filtered out before
+  batching. A batch is claimable immediately after 8 eligible turns, after 10 minutes of idle
+  time, after 30 minutes from the batch's first eligible turn, or on a session-end flush. The
+  worker releases the database connection during LLM inference
+  (`extract_model_client.py`), enforces source-turn/verb/name grounding, writes evidence rows (V18),
+  and embeds current fact text into `fact_vec`.
+- Model extraction is explicitly opt-in via `extract_mode: rules_then_model` and requires the
+  separately configured OpenAI-compatible endpoint (`extract_url` and `extract_model` /
+  `HYBRID_AGE_EXTRACT_URL` and `HYBRID_AGE_EXTRACT_MODEL`); it does not reuse Hermes's chat model.
+  The default `rules_only` mode creates no model batches. Switching to that mode stops new batches
+  and prevents queued model batches from being claimed; `/api/health` reports pending/retryable
+  jobs while disabled. The endpoint receives batch turn text, rule findings, the allowed verb
+  table, and compact instructions, which is an explicit data-egress boundary. Ollama endpoints on
+  port 11434 receive `keep_alive: "30m"` for prompt-prefix reuse. Output claims must identify one
+  source span and pass local verb/name grounding against that span. Grounding does not prove that
+  the relationship itself is entailed. Extracted claims are candidates, not authoritative facts.
+  Durable job payloads track calls and endpoint-reported prompt/completion tokens; health reports
+  cumulative usage and averages per completed batch. Token totals remain unavailable if the
+  configured endpoint does not return usage.
 - `shutdown()` drains ≤5s, releases this process's outbox claims (`outbox_release`), and closes
   the pool.
 - Rows that fail 5 replay attempts stay parked in `write_outbox`. Parked rows are surfaced

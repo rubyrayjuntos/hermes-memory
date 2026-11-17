@@ -40,6 +40,67 @@ async def test_session_order_blocks_later_jobs_of_the_same_kind_only(store, clea
 
 
 @pytest.mark.asyncio
+async def test_model_batch_waits_for_threshold_or_flush_and_tracks_usage(store, clean_hermes_test_db):
+    for span_id in range(1, 8):
+        await store.job_add_model_batch("alice", "batch-session", span_id)
+    assert await store.job_claim(
+        "extract_model", "w", 1, lease_s=120, session_ordered=True,
+        ready_model_batch=True,
+    ) == []
+
+    await store.job_add("alice", "extract_rules", "rule-next", {"span_id": 8},
+                        session_id="batch-session")
+    assert len(await store.job_claim("extract_rules", "w", 1, lease_s=60,
+                                    session_ordered=True)) == 1
+
+    await store.job_flush_model_batches("alice", "batch-session")
+    [(job_id, fence, payload)] = await store.job_claim(
+        "extract_model", "w", 1, lease_s=120, session_ordered=True,
+        ready_model_batch=True,
+    )
+    assert payload["span_ids"] == list(range(1, 8))
+    assert await store.job_record_model_call(job_id, fence)
+    assert await store.job_record_model_tokens(job_id, fence, 70, 20)
+    assert await store.job_done(job_id, fence)
+    usage = await store.model_extraction_usage()
+    assert usage["batches_completed"] == 1
+    assert usage["calls"] == 1
+    assert usage["prompt_tokens"] == 70
+    assert usage["completion_tokens"] == 20
+    assert usage["calls_per_completed_batch"] == 1
+    assert usage["total_tokens"] == 90
+
+
+@pytest.mark.asyncio
+async def test_model_batch_claims_at_eight_eligible_turns(store, clean_hermes_test_db):
+    for span_id in range(1, 9):
+        await store.job_add_model_batch("alice", "batch-session", span_id)
+    [(job_id, fence, payload)] = await store.job_claim(
+        "extract_model", "w", 1, lease_s=120, session_ordered=True,
+        ready_model_batch=True,
+    )
+    assert payload["span_ids"] == list(range(1, 9))
+    assert await store.job_done(job_id, fence)
+
+
+@pytest.mark.asyncio
+async def test_model_batch_claims_after_max_wait(store, db_pool, clean_hermes_test_db):
+    await store.job_add_model_batch("alice", "batch-session", 1)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE durable_job SET payload = jsonb_set(payload, '{batch_started_at}', "
+            "to_jsonb((now() - interval '31 minutes')::text), true) "
+            "WHERE owner = 'alice' AND session_id = 'batch-session' AND kind = 'extract_model'"
+        )
+    [(job_id, fence, payload)] = await store.job_claim(
+        "extract_model", "w", 1, lease_s=120, session_ordered=True,
+        ready_model_batch=True,
+    )
+    assert payload["span_ids"] == [1]
+    assert await store.job_done(job_id, fence)
+
+
+@pytest.mark.asyncio
 async def test_stale_worker_cannot_publish_after_reclaim(store, db_pool, clean_hermes_test_db):
     await store.job_add("alice", "extract_rules", "op-x", {})
     [(jid, fence_a, _)] = await store.job_claim("extract_rules", "w1", 1, lease_s=60)

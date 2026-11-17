@@ -83,20 +83,43 @@ async def publish_model(conn, store_embed: StoreEmbed, claims: list[dict], job_i
         job = await conn.fetchrow("SELECT owner, payload FROM durable_job WHERE id = $1", int(job_id))
         raw = job["payload"]
         payload = json.loads(raw) if isinstance(raw, str) else dict(raw)
-        span_id = int(payload["span_id"])
-        info = await span_info(conn, span_id)
-        if info.owner != job["owner"]:
-            return []
+        span_ids = [int(value) for value in payload.get("span_ids", [payload.get("span_id")])
+                    if value is not None]
+        infos = {}
+        for span_id in span_ids:
+            info = await span_info(conn, span_id)
+            if info.owner == job["owner"]:
+                infos[span_id] = info
+
         locks = set()
         for c in claims:
+            span_id = c.get("span_id")
+            if span_id is None and len(infos) == 1:
+                span_id = next(iter(infos))
+            info = infos.get(int(span_id)) if span_id is not None else None
+            if info is None:
+                continue
             ident = await _claim_lock_identity(conn, info, c)
             if ident is not None:
                 locks.add(ident)
         for owner, subject_id, verb in sorted(locks):
             await lock_timeline(conn, owner, subject_id, verb)
-        added = [await add_evidence(conn, info, span_id, c, extractor=MODEL_EXTRACTOR, version=MODEL_VERSION)
-                 for c in claims]
-        kept = [a for a in added if a is not None]
+
+        kept_by_span: dict[int, list[tuple[int, int]]] = {}
+        for claim in claims:
+            span_id = claim.get("span_id")
+            if span_id is None and len(infos) == 1:
+                span_id = next(iter(infos))
+            if span_id is None or int(span_id) not in infos:
+                continue
+            resolved_span_id = int(span_id)
+            added = await add_evidence(
+                conn, infos[resolved_span_id], resolved_span_id, claim,
+                extractor=MODEL_EXTRACTOR, version=MODEL_VERSION,
+            )
+            if added is not None:
+                kept_by_span.setdefault(resolved_span_id, []).append(added)
+        kept = [item for items in kept_by_span.values() for item in items]
         if not kept:
             return []
         ev_ids = list(dict.fromkeys(e for e, _ in kept))
@@ -108,7 +131,11 @@ async def publish_model(conn, store_embed: StoreEmbed, claims: list[dict], job_i
             "AND r.extractor = $2 AND r.extractor_version = $3 AND r.state = 'live'",
             ev_ids, RULES_EXTRACTOR, RULES_VERSION)
         await rebuild_keys(conn, [k for _, k in kept])
-        await _write_turn_entities(conn, info.owner, span_id, ev_ids)
+        for span_id, items in kept_by_span.items():
+            await _write_turn_entities(
+                conn, infos[span_id].owner, span_id,
+                list(dict.fromkeys(evidence_id for evidence_id, _ in items)),
+            )
         owner_of = {int(r["id"]): int(r["claim_id"]) for r in await conn.fetch(
             "SELECT id, claim_id FROM claim_evidence WHERE id = ANY($1::bigint[])", ev_ids)}
         claim_ids = list(dict.fromkeys(owner_of[e] for e in ev_ids))

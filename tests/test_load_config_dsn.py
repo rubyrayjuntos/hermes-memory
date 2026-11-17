@@ -18,9 +18,28 @@ def test_load_config_uses_explicit_env(monkeypatch) -> None:
     monkeypatch.setattr("hermes_memory.config.load_dotenv_files", lambda: None)
     monkeypatch.setattr("hermes_memory.config._load_yaml_block", lambda *a, **k: {})
     monkeypatch.setenv("HYBRID_AGE_DSN", "postgres://hermes:x@127.0.0.1:5450/hermes_memory")
+    monkeypatch.setenv("HYBRID_AGE_EXTRACT_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("HYBRID_AGE_EXTRACT_MODEL", "llama3.2:3b")
+    monkeypatch.setenv("HYBRID_AGE_EXTRACT_MODE", "rules_then_model")
     cfg = load_config("/nonexistent/config.yaml")
     assert "5450" in cfg.dsn
     assert cfg.dsn.endswith("/hermes_memory")
+    assert cfg.extract_url == "http://127.0.0.1:11434/v1"
+    assert cfg.extract_model == "llama3.2:3b"
+    assert cfg.extract_key_env == "HYBRID_AGE_EXTRACT_KEY"
+    assert cfg.extract_mode == "rules_then_model"
+
+
+def test_load_config_defaults_to_rules_only_and_rejects_unknown_mode(monkeypatch) -> None:
+    monkeypatch.setattr("hermes_memory.config.load_dotenv_files", lambda: None)
+    monkeypatch.setattr("hermes_memory.config._load_yaml_block", lambda *a, **k: {})
+    monkeypatch.setenv("HYBRID_AGE_DSN", "postgres://localhost/hermes_memory")
+    monkeypatch.delenv("HYBRID_AGE_EXTRACT_MODE", raising=False)
+    assert load_config("/nonexistent/config.yaml").extract_mode == "rules_only"
+
+    monkeypatch.setenv("HYBRID_AGE_EXTRACT_MODE", "always")
+    with pytest.raises(ValueError, match="invalid extract_mode"):
+        load_config("/nonexistent/config.yaml")
 
 
 def test_load_dotenv_files_clone_wins_over_hermes_home(tmp_path, monkeypatch) -> None:
