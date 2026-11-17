@@ -49,6 +49,44 @@ def test_fixture_expected_claims_use_seeded_verbs_and_separate_evidence():
     assert not any(claim["verb"] == "works_for" and claim["current"] for claim in ideal_claims)
 
 
+def _authored_claims(text: str) -> list[dict]:
+    from hermes_memory.reception import extract_assertions, extract_self_assertions
+    from hermes_memory.turn_filter import segment_turn
+
+    out: list[dict] = []
+    for seg in segment_turn(text):
+        if seg.kind != "authored":
+            continue
+        piece = text[seg.start:seg.end]
+        out.extend(extract_assertions(piece))
+        out.extend(extract_self_assertions(piece))
+    return out
+
+
+def test_junk_strings_produce_no_claims():
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    junk = fixture["junk_strings"]
+    assert junk == [
+        "working",
+        "a call`",
+        "Acme` → `works_for Acme` polarity `positive`",
+        "staff engineer\"` and `\"I'm tired\"` unchanged",
+        "Acme anymore\"` → **negative**",
+        "Acme anymore\"",
+    ]
+    wraps = (
+        "{s}",
+        "I joined {s}.",
+        "I work at {s}.",
+        "I'm a {s}.",
+        "Verify Docker is {s}.",
+    )
+    for s in junk:
+        for wrap in wraps:
+            text = wrap.format(s=s)
+            assert _authored_claims(text) == [], (s, wrap, _authored_claims(text))
+
+
 def test_fixture_questions_have_typed_expectations():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     required = {

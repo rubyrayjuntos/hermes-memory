@@ -150,6 +150,8 @@ def extract_assertions(text: str) -> list[dict]:
             obj = m.group(2).strip().rstrip(".")
             if not subject or not obj:
                 continue
+            if not _object_usable(obj):
+                continue
             if subject.split()[0].lower() in _STOP_FIRST:
                 continue
             if _NEGATION.match(obj):
@@ -168,6 +170,8 @@ _TIME_TRAIL = re.compile(
     r"\s+(?:last week|now|anymore)\s*$",
     re.IGNORECASE,
 )
+_JUNK_OBJECT_RE = re.compile(r"[`\"'“”‘’\\→]")
+_STATIVE_OBJECT = frozenset({"working"})
 _NEG_MARK = re.compile(r"\b(don'?t|do not|no longer|not)\b", re.IGNORECASE)
 _NOT_ANYMORE = re.compile(r"\bnot\b.{0,80}\banymore\b", re.IGNORECASE)
 _QUESTION_START = re.compile(
@@ -224,6 +228,16 @@ def _trim_self_object(raw: str) -> str:
     return obj
 
 
+def _object_usable(obj: str) -> bool:
+    if not obj:
+        return False
+    if _JUNK_OBJECT_RE.search(obj):
+        return False
+    if obj.casefold() in _STATIVE_OBJECT:
+        return False
+    return True
+
+
 def _self_polarity(matched: str) -> str:
     if _NEG_MARK.search(matched) or _NOT_ANYMORE.search(matched):
         return "negative"
@@ -259,7 +273,7 @@ def extract_self_assertions(text: str) -> list[dict]:
                 if _abstain_context(text or "", m.start(), m.end()):
                     continue
                 obj = _trim_self_object(m.group("obj"))
-                if not obj or len(obj.split()) > 6:
+                if not _object_usable(obj) or len(obj.split()) > 6:
                     continue
                 if verb == "role_is" and _ROLE_HEDGE.match(obj):
                     continue
