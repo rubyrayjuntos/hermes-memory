@@ -110,6 +110,13 @@ def pct(values, q):
     return s[min(len(s) - 1, int(round(q * (len(s) - 1))))]
 
 
+def _validate_eval_dsn(dsn: str) -> None:
+    if ":5450" in dsn or re.search(r"(?:^|\s)port\s*=\s*5450(?:\s|$)", dsn):
+        raise SystemExit("refusing: port 5450 is out of scope")
+    if not re.search(r"(_eval\b|hermes_release_gate_)", dsn):
+        raise SystemExit("refusing: DSN must name an *_eval or hermes_release_gate_* database")
+
+
 PROBE_CITIES = ("NYC", "Reykjavik", "NYC")  # not in CITIES planted corpus
 
 
@@ -166,9 +173,9 @@ async def run(args) -> dict:
     from hermes_memory.config import HybridAgeConfig
     from hermes_memory.embed import vec_to_literal
     from hermes_memory.provider import HybridAgeMemoryProvider
+    from hermes_memory.tokens import count_tokens
 
-    if not re.search(r"(_eval\b|hermes_release_gate_)", args.dsn):
-        raise SystemExit("refusing: DSN must name an *_eval or hermes_release_gate_* database")
+    _validate_eval_dsn(args.dsn)
 
     cfg = HybridAgeConfig(
         dsn=args.dsn,
@@ -246,13 +253,21 @@ async def run(args) -> dict:
     prov = HybridAgeMemoryProvider(config=cfg)
     prov.initialize(f"eval-query-{args.seed}", agent_identity=identity, agent_context="primary")
 
-    results = {"recall": [], "vector_only_recall": [], "noise": [], "latency_ms": [], "chars": [], "by_kind": {},
-               "leaked_answers": 0, "leaked_names": set()}
+    results = {
+        "recall": [], "vector_only_recall": [], "noise": [], "latency_ms": [],
+        "chars": [], "facts_tokens": [], "total_injection_tokens": [], "by_kind": {},
+        "leaked_answers": 0, "leaked_names": set(),
+    }
     for kind, text, gold_names, _ in queries:
         t0 = time.perf_counter()
         injected = prov.prefetch(text, session_id=f"eval-query-{args.seed}") or ""
         results["latency_ms"].append((time.perf_counter() - t0) * 1000)
         results["chars"].append(len(injected))
+        total_tokens = count_tokens(injected)
+        results["total_injection_tokens"].append(total_tokens)
+        results["facts_tokens"].append(
+            total_tokens if args.retrieval_mode == "hybrid" else 0
+        )
         hit = all(g.lower() in injected.lower() for g in gold_names)
         results["recall"].append(hit)
         results["by_kind"].setdefault(kind, []).append(hit)
@@ -288,6 +303,10 @@ async def run(args) -> dict:
         "recall_by_kind": {k: frac(v) for k, v in results["by_kind"].items()},
         "noise_projects_per_answer_mean": round(statistics.mean(results["noise"]), 2) if results["noise"] else None,
         "injected_chars_p50": pct(results["chars"], 0.5),
+        "facts_tokens_p50": pct(results["facts_tokens"], 0.5),
+        "facts_tokens_p95": pct(results["facts_tokens"], 0.95),
+        "total_injection_tokens_p50": pct(results["total_injection_tokens"], 0.5),
+        "total_injection_tokens_p95": pct(results["total_injection_tokens"], 0.95),
         "entity_coverage": entity_coverage,
         "leakage": {"other_owner_facts": args.other_facts, "answers_with_foreign_names": results["leaked_answers"],
                     "distinct_foreign_names": len(results["leaked_names"])},
@@ -304,8 +323,7 @@ async def run_durability(args) -> dict:
     from hermes_memory.config import HybridAgeConfig
     from hermes_memory.provider import HybridAgeMemoryProvider
 
-    if not re.search(r"(_eval\b|hermes_release_gate_)", args.dsn):
-        raise SystemExit("refusing: DSN must name an *_eval or hermes_release_gate_* database")
+    _validate_eval_dsn(args.dsn)
     cfg = HybridAgeConfig(dsn=args.dsn, prefetch_timeout_s=args.prefetch_timeout)
     identity = f"eval-durable-{args.seed}"
     session = f"eval-durable-{args.seed}"

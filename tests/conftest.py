@@ -157,7 +157,7 @@ def migrated_db(request, hermes_test_dsn: str, ensure_hermes_test_db):
     env = dict(os.environ)
     env["HYBRID_AGE_DSN"] = hermes_test_dsn
     result = subprocess.run(
-        [sys.executable, str(migrate_py), "--dsn", hermes_test_dsn],
+        [sys.executable, "-m", "scripts.migrate", "--dsn", hermes_test_dsn],
         capture_output=True,
         text=True,
         timeout=120,
