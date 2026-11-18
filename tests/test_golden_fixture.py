@@ -104,6 +104,17 @@ def test_is_junk_strings_produce_no_claims():
     assert _authored_claims("Nightingale uses Postgres")[0]["verb"] == "uses"
 
 
+def test_prose_before_name_does_not_become_the_subject():
+    for text in (
+        "I think Nightingale uses Postgres.",
+        "the project Nightingale uses Postgres.",
+    ):
+        claims = _authored_claims(text)
+        assert claims, text
+        assert claims[0]["subject"] == "Nightingale", (text, claims)
+        assert claims[0]["object"] == "Postgres", (text, claims)
+
+
 def test_mixed_case_proper_names_extract_as_is_subjects():
     for text, subject in (
         ("OpenAI is my employer", "OpenAI"),

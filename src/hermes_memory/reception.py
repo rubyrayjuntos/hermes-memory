@@ -81,18 +81,21 @@ _STOP_FIRST = frozenset({
     "here", "there", "what", "which", "who", "how", "when", "where", "why",
     "pipeline", "want", "got", "per", "one", "all", "both", "with", "from",
 })
-_PROPER_SUBJECT = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:\s+[A-Za-z][A-Za-z0-9]*)*$")
+_PROPER_SUBJECT = re.compile(
+    r"^(?=[A-Za-z0-9\-]*[A-Z])[A-Za-z][A-Za-z0-9\-]*(?:\s+(?=[A-Za-z0-9\-]*[A-Z])[A-Za-z][A-Za-z0-9\-]*)*$"
+)
 _ALLCAPS_ACRONYM = re.compile(r"^[A-Z]{2,4}$")
 _SUBJECT_OPENERS = frozenset({"running", "verify", "using", "making", "adding"})
 _VERSION_TOKEN = re.compile(r"\bV\d+\b")
+_NAME_TOKEN = r"(?=[A-Za-z0-9\-]*[A-Z])[A-Za-z][\w\-]+"
 
 # A negated object ("is not a guidance bus") must never become a positive
 # claim. Negation is span-only until explicit polarity extraction lands;
 # corrections travel through the repair-cue path instead.
 _NEGATION = re.compile(r"^(not|no|never|neither)\b", re.IGNORECASE)
 _ASSERTION_RES = [
-    ("is", re.compile(r"\b([A-Za-z][\w\-]+(?:\s+[A-Za-z][\w\-]+){0,3})\s+is\s+([^\.\n]{2,120})")),
-    ("uses", re.compile(r"\b([A-Za-z][\w\-]+(?:\s+[A-Za-z][\w\-]+){0,3})\s+uses\s+([^\.\n]{2,120})")),
+    ("is", re.compile(rf"\b({_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,3}})\s+is\s+([^\.\n]{{2,120}})")),
+    ("uses", re.compile(rf"\b({_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,3}})\s+uses\s+([^\.\n]{{2,120}})")),
 ]
 
 
