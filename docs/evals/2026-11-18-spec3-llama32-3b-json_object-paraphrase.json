@@ -1,0 +1,38 @@
+{
+  "fixture": "paraphrase_slice.json",
+  "extract_mode": "rules_then_model",
+  "extract_model": "llama3.2:3b",
+  "extract_model_schema": "json_object",
+  "owner": "golden-paraphrase-a2e724913fa3",
+  "claim_metrics": {
+    "expected": 3,
+    "actual": 0,
+    "matched": 0,
+    "precision": null,
+    "recall": 0.0,
+    "f1": 0.0
+  },
+  "actual_claims": [],
+  "pasted_span_false_grounding_count": 0,
+  "junk_string_hits": 0,
+  "abstain_false_positives": 0,
+  "jobs": {
+    "row_count": 5,
+    "complete_rows": 5,
+    "rules_jobs": 5,
+    "rules_done": 5,
+    "model_jobs": 1,
+    "model_done": 1,
+    "jobs_pending": 0,
+    "jobs_failed": 0
+  },
+  "error_counts": {},
+  "call_errors": [],
+  "latency_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "mean": null,
+    "wall_ms": 14525.2
+  }
+}

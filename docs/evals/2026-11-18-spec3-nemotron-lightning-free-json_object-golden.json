@@ -1,0 +1,135 @@
+{
+  "fixture": "golden_conversation.json",
+  "extract_mode": "rules_then_model",
+  "extract_model": "nvidia/nemotron-3.5-lightning:free",
+  "extract_model_schema": "json_object",
+  "owner": "golden-8f698a73422a",
+  "claim_metrics": {
+    "expected": 11,
+    "actual": 12,
+    "matched": 11,
+    "precision": 0.917,
+    "recall": 1.0,
+    "f1": 0.957
+  },
+  "actual_claims": [
+    {
+      "subject": "(self)",
+      "verb": "lives_in",
+      "object": "NYC",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": false
+    },
+    {
+      "subject": "(self)",
+      "verb": "lives_in",
+      "object": "Austin",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": false
+    },
+    {
+      "subject": "(self)",
+      "verb": "lives_in",
+      "object": "NYC",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    },
+    {
+      "subject": "Nightingale",
+      "verb": "uses",
+      "object": "Postgres",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    },
+    {
+      "subject": "Spot",
+      "verb": "is",
+      "object": "a beagle",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    },
+    {
+      "subject": "Spot",
+      "verb": "is",
+      "object": "a poodle",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    },
+    {
+      "subject": "Nightingale",
+      "verb": "uses",
+      "object": "Redis",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    },
+    {
+      "subject": "Acme",
+      "verb": "uses",
+      "object": "Kubernetes",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    },
+    {
+      "subject": "(self)",
+      "verb": "works_for",
+      "object": "Acme",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": false
+    },
+    {
+      "subject": "(self)",
+      "verb": "role_is",
+      "object": "engineer",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": false
+    },
+    {
+      "subject": "(self)",
+      "verb": "role_is",
+      "object": "architect",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    },
+    {
+      "subject": "Austin",
+      "verb": "is",
+      "object": "the office city",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    }
+  ],
+  "pasted_span_false_grounding_count": 0,
+  "junk_string_hits": 0,
+  "abstain_false_positives": 0,
+  "jobs": {
+    "row_count": 27,
+    "complete_rows": 27,
+    "rules_jobs": 27,
+    "rules_done": 27,
+    "model_jobs": 1,
+    "model_done": 1,
+    "jobs_pending": 0,
+    "jobs_failed": 0
+  },
+  "error_counts": {},
+  "call_errors": [],
+  "latency_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "mean": null,
+    "wall_ms": 22733.1
+  }
+}
