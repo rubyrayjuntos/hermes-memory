@@ -179,7 +179,9 @@ def _noise_reason(
         return None
     if role != "user":
         return "short_non_user"
-    if _FIRST_PERSON_RE.search(stripped):
+    # Check for first-person cues (explicit + implicit like "moved to...")
+    from .model_extract import _has_first_person_cue
+    if _has_first_person_cue(stripped):
         return None
     from .reception import extract_assertions
 
