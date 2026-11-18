@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from hermes_memory.extract_publish import publish_model
+from hermes_memory.versions import MODEL_VERSION
 
 from .claims_helpers import current, span
 
@@ -59,7 +60,7 @@ async def test_matching_model_claim_supersedes_the_rules_evidence(store, db_pool
     async with db_pool.acquire() as conn:
         versions = await conn.fetch(
             "SELECT extractor_version FROM claim_evidence WHERE extractor = 'model' AND span_id = $1", span_id)
-    assert [r["extractor_version"] for r in versions] == ["1"]
+    assert [r["extractor_version"] for r in versions] == [MODEL_VERSION]
 
 
 @pytest.mark.asyncio
