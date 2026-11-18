@@ -1,0 +1,155 @@
+{
+  "name": "paraphrase_slice",
+  "owner": "golden-paraphrase",
+  "session_id": "paraphrase-slice",
+  "turns": [
+    {
+      "turn_id": "p01",
+      "role": "user",
+      "ts": "2024-12-01T12:00:00+00:00",
+      "content": "moved back home to New York last spring",
+      "expect_rules_claims": false,
+      "ideal_claim": {
+        "subject": "I",
+        "verb": "lives_in",
+        "object": "New York",
+        "polarity": "positive",
+        "current": true,
+        "status": "grounded"
+      }
+    },
+    {
+      "turn_id": "p02",
+      "role": "assistant",
+      "ts": "2024-12-01T12:00:01+00:00",
+      "content": "Noted."
+    },
+    {
+      "turn_id": "p03",
+      "role": "user",
+      "ts": "2024-12-02T12:00:00+00:00",
+      "content": "Started at Initech in March",
+      "expect_rules_claims": false,
+      "ideal_claim": {
+        "subject": "I",
+        "verb": "works_for",
+        "object": "Initech",
+        "polarity": "positive",
+        "current": true,
+        "status": "grounded"
+      }
+    },
+    {
+      "turn_id": "p04",
+      "role": "assistant",
+      "ts": "2024-12-02T12:00:01+00:00",
+      "content": "Noted."
+    },
+    {
+      "turn_id": "p05",
+      "role": "user",
+      "ts": "2024-12-03T12:00:00+00:00",
+      "content": "these days I'm doing staff engineering",
+      "expect_rules_claims": false,
+      "ideal_claim": {
+        "subject": "I",
+        "verb": "role_is",
+        "object": "staff engineer",
+        "polarity": "positive",
+        "current": true,
+        "status": "grounded"
+      }
+    },
+    {
+      "turn_id": "p06",
+      "role": "assistant",
+      "ts": "2024-12-03T12:00:01+00:00",
+      "content": "Noted."
+    },
+    {
+      "turn_id": "p07",
+      "role": "user",
+      "ts": "2024-12-04T12:00:00+00:00",
+      "content": "Where do I live these days?",
+      "kind": "question",
+      "expect_no_claim": true
+    },
+    {
+      "turn_id": "p08",
+      "role": "assistant",
+      "ts": "2024-12-04T12:00:01+00:00",
+      "content": "Unknown until you say so."
+    },
+    {
+      "turn_id": "p09",
+      "role": "user",
+      "ts": "2024-12-05T12:00:00+00:00",
+      "content": "if I moved to Denver I'd need a winter coat",
+      "kind": "hypothetical",
+      "expect_no_claim": true
+    },
+    {
+      "turn_id": "p10",
+      "role": "assistant",
+      "ts": "2024-12-05T12:00:01+00:00",
+      "content": "That's hypothetical."
+    },
+    {
+      "turn_id": "p11",
+      "role": "user",
+      "ts": "2024-12-06T12:00:00+00:00",
+      "content": "Please summarize this pasted resume:\n\n```text\nI live in Boston and work at Initech.\n```",
+      "kind": "pasted_doc",
+      "pasted": true,
+      "expect_no_claim": true
+    },
+    {
+      "turn_id": "p12",
+      "role": "assistant",
+      "ts": "2024-12-06T12:00:01+00:00",
+      "content": "Treated as pasted source, not your assertion."
+    }
+  ],
+  "ideal_claims": [
+    {
+      "subject": "I",
+      "verb": "lives_in",
+      "object": "New York",
+      "polarity": "positive",
+      "current": true,
+      "status": "grounded"
+    },
+    {
+      "subject": "I",
+      "verb": "works_for",
+      "object": "Initech",
+      "polarity": "positive",
+      "current": true,
+      "status": "grounded"
+    },
+    {
+      "subject": "I",
+      "verb": "role_is",
+      "object": "staff engineer",
+      "polarity": "positive",
+      "current": true,
+      "status": "grounded"
+    }
+  ],
+  "expected_claims": {
+    "rules_only": []
+  },
+  "junk_strings": [
+    "working",
+    "a call`",
+    "Acme` \u2192 `works_for Acme` polarity `positive`",
+    "staff engineer\"` and `\"I'm tired\"` unchanged",
+    "Acme anymore\"` \u2192 **negative**",
+    "Acme anymore\""
+  ],
+  "is_junk_strings": [
+    "DB is still at V21",
+    "Running V22 is a write, so it needs your OK too",
+    "Home is NYC variants"
+  ]
+}
