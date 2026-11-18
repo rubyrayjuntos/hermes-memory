@@ -6,7 +6,8 @@ from difflib import SequenceMatcher
 
 from .entities import normalize_name
 from .extract_nouns import extract_nouns
-from .reception import extract_assertions
+from .model_extract import _has_first_person_cue
+from .reception import extract_assertions, extract_self_assertions
 from .turn_filter import segment_turn
 from .versions import RULES_VERSION
 
@@ -62,8 +63,11 @@ def should_enqueue_model(text: str, recent_texts=()) -> bool:
                 return False
 
     claims = extract_assertions(value)
-    if not claims:
+    self_claims = extract_self_assertions(value)
+    if _has_first_person_cue(value) and not self_claims:
         return True
+    if not claims:
+        return not self_claims
 
     covered = {
         normalize_name(str(claim.get(key) or ""))

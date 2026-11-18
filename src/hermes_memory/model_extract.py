@@ -1,16 +1,20 @@
-"""Ground model-extractor JSON against the turn and context (spec §4.1, §5.2 step 2).
+"""Ground model-extractor JSON against the turn (spec §4.1, §5.2 step 2).
 
-Pure. No network. Invalid shapes return [].
+Pure. No network. Invalid shapes return []. Context is prompt-only and is
+never used as grounding evidence.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 
 from .entities import is_abstained, is_first_person, normalize_name
 
-
-def _corpus_norms(turn: str, context: Sequence[str]) -> list[str]:
-    return [normalize_name(turn), *(normalize_name(t) for t in context)]
+_FP_CUE = re.compile(
+    r"\b(?:i|i'm|i've|i'd|i'll|me|my|mine|myself)\b",
+    re.IGNORECASE,
+)
+_SELF_ALIAS = frozenset({"user", "the user", "me", "myself"})
 
 
 def _occurs(norm: str, corpus: Sequence[str]) -> bool:
@@ -26,11 +30,24 @@ def _keep_surface(surface: str) -> bool:
     return not is_abstained(surface)
 
 
-def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str]) -> list[dict]:
-    """Keep claims whose verb is allowed and whose names appear in the turn or context.
+def _has_first_person_cue(turn: str) -> bool:
+    return bool(_FP_CUE.search(turn or ""))
 
-    Output items match ``record_rule_claims``: ``subject``, ``verb``, ``object``,
-    ``polarity``. First person is not abstained.
+
+def _canonical_subject(subject: str, turn: str) -> str | None:
+    key = " ".join((subject or "").casefold().split())
+    if is_first_person(subject) or key in _SELF_ALIAS:
+        if not _has_first_person_cue(turn):
+            return None
+        return "I"
+    return subject
+
+
+def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str]) -> list[dict]:
+    """Keep claims whose verb is allowed and whose names appear in the turn.
+
+    ``context`` is accepted for call-site compatibility but is not grounding
+    evidence. First-person aliases map to ``I`` only when the turn has a cue.
     """
     if not isinstance(raw, Mapping):
         return []
@@ -41,7 +58,7 @@ def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str
         return []
     if not isinstance(context, Sequence) or isinstance(context, (str, bytes)):
         return []
-    corpus = _corpus_norms(turn, context)
+    turn_corpus = [normalize_name(turn)]
     out: list[dict] = []
     for item in claims:
         if not isinstance(item, Mapping):
@@ -51,10 +68,19 @@ def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str
             return []
         if verb not in verbs:
             continue
-        if not _keep_surface(subject) or not _keep_surface(obj):
+        canon = _canonical_subject(subject, turn)
+        if canon is None:
             continue
-        subj_n, obj_n = normalize_name(subject), normalize_name(obj)
-        if not _occurs(subj_n, corpus) or not _occurs(obj_n, corpus):
+        if canon == "I":
+            subject = "I"
+            subject_ok = True
+        else:
+            if not _keep_surface(subject):
+                continue
+            subject_ok = _occurs(normalize_name(subject), turn_corpus)
+        if not _keep_surface(obj):
+            continue
+        if not subject_ok or not _occurs(normalize_name(obj), turn_corpus):
             continue
         polarity = item.get("polarity") or "positive"
         if polarity not in ("positive", "negative"):

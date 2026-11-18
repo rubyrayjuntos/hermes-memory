@@ -46,7 +46,17 @@ async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> 
         )
         if not authored.strip():
             continue
-        turns.append({"span_id": int(span_id), "text": authored})
+        previous = await conn.fetchrow(
+            "SELECT content FROM conversations "
+            "WHERE session_id = $1 AND agent_identity = $2 AND id < $3 "
+            "ORDER BY id DESC LIMIT 1",
+            span["session_id"], owner, int(span_id),
+        )
+        turns.append({
+            "span_id": int(span_id),
+            "text": authored,
+            "context": str(previous["content"]) if previous and previous["content"] else "",
+        })
         rule_findings.extend(
             {"span_id": int(span_id), **claim} for claim in extract_assertions(authored)
         )

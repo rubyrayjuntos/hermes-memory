@@ -114,3 +114,13 @@ async def test_extractor_rejects_malformed_claims() -> None:
     extractor = OpenAIChatModelExtractor(client, "test-model", timeout_s=2.0)
     with pytest.raises(ValueError, match="claim fields must be strings"):
         await extractor(_batch())
+
+
+def test_response_format_json_object_vs_json_schema() -> None:
+    from hermes_memory.extract_model_client import response_format_for
+
+    assert response_format_for("json_object", {"uses", "lives_in"}) == {"type": "json_object"}
+    schema = response_format_for("json_schema", {"uses", "lives_in"})
+    assert schema["type"] == "json_schema"
+    verb_enum = schema["json_schema"]["schema"]["properties"]["claims"]["items"]["properties"]["verb"]["enum"]
+    assert verb_enum == ["lives_in", "uses"]

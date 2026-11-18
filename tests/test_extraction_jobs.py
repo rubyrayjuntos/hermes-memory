@@ -35,6 +35,14 @@ def test_model_filter_keeps_unstructured_facts_and_uncovered_entities():
     )
 
 
+def test_should_enqueue_model_when_first_person_cue_and_self_templates_miss():
+    assert not should_enqueue_model("I live in NYC.")
+    assert should_enqueue_model("these days I'm doing staff engineering")
+    assert should_enqueue_model(
+        "these days I'm doing staff engineering; Nightingale is a service"
+    )
+
+
 def test_model_filter_scores_authored_segments_only():
     paste = (
         "From: alice@example.com\n"
