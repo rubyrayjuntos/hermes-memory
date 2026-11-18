@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from typing import Awaitable, Callable, Sequence
 
-from .extraction_jobs import MODEL_VERSION
 from .reception import extract_assertions, extract_self_assertions
 from .store_claims import (
     RULES_EXTRACTOR,
@@ -25,6 +24,7 @@ from .store_claims import (
 )
 from .store_jobs import job_fence_check
 from .turn_filter import segment_turn
+from .versions import MODEL_VERSION
 
 FACT_EMBED_MODEL = "nomic-embed-text"
 MODEL_EXTRACTOR = "model"
