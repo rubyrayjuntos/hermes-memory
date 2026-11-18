@@ -1,5 +1,4 @@
 """Test role name normalization for scoring (T3.6 follow-up)."""
-import pytest
 from scripts.spec3_bakeoff import _claim_key, _norm_role
 
 
@@ -40,6 +39,6 @@ def test_claim_key_uses_role_normalization():
         "polarity": "positive",
         "current": True,
     }
-    
+
     # These should produce the same key after normalization
     assert _claim_key(claim_a) == _claim_key(claim_b)
