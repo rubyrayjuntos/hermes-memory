@@ -296,6 +296,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
                     "30m" if "11434" in extract_url.lower() or "ollama" in extract_url.lower()
                     else None
                 ),
+                schema_mode=str(getattr(self.config, "extract_model_schema", "json_object")),
             )
             logger.info("model extraction configured with model=%s", extract_model)
         elif extract_mode != "rules_then_model":

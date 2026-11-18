@@ -42,6 +42,19 @@ def test_load_config_defaults_to_rules_only_and_rejects_unknown_mode(monkeypatch
         load_config("/nonexistent/config.yaml")
 
 
+def test_extract_model_schema_defaults_to_json_object(monkeypatch) -> None:
+    monkeypatch.setattr("hermes_memory.config.load_dotenv_files", lambda: None)
+    monkeypatch.setattr("hermes_memory.config._load_yaml_block", lambda *a, **k: {})
+    monkeypatch.setenv("HYBRID_AGE_DSN", "postgres://localhost/hermes_memory")
+    monkeypatch.delenv("HYBRID_AGE_EXTRACT_MODEL_SCHEMA", raising=False)
+    assert load_config("/nonexistent/config.yaml").extract_model_schema == "json_object"
+    monkeypatch.setenv("HYBRID_AGE_EXTRACT_MODEL_SCHEMA", "json_schema")
+    assert load_config("/nonexistent/config.yaml").extract_model_schema == "json_schema"
+    monkeypatch.setenv("HYBRID_AGE_EXTRACT_MODEL_SCHEMA", "yaml")
+    with pytest.raises(ValueError, match="invalid extract_model_schema"):
+        load_config("/nonexistent/config.yaml")
+
+
 def test_retrieval_mode_defaults_to_vector_and_validates_settings(monkeypatch) -> None:
     monkeypatch.setattr("hermes_memory.config.load_dotenv_files", lambda: None)
     monkeypatch.setattr("hermes_memory.config._load_yaml_block", lambda *a, **k: {})

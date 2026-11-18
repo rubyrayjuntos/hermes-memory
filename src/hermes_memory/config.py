@@ -28,6 +28,7 @@ DEFAULT_EMBED_URL_ENV = "HYBRID_AGE_EMBED_URL"
 DEFAULT_EXTRACT_URL_ENV = "HYBRID_AGE_EXTRACT_URL"
 DEFAULT_EXTRACT_KEY_ENV = "HYBRID_AGE_EXTRACT_KEY"
 DEFAULT_EXTRACT_MODE_ENV = "HYBRID_AGE_EXTRACT_MODE"
+DEFAULT_EXTRACT_SCHEMA_ENV = "HYBRID_AGE_EXTRACT_MODEL_SCHEMA"
 
 # Local development default only — production sets HYBRID_AGE_DSN.
 _DEFAULT_DSN = "postgres://hermes:{pg_password}@localhost:5450/hermes_memory"
@@ -54,6 +55,7 @@ class HybridAgeConfig:
     extract_model: str = ""
     extract_timeout_s: float = 60.0
     extract_mode: str = "rules_only"
+    extract_model_schema: str = "json_object"
     extract_url_env: str = DEFAULT_EXTRACT_URL_ENV
     extract_key_env: str = DEFAULT_EXTRACT_KEY_ENV
     retrieval_mode: str = "vector"
@@ -193,6 +195,16 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
             f"invalid extract_mode {cfg.extract_mode!r}; "
             "expected 'rules_only' or 'rules_then_model'"
         )
+    cfg.extract_model_schema = str(
+        os.environ.get(DEFAULT_EXTRACT_SCHEMA_ENV)
+        or raw.get("extract_model_schema")
+        or cfg.extract_model_schema
+    ).strip().lower()
+    if cfg.extract_model_schema not in ("json_object", "json_schema"):
+        raise ValueError(
+            f"invalid extract_model_schema {cfg.extract_model_schema!r}; "
+            "expected 'json_object' or 'json_schema'"
+        )
     cfg.retrieval_mode = str(
         os.environ.get("HYBRID_AGE_RETRIEVAL_MODE")
         or raw.get("retrieval_mode")
@@ -326,6 +338,18 @@ CONFIG_SCHEMA_FIELDS = [
         "default": "rules_only",
         "type": "text",
         "env_var": DEFAULT_EXTRACT_MODE_ENV,
+    },
+    {
+        "key": "extract_model_schema",
+        "description": (
+            "json_object (default) or json_schema for model extraction. "
+            "json_schema is endpoint-dependent and is not silently downgraded."
+        ),
+        "secret": False,
+        "required": False,
+        "default": "json_object",
+        "type": "text",
+        "env_var": DEFAULT_EXTRACT_SCHEMA_ENV,
     },
     {
         "key": "retrieval_mode",

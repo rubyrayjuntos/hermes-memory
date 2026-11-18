@@ -20,6 +20,14 @@ class FakeConn:
     async def fetchrow(self, sql, *args):
         if "FROM durable_job" in sql:
             return {"owner": "o", "session_id": "s", "payload": self.payload}
+        if "id <" in sql:
+            session_id, owner, span_id = args[0], args[1], args[2]
+            previous = None
+            for sid in sorted(self.turns):
+                owner_, session, content, *_rest = self._parts(sid)
+                if sid < span_id and owner_ == owner and session == session_id:
+                    previous = {"content": content}
+            return previous
         span_id, owner = args[0], args[1]
         owner_, session, content, role = self._parts(span_id)
         if owner_ != owner:
@@ -199,6 +207,31 @@ async def test_batch_includes_rule_findings_and_only_grounds_claims_to_source_tu
     assert [finding["span_id"] for finding in seen["batch"].rule_findings] == [9]
     claims = published["model"][0][2]
     assert [(c["span_id"], c["verb"]) for c in claims] == [(9, "uses"), (10, "works_on")]
+
+
+async def test_previous_session_turn_is_prompt_context_not_grounding(monkeypatch):
+    turns = {
+        8: ("o", "s", "Nightingale uses Redis."),
+        9: ("o", "s", "Nightingale uses Atlas."),
+    }
+    store = FakeStore(
+        turns=turns,
+        jobs={"extract_model": [(2, 1, {"span_id": 9})]},
+    )
+    published = _patch_publish(monkeypatch)
+    seen = {}
+
+    async def model(batch):
+        seen["batch"] = batch
+        return {"claims": [
+            {"span_id": 9, "subject": "Nightingale", "verb": "uses", "object": "Atlas"},
+            {"span_id": 9, "subject": "Nightingale", "verb": "uses", "object": "Redis"},
+        ]}
+
+    await extraction_worker.run_extraction_once(object(), store, embed=_embed, model=model)
+    assert seen["batch"].turns[0]["context"] == "Nightingale uses Redis."
+    claims = published["model"][0][2]
+    assert [c["object"] for c in claims] == ["Atlas"]
 
 
 async def test_model_batch_sends_authored_segments_only(monkeypatch):
