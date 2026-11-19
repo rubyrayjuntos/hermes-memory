@@ -23,6 +23,11 @@ _THIRD_PERSON_SUBJECT = re.compile(
     re.IGNORECASE,
 )
 _SELF_ALIAS = frozenset({"user", "the user", "me", "myself"})
+# Spec 4 T4.2: assistant speaker only. "you/your" addresses the user and
+# maps to "I" (self) for storage; the assistant's own "I/we/me" referring
+# to itself must never become a user-self claim.
+_ASSISTANT_SELF = frozenset({"i", "me", "my", "mine", "myself", "we", "us", "our", "ours"})
+_ASSISTANT_YOU = frozenset({"you", "your", "yours"})
 
 
 def _occurs(norm: str, corpus: Sequence[str]) -> bool:
@@ -51,8 +56,16 @@ def _has_first_person_cue(turn: str) -> bool:
     return False
 
 
-def _canonical_subject(subject: str, turn: str) -> str | None:
+def _canonical_subject(subject: str, turn: str, speaker: str = "user") -> str | None:
     key = " ".join((subject or "").casefold().split())
+    if speaker == "assistant":
+        if key in _ASSISTANT_SELF:
+            # The assistant talking about itself ("I think...", "we should...")
+            # is never a claim about the user.
+            return None
+        if key in _ASSISTANT_YOU:
+            return "I"
+        return subject
     if is_first_person(subject) or key in _SELF_ALIAS:
         if not _has_first_person_cue(turn):
             return None
@@ -60,11 +73,19 @@ def _canonical_subject(subject: str, turn: str) -> str | None:
     return subject
 
 
-def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str]) -> list[dict]:
+def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str],
+                    *, speaker: str = "user") -> list[dict]:
     """Keep claims whose verb is allowed and whose names appear in the turn.
 
     ``context`` is accepted for call-site compatibility but is not grounding
     evidence. First-person aliases map to ``I`` only when the turn has a cue.
+
+    ``speaker`` selects the subject-remapping rules (Spec 4 T4.2): for
+    ``"assistant"``, ``you/your`` maps to ``I`` (the user) while the
+    assistant's own ``I/we/me`` is dropped -- it is never a self claim about
+    the user. Evidence from this grounded claim must still be recorded with
+    ``speaker='assistant'`` by the caller; this function does not decide
+    confirmation status, only which claims survive grounding.
     """
     if not isinstance(raw, Mapping):
         return []
@@ -85,7 +106,7 @@ def grounded_claims(raw: dict, turn: str, context: Sequence[str], verbs: set[str
             return []
         if verb not in verbs:
             continue
-        canon = _canonical_subject(subject, turn)
+        canon = _canonical_subject(subject, turn, speaker)
         if canon is None:
             continue
         if canon == "I":

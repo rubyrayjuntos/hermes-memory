@@ -58,6 +58,10 @@ class HybridAgeConfig:
     extract_model_schema: str = "json_object"
     extract_url_env: str = DEFAULT_EXTRACT_URL_ENV
     extract_key_env: str = DEFAULT_EXTRACT_KEY_ENV
+    # Spec 4 T4.1: assistant replies may contribute model-extracted claims,
+    # always unconfirmed (speaker='assistant' never promotes to current).
+    # Off by default -- enabling this changes which spans reach the model.
+    extract_assistant_replies: bool = False
     retrieval_mode: str = "vector"
     shadow_sample_rate: float = 0.2
     decay_half_life_days: float = 30.0
@@ -245,6 +249,14 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
         raw.get("extract_model") if isinstance(raw.get("extract_model"), str) else None
     ) or cfg.extract_model
 
+    _assistant_raw = os.environ.get("HYBRID_AGE_EXTRACT_ASSISTANT_REPLIES")
+    if _assistant_raw is None:
+        _assistant_raw = raw.get("extract_assistant_replies")
+    if _assistant_raw is not None:
+        cfg.extract_assistant_replies = str(_assistant_raw).strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+
     if raw.get("embed_model"):
         cfg.embed_model = str(raw["embed_model"])
     elif os.environ.get("HYBRID_AGE_EMBED_MODEL"):
@@ -350,6 +362,19 @@ CONFIG_SCHEMA_FIELDS = [
         "default": "json_object",
         "type": "text",
         "env_var": DEFAULT_EXTRACT_SCHEMA_ENV,
+    },
+    {
+        "key": "extract_assistant_replies",
+        "description": (
+            "Off by default. When on (with rules_then_model), assistant replies "
+            "may also contribute model-extracted claims -- always unconfirmed; "
+            "only a user turn can promote a claim to current."
+        ),
+        "secret": False,
+        "required": False,
+        "default": False,
+        "type": "boolean",
+        "env_var": "HYBRID_AGE_EXTRACT_ASSISTANT_REPLIES",
     },
     {
         "key": "retrieval_mode",

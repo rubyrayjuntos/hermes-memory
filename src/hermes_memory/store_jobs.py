@@ -108,6 +108,105 @@ class StoreJobsMixin:
                     owner, op_id,
                 )
 
+    async def job_add_model_batch_paired(self, owner: str, session_id: str, span_id: int, *,
+                                         paired_with: int, event_time=None) -> None:
+        """Append ``span_id`` to whatever batch contains ``paired_with``, even
+        if that batch is already at MODEL_BATCH_SIZE or has left 'pending'
+        (claimed/flushed). Spec 4 T4.1: a user turn and its assistant reply
+        must stay in the same model-extraction prompt; append-by-arrival-order
+        (job_add_model_batch) cannot guarantee that across a full-batch or
+        flush race between the two enqueue calls.
+
+        If the paired batch is still 'pending', the reply is appended
+        directly, bypassing the MODEL_BATCH_SIZE cap for this one append
+        (the pair is one semantic unit). If the paired batch already left
+        'pending', a fresh batch is created containing both span ids --
+        re-including ``paired_with`` is safe: claim identity is keyed by
+        (subject, verb, object, polarity), not job id, so re-extracting an
+        already-processed span cannot duplicate a claim, only re-run the
+        model call.
+        """
+        span = int(span_id)
+        paired = int(paired_with)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT id, status, payload FROM durable_job WHERE owner = $1 "
+                    "AND kind = 'extract_model' AND payload -> 'span_ids' @> $2::jsonb "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE",
+                    owner, json.dumps([paired]),
+                )
+                if row is not None and row["status"] == "pending":
+                    payload = _payload(row["payload"])
+                    span_ids = [int(value) for value in payload.get("span_ids", [])]
+                    if span not in span_ids:
+                        span_ids.append(span)
+                        payload["span_ids"] = span_ids
+                        await conn.execute(
+                            "UPDATE durable_job SET payload = $2::jsonb, created_at = now() "
+                            "WHERE id = $1 AND status = 'pending'",
+                            int(row["id"]), json.dumps(payload),
+                        )
+                    return
+
+                # Paired batch is gone (claimed/flushed) or never existed yet
+                # (e.g. the user span was never eligible for model batching
+                # on its own) -- start a fresh paired batch with both spans.
+                payload = {
+                    "span_ids": [paired, span],
+                    "extractor": "model",
+                    "version": "1",
+                    "usage": {"calls": 0},
+                }
+                op_id = f"{session_id}:pair:{paired}:{span}:1"
+                await conn.execute(
+                    "INSERT INTO durable_job (owner, kind, op_id, payload, session_id, event_time, "
+                    "priority, status, fence) VALUES ($1, 'extract_model', $2, $3::jsonb, $4, "
+                    "coalesce($5, now()), 0, 'pending', 0) ON CONFLICT (owner, kind, op_id) DO NOTHING",
+                    owner, op_id, json.dumps(payload), session_id, event_time,
+                )
+                await conn.execute(
+                    "UPDATE durable_job SET payload = jsonb_set(payload, '{batch_started_at}', "
+                    "to_jsonb(now()::text), true) WHERE owner = $1 AND kind = 'extract_model' "
+                    "AND op_id = $2 AND payload->>'batch_started_at' IS NULL",
+                    owner, op_id,
+                )
+
+    async def job_add_model_batch_standalone(self, owner: str, session_id: str, span_id: int, *,
+                                             event_time=None) -> None:
+        """Always start a fresh batch containing only ``span_id`` -- never
+        append to an existing pending batch for this session.
+
+        Spec 4: an assistant reply with no known paired user turn (its
+        preceding user turn was dropped as noise, so there is no
+        previous_conversation_id to pin against) must not fall back to
+        job_add_model_batch's "append to the latest pending session batch"
+        heuristic -- that could silently glom it onto a different, unrelated
+        user turn's accumulating batch. It either gets its own batch (this
+        method) or is skipped; it never shares a batch by arrival-order luck.
+        """
+        span = int(span_id)
+        payload = {
+            "span_ids": [span],
+            "extractor": "model",
+            "version": "1",
+            "usage": {"calls": 0},
+        }
+        op_id = f"{session_id}:orphan:{span}:1"
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO durable_job (owner, kind, op_id, payload, session_id, event_time, "
+                "priority, status, fence) VALUES ($1, 'extract_model', $2, $3::jsonb, $4, "
+                "coalesce($5, now()), 0, 'pending', 0) ON CONFLICT (owner, kind, op_id) DO NOTHING",
+                owner, op_id, json.dumps(payload), session_id, event_time,
+            )
+            await conn.execute(
+                "UPDATE durable_job SET payload = jsonb_set(payload, '{batch_started_at}', "
+                "to_jsonb(now()::text), true) WHERE owner = $1 AND kind = 'extract_model' "
+                "AND op_id = $2 AND payload->>'batch_started_at' IS NULL",
+                owner, op_id,
+            )
+
     async def job_flush_model_batches(self, owner: str, session_id: str) -> int:
         """Make pending batches for a session claimable when its conversation closes."""
         async with self.pool.acquire() as conn:
