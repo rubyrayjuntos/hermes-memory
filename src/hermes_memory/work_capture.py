@@ -23,12 +23,15 @@ Contract this module enforces (see the doc for the full citations):
      skipped and counted under a reason code -- never given an invented
      id.
   4. The produced event dict NEVER carries raw tool output -- only a
-     bounded summary (<=500 chars) and a sha256 hash of the full content,
-     per the "no raw text in shadow-adjacent tables" rule.
+     bounded summary (<=500 chars) and, when a per-install HMAC key is
+     configured, a keyed hash of the full content. With no key, the hash
+     is omitted entirely -- never a plain unkeyed hash, which a short
+     secret-bearing tool output would be brute-forceable against.
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 from collections import Counter
 from typing import Any, Mapping, Optional
 
@@ -125,18 +128,31 @@ def _bounded_summary(tool_name: str, content: Any) -> str:
     return summary[:_SUMMARY_MAX_CHARS]
 
 
-def _content_hash(content: Any) -> str:
+def _content_hash(content: Any, hmac_key: Optional[bytes]) -> Optional[str]:
+    """A keyed HMAC-SHA256 of the full content, or None when no key is
+    configured. Never a plain unkeyed hash: a short secret-bearing tool
+    output (an API token, a short password) is brute-forceable against a
+    bare sha256, since the attacker only has to guess the input, not a
+    secret key too. "No hash" is the safe default in that case -- not a
+    silent downgrade to an insecure one."""
+    if not hmac_key:
+        return None
     text = content if isinstance(content, str) else repr(content)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hmac.new(hmac_key, text.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def compute_work_events(
     messages: list, *, owner: str, session_id: str, span_id: Optional[int] = None,
+    hmac_key: Optional[bytes] = None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
     """One work_event-shaped dict per resolvable tool occurrence in
     `messages`. Returns (events, skipped_count, skip_reasons). Never
     raises on malformed input -- an unparseable row is skipped and
-    counted, same as an unresolvable identity."""
+    counted, same as an unresolvable identity.
+
+    `hmac_key`: the per-install key for content_hash (see _content_hash).
+    Pass None (the default) to omit content_hash entirely when no key is
+    configured -- never falls back to an unkeyed hash."""
     events: list[dict[str, Any]] = []
     reasons: Counter = Counter()
     occurrence_counts: dict[tuple[int, str], int] = {}
@@ -179,7 +195,7 @@ def compute_work_events(
             "source_event_id": f"{uid}:{occurrence_index}",
             "tool": msg.get("name") or "unknown",
             "summary": _bounded_summary(msg.get("name") or "unknown", content),
-            "content_hash": _content_hash(content),
+            "content_hash": _content_hash(content, hmac_key),
         })
 
     return events, sum(reasons.values()), dict(reasons)

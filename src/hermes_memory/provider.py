@@ -70,6 +70,21 @@ def _is_missing_embed_version_schema(exc: BaseException) -> bool:
     return "embed_model" in msg or "embed_dim" in msg
 
 
+def _work_event_hmac_key() -> Optional[bytes]:
+    """Spec 5 T5.1: the per-install key for work_event.content_hash, same
+    validation as HYBRID_AGE_SHADOW_HMAC_KEY (hex, >=32 bytes) -- missing
+    or invalid means no hash is computed at all, never a silent downgrade
+    to an unkeyed hash."""
+    secret_hex = os.environ.get("HYBRID_AGE_WORK_EVENT_HMAC_KEY", "")
+    try:
+        secret = bytes.fromhex(secret_hex)
+    except ValueError:
+        secret = b""
+    if len(secret) < 32:
+        return None
+    return secret
+
+
 class HybridAgeMemoryProvider(MemoryProvider):
     # Optional shadow-retrieval hook: async (query, vector_ids, latency_ms) -> None.
     # None in the default mode; prefetch only schedules it after the string is built.
@@ -347,6 +362,8 @@ class HybridAgeMemoryProvider(MemoryProvider):
         messages: Any = None,
     ) -> None:
         sid = session_id or self._session_id or "default"
+        config = getattr(self, "config", None)
+        work_capture_on = bool(getattr(config, "work_capture", False))
         for role, content in (("user", user_content), ("assistant", assistant_content)):
             if not content or _is_noise(content, role=role):
                 continue
@@ -358,11 +375,12 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "content": content[:8000],
                 "previous_conversation_id": self._last_turn_id.get(sid),
             }
-            if messages is not None:
+            if work_capture_on and messages is not None and role == "assistant":
                 # T5.1: only the assistant item's write triggers work-event
-                # capture (see _capture_work_events) -- both items carry the
-                # same messages snapshot so that still holds even if a
-                # future caller reorders the loop below.
+                # capture (see _capture_work_events), and only when the
+                # feature is actually on -- otherwise this reference would
+                # sit in the write queue for no reason on every turn of
+                # every session, flag or not.
                 item["messages"] = messages
             self._enqueue_write(item)
         self._track_turn(user_content, assistant_content)
@@ -881,6 +899,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             session_id = str(item.get("session_id") or self._session_id or "default")
             events, skipped, reasons = compute_work_events(
                 messages, owner=owner, session_id=session_id, span_id=int(conv_id),
+                hmac_key=_work_event_hmac_key(),
             )
             if skipped:
                 logger.info("work-event capture skipped %d occurrence(s): %s", skipped, reasons)

@@ -9,9 +9,12 @@ output appearing anywhere in a produced event.
 from __future__ import annotations
 
 import hashlib
+import hmac
 
 from hermes_memory.work_capture import compute_work_events
 from tests.fixtures.hermes_messages_contract import ALL_SCENARIOS
+
+_TEST_HMAC_KEY = b"test-only-32-byte-key-not-prod-0"
 
 
 def test_duplicate_id_within_one_response_produces_two_distinct_events():
@@ -21,6 +24,7 @@ def test_duplicate_id_within_one_response_produces_two_distinct_events():
     response is folded into source_event_id."""
     events, skipped, reasons = compute_work_events(
         ALL_SCENARIOS["duplicate_id_within_one_response"], owner="o", session_id="s",
+        hmac_key=_TEST_HMAC_KEY,
     )
     assert skipped == 0, reasons
     assert len(events) == 2, "both tool results must survive as separate events"
@@ -99,7 +103,9 @@ def test_work_event_never_carries_raw_tool_output():
         {"role": "tool", "tool_call_id": "call_huge", "name": "dump",
          "content": huge_output, "_tool_call_uid": "77777777777777777777777777777777"},
     ]
-    events, skipped, reasons = compute_work_events(messages, owner="o", session_id="s")
+    events, skipped, reasons = compute_work_events(
+        messages, owner="o", session_id="s", hmac_key=_TEST_HMAC_KEY,
+    )
     assert skipped == 0, reasons
     assert len(events) == 1
     event = events[0]
@@ -107,11 +113,37 @@ def test_work_event_never_carries_raw_tool_output():
     assert "SECRET_TOKEN_abc123" not in str(event)
     assert "x" * 100 not in str(event)
     assert len(event["summary"]) <= 500
-    assert event["content_hash"] == hashlib.sha256(huge_output.encode("utf-8")).hexdigest()
+    assert event["content_hash"] == hmac.new(
+        _TEST_HMAC_KEY, huge_output.encode("utf-8"), hashlib.sha256,
+    ).hexdigest()
+    assert event["content_hash"] != hashlib.sha256(huge_output.encode("utf-8")).hexdigest(), (
+        "a keyed hash must not collapse to the plain unkeyed sha256 -- that would still be "
+        "brute-forceable for a short secret without knowing the key defeats that"
+    )
     # The event dict itself must not even carry a "content"/"raw" field as a landmine for a future caller.
     assert "content" not in event
     assert "raw" not in event
     assert "raw_content" not in event
+
+
+def test_content_hash_is_none_without_an_hmac_key_not_a_plain_unkeyed_hash():
+    """No key configured -> no hash at all, never a silent fallback to a
+    plain sha256 (which would still be brute-forceable for a short
+    secret-bearing tool output)."""
+    messages = [
+        {"role": "user", "content": "Check the token."},
+        {
+            "role": "assistant", "content": None,
+            "tool_calls": [{"id": "call_tok", "type": "function",
+                             "function": {"name": "check_token", "arguments": "{}"}}],
+            "_tool_call_uids": {"call_tok": "99999999999999999999999999999999"},
+        },
+        {"role": "tool", "tool_call_id": "call_tok", "name": "check_token",
+         "content": "abc123", "_tool_call_uid": "99999999999999999999999999999999"},
+    ]
+    events, skipped, reasons = compute_work_events(messages, owner="o", session_id="s")
+    assert skipped == 0, reasons
+    assert events[0]["content_hash"] is None
 
 
 def test_summary_is_never_a_content_excerpt_even_when_short():
