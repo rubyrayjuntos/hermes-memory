@@ -16,6 +16,7 @@ from .extract_model_client import ModelBatchInput
 from .extract_publish import publish_model, publish_rules
 from .model_extract import grounded_claims
 from .versions import WORK_VERSION
+from .work_status import classify_verdict, infer_status
 
 logger = logging.getLogger("hermes_memory.extraction")
 
@@ -260,33 +261,82 @@ async def _run_work(store, worker: str) -> int:
                 if outcome_span_id is not None else None
             )
 
-            # Self-reports (assistant-only accounts, even ones using success
-            # language like "tests pass") and work_event status codes are
-            # supporting evidence only -- they already sit in work_event,
-            # joinable by (owner, session_id, span range), for a future
-            # confirmation step to consult. Nothing in this slice promotes
-            # status past 'unknown': only an explicit user verdict can, and
-            # that confirmation path is T5.4's job, not this one's.
+            # T5.4: status-source priority -- an explicit, unambiguous
+            # user verdict span outranks eval/test status in work_event,
+            # which outranks 'unknown'. Self-reports (assistant-only
+            # accounts, even success-sounding ones like "tests pass")
+            # never appear in user_verdicts at all -- only USER spans do.
+            reason_span_id: Optional[int] = None
+            reason_event_id: Optional[int] = None
             status = "unknown"
+            reason: Optional[str] = None
+            matched_user_span_id: Optional[int] = None
+            for user_span in user_spans:
+                span_id = int(user_span["id"])
+                verdict = classify_verdict(authored_by_span[span_id])
+                if verdict is not None:
+                    matched_user_span_id = span_id
+                    status, reason = verdict, f"explicit user verdict: {verdict}"
+                    break
+            if matched_user_span_id is not None:
+                reason_span_id = matched_user_span_id
+            else:
+                event_rows = await conn.fetch(
+                    "SELECT id, status_code FROM work_event "
+                    "WHERE owner = $1 AND session_id = $2 AND span_id BETWEEN $3 AND $4 "
+                    "ORDER BY id",
+                    owner, session_id, int(first_id), int(last_id),
+                )
+                codes = [row["status_code"] for row in event_rows if row["status_code"] is not None]
+                status, reason = infer_status(user_verdicts=[], work_event_status_codes=codes)
+                if status in ("done", "failed"):
+                    representative = next(
+                        (row for row in event_rows
+                         if status == "failed" and row["status_code"] not in (None, 0)
+                         or status == "done" and row["status_code"] == 0),
+                        None,
+                    )
+                    if representative is not None:
+                        reason_event_id = int(representative["id"])
 
             topic_key = f"session:{session_id}"
             async with conn.transaction():
+                # T5.3: "under an owner/topic lock, insert the successor,
+                # upsert work_item_current, and mark the predecessor
+                # superseded in the same transaction." Same advisory-lock
+                # convention as store_claims.py's timeline lock.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    f"work_item_current|{owner}|{topic_key}",
+                )
+                predecessor = await conn.fetchrow(
+                    "SELECT work_item_id FROM work_item_current WHERE owner = $1 AND topic_key = $2",
+                    owner, topic_key,
+                )
                 item_row = await conn.fetchrow(
                     "INSERT INTO work_item (owner, session_id, topic_key, source_op_id, "
-                    "ask_summary, outcome_summary, status, ask_span_id, outcome_span_id, "
-                    "extractor_version) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
+                    "ask_summary, outcome_summary, status, reason, reason_span_id, "
+                    "reason_event_id, ask_span_id, outcome_span_id, extractor_version) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) "
                     "ON CONFLICT (owner, source_op_id) DO NOTHING "
                     "RETURNING id",
                     owner, session_id, topic_key, op_id, ask_summary, outcome_summary,
-                    status, ask_span_id, outcome_span_id, WORK_VERSION,
+                    status, reason, reason_span_id, reason_event_id,
+                    ask_span_id, outcome_span_id, WORK_VERSION,
                 )
                 if item_row is not None:
+                    new_id = int(item_row["id"])
+                    predecessor_id = int(predecessor["work_item_id"]) if predecessor else None
+                    if predecessor_id is not None and predecessor_id != new_id:
+                        await conn.execute(
+                            "UPDATE work_item SET superseded_by = $1 WHERE id = $2 AND owner = $3",
+                            new_id, predecessor_id, owner,
+                        )
                     await conn.execute(
                         "INSERT INTO work_item_current (owner, topic_key, work_item_id) "
                         "VALUES ($1, $2, $3) "
                         "ON CONFLICT (owner, topic_key) DO UPDATE SET work_item_id = EXCLUDED.work_item_id",
-                        owner, topic_key, int(item_row["id"]),
+                        owner, topic_key, new_id,
                     )
         return 1 if await store.job_done(job_id, fence) else 0
     except Exception as exc:

@@ -1,20 +1,19 @@
 """Spec 5 T5.3: extraction_worker._run_work, the extract_work job processor.
 
-Covers exactly the four requirements this slice is scoped to:
+Covers the T5.3 requirements plus T5.4 (status-source priority), now
+that both are built:
   1. strip_memory_blocks runs before extraction touches the conversation text.
-  2. Self-reports (assistant-only) stay status='unknown'; work_event
-     structural signals are supporting evidence only, never a promotion
-     to current -- no confirmation path exists yet in this slice (T5.4's
-     job), so status is unconfirmed even when a user verdict-like phrase
-     is present.
+  2. Self-reports (assistant-only prose) never set status on their own --
+     only an explicit user verdict span (T5.4) or a work_event
+     status_code (T5.4, tier 2) can, in that priority order.
   3. A retried extract_work job writes each work_item exactly once
      (ON CONFLICT (owner, source_op_id) DO NOTHING, keyed on the job's
      own op_id).
   4. work_capture off means the worker never claims an extract_work job,
      even when one already exists in the table.
 
-Full status-source priority (T5.4), artifact verification (T5.5) and
-model-based summarization (T5.6) are explicitly out of scope here.
+Artifact verification (T5.5) and model-based summarization (T5.6) are
+explicitly out of scope here.
 """
 from __future__ import annotations
 
@@ -109,11 +108,12 @@ async def test_assistant_only_self_report_stays_unconfirmed(store, clean_hermes_
 
 
 @pytest.mark.asyncio
-async def test_user_verdict_phrase_still_stays_unconfirmed_in_this_slice(store, clean_hermes_test_db):
-    """No confirmation path exists yet (T5.4) -- even an explicit-looking
-    user verdict must not be silently promoted to done/failed by this
-    worker. Guards against accidentally wiring in an untested
-    cue/label policy, which the spec explicitly warns against."""
+async def test_explicit_user_verdict_now_confirms_status_t54(store, clean_hermes_test_db):
+    """T5.4 (status-source priority) is now built: an explicit,
+    unambiguous user verdict span DOES set status, with reason_span_id
+    pointing at the span that said it -- this supersedes the old
+    "stays unconfirmed in this slice" placeholder from before T5.4 was
+    assigned and built."""
     session_id = "s3"
     first_id = await _insert_span(store, session_id, "user", "Please run the eval.")
     await _insert_span(store, session_id, "assistant", "Done, the eval passed.")
@@ -127,23 +127,30 @@ async def test_user_verdict_phrase_still_stays_unconfirmed_in_this_slice(store, 
 
     async with store.pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT status FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+            "SELECT status, reason, reason_span_id FROM work_item "
+            "WHERE owner = $1 AND session_id = $2", OWNER, session_id,
         )
-    assert row["status"] == "unknown"
+    assert row["status"] == "failed"
+    assert row["reason"]
+    assert row["reason_span_id"] == last_id
 
 
 @pytest.mark.asyncio
-async def test_work_event_status_is_supporting_evidence_not_a_promotion(store, clean_hermes_test_db):
-    """A tool's success/error status_code informs the record but never
-    promotes status to done/failed on its own -- only a user turn can
-    do that (not built in this slice, so status stays unknown either way)."""
+async def test_work_event_status_promotes_when_no_user_verdict_exists_t54(
+    store, clean_hermes_test_db,
+):
+    """T5.4: with no explicit user verdict present, a test/eval tool's
+    status_code in work_event is tier-2 evidence and DOES set status --
+    self-reports (the assistant's own prose) never do this on their own,
+    but a real tool exit code is a different, structural signal the spec
+    explicitly ranks above 'unknown'."""
     session_id = "s4"
     first_id = await _insert_span(store, session_id, "user", "Run the test suite please.")
     last_id = await _insert_span(store, session_id, "assistant", "I ran the suite and it passed.")
     async with store.pool.acquire() as conn:
-        await conn.execute(
+        event_id = await conn.fetchval(
             "INSERT INTO work_event (owner, session_id, span_id, source_event_id, tool, status_code, summary) "
-            "VALUES ($1, $2, $3, 'uid-1:0', 'run_tests', 0, 'run_tests: 42 chars')",
+            "VALUES ($1, $2, $3, 'uid-1:0', 'run_tests', 0, 'run_tests: 42 chars') RETURNING id",
             OWNER, session_id, last_id,
         )
     await _enqueue_extract_work(store, session_id, first_id, last_id)
@@ -153,9 +160,12 @@ async def test_work_event_status_is_supporting_evidence_not_a_promotion(store, c
 
     async with store.pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT status FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+            "SELECT status, reason, reason_event_id FROM work_item "
+            "WHERE owner = $1 AND session_id = $2", OWNER, session_id,
         )
-    assert row["status"] == "unknown"
+    assert row["status"] == "done"
+    assert row["reason"]
+    assert row["reason_event_id"] == event_id
 
 
 @pytest.mark.asyncio

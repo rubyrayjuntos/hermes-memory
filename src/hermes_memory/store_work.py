@@ -43,3 +43,51 @@ class StoreWorkMixin:
                     if row is not None:
                         inserted += 1
         return inserted
+
+    async def retract_work_item(self, owner: str, topic_key: str) -> bool:
+        """Spec 5 T5.4: an explicit, separate USER operation -- never
+        inferred from conversation text by the rules/model extractor
+        (see work_status.py: a phrase that merely LOOKS like a retraction
+        classifies as 'abandoned', not 'retracted'). Marks the current
+        item 'retracted' and restores its predecessor as current if one
+        exists, clearing the predecessor's own superseded_by so it is
+        genuinely current again, not still pointing forward. Returns
+        False (a no-op) when the topic has no current item at all."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    f"work_item_current|{owner}|{topic_key}",
+                )
+                current = await conn.fetchrow(
+                    "SELECT work_item_id FROM work_item_current WHERE owner = $1 AND topic_key = $2",
+                    owner, topic_key,
+                )
+                if current is None:
+                    return False
+                current_id = int(current["work_item_id"])
+                await conn.execute(
+                    "UPDATE work_item SET status = 'retracted' WHERE id = $1 AND owner = $2",
+                    current_id, owner,
+                )
+                predecessor = await conn.fetchrow(
+                    "SELECT id FROM work_item WHERE owner = $1 AND superseded_by = $2",
+                    owner, current_id,
+                )
+                if predecessor is not None:
+                    predecessor_id = int(predecessor["id"])
+                    await conn.execute(
+                        "UPDATE work_item SET superseded_by = NULL WHERE id = $1 AND owner = $2",
+                        predecessor_id, owner,
+                    )
+                    await conn.execute(
+                        "UPDATE work_item_current SET work_item_id = $1 "
+                        "WHERE owner = $2 AND topic_key = $3",
+                        predecessor_id, owner, topic_key,
+                    )
+                else:
+                    await conn.execute(
+                        "DELETE FROM work_item_current WHERE owner = $1 AND topic_key = $2",
+                        owner, topic_key,
+                    )
+        return True
