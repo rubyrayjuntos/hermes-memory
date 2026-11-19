@@ -1,0 +1,38 @@
+{
+  "fixture": "paraphrase_slice.json",
+  "extract_mode": "rules_then_model",
+  "extract_model": "nvidia/nemotron-3.5-lightning:free",
+  "extract_model_schema": "json_object",
+  "owner": "golden-paraphrase-66905298f19a",
+  "claim_metrics": {
+    "expected": 3,
+    "actual": 0,
+    "matched": 0,
+    "precision": null,
+    "recall": 0.0,
+    "f1": 0.0
+  },
+  "actual_claims": [],
+  "pasted_span_false_grounding_count": 0,
+  "junk_string_hits": 0,
+  "abstain_false_positives": 0,
+  "jobs": {
+    "row_count": 7,
+    "complete_rows": 7,
+    "rules_jobs": 7,
+    "rules_done": 7,
+    "model_jobs": 1,
+    "model_done": 1,
+    "jobs_pending": 0,
+    "jobs_failed": 0
+  },
+  "error_counts": {},
+  "call_errors": [],
+  "latency_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "mean": null,
+    "wall_ms": 43103.5
+  }
+}

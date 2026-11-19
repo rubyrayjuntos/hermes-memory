@@ -18,7 +18,6 @@ _LIVE = "('pending', 'leased', 'retryable')"
 MODEL_BATCH_SIZE = 8
 MODEL_BATCH_IDLE_S = 600
 MODEL_BATCH_MAX_WAIT_S = 1800
-MODEL_BATCH_MAX_WAIT_S = 1800
 
 
 def _payload(raw) -> dict:

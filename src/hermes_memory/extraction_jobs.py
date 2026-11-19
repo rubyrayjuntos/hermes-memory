@@ -66,8 +66,10 @@ def should_enqueue_model(text: str, recent_texts=()) -> bool:
     self_claims = extract_self_assertions(value)
     if _has_first_person_cue(value) and not self_claims:
         return True
-    if not claims:
-        return not self_claims
+    if self_claims:
+        # Rules already captured the self-assertion in full; nothing left
+        # for the model to usefully add from this turn.
+        return False
 
     covered = {
         normalize_name(str(claim.get(key) or ""))

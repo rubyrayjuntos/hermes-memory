@@ -1,0 +1,47 @@
+{
+  "fixture": "paraphrase_slice.json",
+  "extract_mode": "rules_then_model",
+  "extract_model": "llama3.2:3b",
+  "extract_model_schema": "json_object",
+  "owner": "golden-paraphrase-5676aef5a74b",
+  "claim_metrics": {
+    "expected": 3,
+    "actual": 1,
+    "matched": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0
+  },
+  "actual_claims": [
+    {
+      "subject": "home",
+      "verb": "lives_in",
+      "object": "New York",
+      "polarity": "positive",
+      "status": "grounded",
+      "current": true
+    }
+  ],
+  "pasted_span_false_grounding_count": 0,
+  "junk_string_hits": 0,
+  "abstain_false_positives": 0,
+  "jobs": {
+    "row_count": 7,
+    "complete_rows": 7,
+    "rules_jobs": 7,
+    "rules_done": 7,
+    "model_jobs": 4,
+    "model_done": 4,
+    "jobs_pending": 0,
+    "jobs_failed": 0
+  },
+  "error_counts": {},
+  "call_errors": [],
+  "latency_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "mean": null,
+    "wall_ms": 7743.9
+  }
+}
