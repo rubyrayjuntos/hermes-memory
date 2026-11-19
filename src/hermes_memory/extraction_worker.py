@@ -26,10 +26,12 @@ ModelFn = Callable[[ModelBatchInput], Any]
 EmbedFn = Callable[[Sequence[str]], Awaitable[list]]
 
 
-async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> Optional[ModelBatchInput]:
+async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str, *,
+                                  allow_assistant: bool = False) -> Optional[ModelBatchInput]:
     from .reception import extract_assertions, extract_self_assertions
-    from .turn_filter import segment_turn
+    from .turn_filter import segment_turn, strip_memory_blocks
 
+    allowed_roles = ("user", "assistant") if allow_assistant else ("user",)
     turns = []
     rule_findings = []
     for span_id in span_ids:
@@ -38,9 +40,14 @@ async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> 
             "WHERE id = $1 AND agent_identity = $2",
             int(span_id), owner,
         )
-        if span is None or span["role"] != "user" or not (span["content"] or "").strip():
+        if span is None or span["role"] not in allowed_roles or not (span["content"] or "").strip():
             continue
-        text = str(span["content"])
+        role = str(span["role"])
+        # T4.3: the stripper runs before anything else touches the text --
+        # an injected <memory>/<PAST_CONTEXT>/<grounded_facts>/
+        # <supporting_turns> block must never feed back into extraction
+        # (would otherwise let the system confirm its own injected memory).
+        text = strip_memory_blocks(str(span["content"]))
         authored = "".join(
             text[seg.start:seg.end] for seg in segment_turn(text) if seg.kind == "authored"
         )
@@ -56,14 +63,18 @@ async def _load_model_batch_input(conn, span_ids: Sequence[int], owner: str) -> 
             "span_id": int(span_id),
             "text": authored,
             "context": str(previous["content"]) if previous and previous["content"] else "",
+            "speaker": role,
         })
-        rule_findings.extend(
-            {"span_id": int(span_id), **claim} for claim in extract_assertions(authored)
-        )
-        # SPEC2: extract_self_assertions after extract_assertions (authored segments only)
-        rule_findings.extend(
-            {"span_id": int(span_id), **claim} for claim in extract_self_assertions(authored)
-        )
+        if role == "user":
+            # Site 1 invariant: rules stay user-only, including the
+            # rule_findings hints passed alongside the model prompt.
+            rule_findings.extend(
+                {"span_id": int(span_id), **claim} for claim in extract_assertions(authored)
+            )
+            # SPEC2: extract_self_assertions after extract_assertions (authored segments only)
+            rule_findings.extend(
+                {"span_id": int(span_id), **claim} for claim in extract_self_assertions(authored)
+            )
     if not turns:
         return None
     verbs = {r["verb"] for r in await conn.fetch("SELECT verb FROM verb")}
@@ -93,7 +104,8 @@ async def _run_rules(store, worker: str, embed: EmbedFn) -> int:
     return 1
 
 
-async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn) -> int:
+async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn, *,
+                     allow_assistant: bool = False) -> int:
     claimed = await store.job_claim("extract_model", worker, 1, lease_s=MODEL_LEASE_S,
                                     session_ordered=True, defer_backfill=True,
                                     ready_model_batch=True)
@@ -110,7 +122,7 @@ async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn) -> int:
             span_ids = payload.get("span_ids", [payload.get("span_id")])
             loaded = await _load_model_batch_input(
                 conn, [int(span_id) for span_id in span_ids if span_id is not None],
-                owner_row["owner"],
+                owner_row["owner"], allow_assistant=allow_assistant,
             )
         if loaded is None:
             return 1 if await store.job_done(job_id, fence) else 0
@@ -121,6 +133,9 @@ async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn) -> int:
         if inspect.isawaitable(raw):
             raw = await raw
         turn_text_by_id = {int(turn["span_id"]): str(turn["text"]) for turn in loaded.turns}
+        turn_speaker_by_id = {
+            int(turn["span_id"]): str(turn.get("speaker") or "user") for turn in loaded.turns
+        }
         claims = []
         raw_claims = raw.get("claims", []) if isinstance(raw, dict) else []
         for candidate in raw_claims if isinstance(raw_claims, list) else []:
@@ -132,7 +147,10 @@ async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn) -> int:
             turn = turn_text_by_id.get(span_id)
             if turn is None:
                 continue
-            accepted = grounded_claims({"claims": [candidate]}, turn, [], loaded.verbs)
+            speaker = turn_speaker_by_id.get(span_id, "user")
+            accepted = grounded_claims(
+                {"claims": [candidate]}, turn, [], loaded.verbs, speaker=speaker,
+            )
             claims.extend({**claim, "span_id": span_id} for claim in accepted)
         usage = raw.get("_usage") if isinstance(raw, dict) else None
         if isinstance(usage, dict):
@@ -163,9 +181,12 @@ async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optiona
     Never raises.
     """
     worker = str(getattr(provider, "_outbox_owner", "") or "extraction")
+    allow_assistant = bool(getattr(getattr(provider, "config", None),
+                                   "extract_assistant_replies", False))
     finished = 0
     for step in (lambda: _run_rules(store, worker, embed),
-                 (lambda: _run_model(store, worker, model, embed)) if model is not None else None):
+                 (lambda: _run_model(store, worker, model, embed,
+                                     allow_assistant=allow_assistant)) if model is not None else None):
         if step is None:
             continue
         try:

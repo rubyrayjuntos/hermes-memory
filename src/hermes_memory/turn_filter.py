@@ -186,3 +186,76 @@ def _noise_reason(
     from .reception import extract_assertions
 
     return "short_user_without_assertion" if not extract_assertions(stripped) else None
+
+
+# Spec 4 T4.3: tags the live provider actually injects into a chat turn
+# (provider_helpers.py: <memory>/<grounded>.../</memory>, <PAST_CONTEXT>,
+# format_facts' <grounded_facts spans="...">/<supporting_turns>). Extend
+# this tuple when a new injected tag is added (e.g. Spec 6's <prior_work>)
+# -- never strip an unlisted tag name.
+_MEMORY_BLOCK_TAGS = ("memory", "PAST_CONTEXT", "grounded_facts", "supporting_turns")
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_MEMORY_BLOCK_BOUNDARY_RE = re.compile(
+    r"<(/?)(" + "|".join(_MEMORY_BLOCK_TAGS) + r")(?:\s[^>]*)?>",
+    re.IGNORECASE,
+)
+
+
+def strip_memory_blocks(text: str) -> str:
+    """Remove injected context blocks before extraction ever sees the text.
+
+    Recognizes only the exact known tags in ``_MEMORY_BLOCK_TAGS`` (never an
+    unlisted name), tracks nesting of whichever tag opened a stripped span,
+    and preserves code fences -- a pasted example that merely shows the tag
+    syntax is never touched. An unmatched opening tag removes through
+    end-of-input (we cannot know where an unterminated injected block was
+    meant to end); an unmatched closing tag is dropped alone, never
+    discarding surrounding prose. Apply to extractor input for both
+    speakers. Never logs the content.
+    """
+    if not text:
+        return text
+
+    fences: list[str] = []
+
+    def _stash(match: "re.Match[str]") -> str:
+        fences.append(match.group(0))
+        return f"\x00FENCE{len(fences) - 1}\x00"
+
+    protected = _CODE_FENCE_RE.sub(_stash, text)
+
+    out: list[str] = []
+    pos = 0
+    n = len(protected)
+    depth = 0
+    open_tag: str | None = None
+    while pos < n:
+        match = _MEMORY_BLOCK_BOUNDARY_RE.search(protected, pos)
+        if match is None:
+            if depth == 0:
+                out.append(protected[pos:])
+            break
+        is_close = bool(match.group(1))
+        tag = match.group(2)
+        if depth == 0:
+            out.append(protected[pos:match.start()])
+            if not is_close:
+                depth = 1
+                open_tag = tag
+            # An unmatched close tag at depth 0 is simply dropped (its own
+            # text only); surrounding prose on both sides is kept.
+            pos = match.end()
+            continue
+        if tag == open_tag:
+            if is_close:
+                depth -= 1
+                if depth == 0:
+                    open_tag = None
+            else:
+                depth += 1
+        pos = match.end()
+
+    stripped = "".join(out)
+    for idx, fence in enumerate(fences):
+        stripped = stripped.replace(f"\x00FENCE{idx}\x00", fence)
+    return stripped
