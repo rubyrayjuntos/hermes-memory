@@ -12,10 +12,13 @@ CREATE TABLE IF NOT EXISTS work_event (   -- tool-result digests; no raw output
   source_event_id TEXT NOT NULL,          -- stable tool-call/event id for replay deduplication
   tool TEXT NOT NULL,
   status_code INT,
+  summary TEXT,                           -- bounded human-readable digest; NEVER the raw tool output
+  content_hash TEXT,                      -- sha256 hex of the full raw output, for drift/identity checks only
   refs JSONB NOT NULL DEFAULT '{}',        -- allowlisted, size-capped paths/refs/counts only
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (owner, id),
   UNIQUE (owner, session_id, source_event_id),
+  CONSTRAINT work_event_summary_bounded CHECK (summary IS NULL OR char_length(summary) <= 500),
   FOREIGN KEY (owner, span_id) REFERENCES conversations (agent_identity, id) ON DELETE SET NULL (span_id)
 );
 

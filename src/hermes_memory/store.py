@@ -42,6 +42,7 @@ from .store_explorer import StoreExplorerMixin
 from .store_jobs import StoreJobsMixin
 from .store_merge import StoreMergeMixin
 from .store_vec import _cosine_similarity, _parse_pgvector  # noqa: F401
+from .store_work import StoreWorkMixin
 
 try:
     from psycopg.sql import SQL, Identifier
@@ -272,7 +273,7 @@ OUTBOX_MAX_ATTEMPTS = 5  # replays before a write_outbox row is parked
 
 
 class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMixin,
-            StoreJobsMixin, StoreExplorerMixin):
+            StoreJobsMixin, StoreExplorerMixin, StoreWorkMixin):
     """Async data access over the pgvector + AGE schema."""
 
     def __init__(

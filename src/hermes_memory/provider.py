@@ -350,14 +350,21 @@ class HybridAgeMemoryProvider(MemoryProvider):
         for role, content in (("user", user_content), ("assistant", assistant_content)):
             if not content or _is_noise(content, role=role):
                 continue
-            self._enqueue_write({
+            item = {
                 "type": "turn",
                 "session_id": sid,
                 "agent_identity": self._agent_identity,
                 "role": role,
                 "content": content[:8000],
                 "previous_conversation_id": self._last_turn_id.get(sid),
-            })
+            }
+            if messages is not None:
+                # T5.1: only the assistant item's write triggers work-event
+                # capture (see _capture_work_events) -- both items carry the
+                # same messages snapshot so that still holds even if a
+                # future caller reorders the loop below.
+                item["messages"] = messages
+            self._enqueue_write(item)
         self._track_turn(user_content, assistant_content)
 
     def on_memory_write(
@@ -851,6 +858,37 @@ class HybridAgeMemoryProvider(MemoryProvider):
         except Exception:
             logger.warning("model extraction batch enqueue failed", exc_info=True)
 
+    async def _capture_work_events(self, store: Any, conv_id: int, item: dict) -> None:
+        """Spec 5 T5.1: capture tool-digest work_event rows from `messages`,
+        once per sync_turn call (on the assistant item -- the pair is
+        already both queued durably by the time this runs). Never raises,
+        never stores raw tool output."""
+        config = getattr(self, "config", None)
+        if not bool(getattr(config, "work_capture", False)):
+            return
+        if item.get("role") != "assistant":
+            return
+        messages = item.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return
+        capture_batch = getattr(store, "work_event_capture_batch", None)
+        if not callable(capture_batch):
+            return
+        try:
+            from .work_capture import compute_work_events
+
+            owner = item.get("agent_identity") or self._agent_identity
+            session_id = str(item.get("session_id") or self._session_id or "default")
+            events, skipped, reasons = compute_work_events(
+                messages, owner=owner, session_id=session_id, span_id=int(conv_id),
+            )
+            if skipped:
+                logger.info("work-event capture skipped %d occurrence(s): %s", skipped, reasons)
+            if events:
+                await capture_batch(events)
+        except Exception:
+            logger.warning("work-event capture failed", exc_info=True)
+
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
         from .extract_nouns import extract_nouns
@@ -946,6 +984,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("reception stage failed", exc_info=True)
 
         await self._enqueue_extraction_jobs(store, int(conv_id), item)
+        await self._capture_work_events(store, int(conv_id), item)
 
         vertex_id = None
         try:
