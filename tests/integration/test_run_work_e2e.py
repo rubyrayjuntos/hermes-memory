@@ -1,0 +1,228 @@
+"""Spec 5 T5.3: extraction_worker._run_work, the extract_work job processor.
+
+Covers exactly the four requirements this slice is scoped to:
+  1. strip_memory_blocks runs before extraction touches the conversation text.
+  2. Self-reports (assistant-only) stay status='unknown'; work_event
+     structural signals are supporting evidence only, never a promotion
+     to current -- no confirmation path exists yet in this slice (T5.4's
+     job), so status is unconfirmed even when a user verdict-like phrase
+     is present.
+  3. A retried extract_work job writes each work_item exactly once
+     (ON CONFLICT (owner, source_op_id) DO NOTHING, keyed on the job's
+     own op_id).
+  4. work_capture off means the worker never claims an extract_work job,
+     even when one already exists in the table.
+
+Full status-source priority (T5.4), artifact verification (T5.5) and
+model-based summarization (T5.6) are explicitly out of scope here.
+"""
+from __future__ import annotations
+
+import pytest
+
+from hermes_memory import extraction_worker
+from hermes_memory.config import HybridAgeConfig
+
+pytestmark = [pytest.mark.store, pytest.mark.integration]
+
+OWNER = "spec5-t53-e2e"
+WORKER = "test-worker"
+
+
+class _FakeEmbedder:
+    async def embed_text(self, text: str, *, as_query: bool = False):
+        vec = [0.0] * 768
+        vec[0] = 0.5
+        return vec
+
+
+async def _embed(texts):
+    return [[0.5] + [0.0] * 767 for _ in texts]
+
+
+async def _insert_span(store, session_id: str, role: str, content: str) -> int:
+    async with store.pool.acquire() as conn:
+        return await conn.fetchval(
+            "INSERT INTO conversations (agent_identity, session_id, role, content, drain_status) "
+            "VALUES ($1, $2, $3, $4, 'complete') RETURNING id",
+            OWNER, session_id, role, content,
+        )
+
+
+async def _enqueue_extract_work(store, session_id: str, first_id: int, last_id: int) -> str:
+    op_id = f"extract_work:{session_id}:{first_id}-{last_id}"
+    await store.job_add(
+        OWNER, "extract_work", op_id,
+        {"owner": OWNER, "session_id": session_id, "first_span_id": first_id, "last_span_id": last_id},
+        session_id=session_id,
+    )
+    return op_id
+
+
+def _fake_provider(*, work_capture: bool):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        _outbox_owner="w", config=HybridAgeConfig(dsn="unused", work_capture=work_capture),
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_block_is_stripped_before_extraction(store, clean_hermes_test_db):
+    session_id = "s1"
+    quoting_reply = (
+        "Here's what I remember:\n<memory>\n  you lives_in Reykjavik\n</memory>\nAll set."
+    )
+    first_id = await _insert_span(store, session_id, "user", "What do you remember about me?")
+    last_id = await _insert_span(store, session_id, "assistant", quoting_reply)
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT outcome_summary FROM work_item WHERE owner = $1 AND session_id = $2",
+            OWNER, session_id,
+        )
+    assert row is not None
+    assert "Reykjavik" not in (row["outcome_summary"] or "")
+
+
+@pytest.mark.asyncio
+async def test_assistant_only_self_report_stays_unconfirmed(store, clean_hermes_test_db):
+    session_id = "s2"
+    first_id = await _insert_span(store, session_id, "user", "Please fix the bug in provider.py.")
+    last_id = await _insert_span(
+        store, session_id, "assistant",
+        "I fixed the bug in provider.py and the tests pass now.",
+    )
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+        )
+    assert row["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_user_verdict_phrase_still_stays_unconfirmed_in_this_slice(store, clean_hermes_test_db):
+    """No confirmation path exists yet (T5.4) -- even an explicit-looking
+    user verdict must not be silently promoted to done/failed by this
+    worker. Guards against accidentally wiring in an untested
+    cue/label policy, which the spec explicitly warns against."""
+    session_id = "s3"
+    first_id = await _insert_span(store, session_id, "user", "Please run the eval.")
+    await _insert_span(store, session_id, "assistant", "Done, the eval passed.")
+    last_id = await _insert_span(
+        store, session_id, "user", "These numbers are fake, that eval did not really pass.",
+    )
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+        )
+    assert row["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_work_event_status_is_supporting_evidence_not_a_promotion(store, clean_hermes_test_db):
+    """A tool's success/error status_code informs the record but never
+    promotes status to done/failed on its own -- only a user turn can
+    do that (not built in this slice, so status stays unknown either way)."""
+    session_id = "s4"
+    first_id = await _insert_span(store, session_id, "user", "Run the test suite please.")
+    last_id = await _insert_span(store, session_id, "assistant", "I ran the suite and it passed.")
+    async with store.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO work_event (owner, session_id, span_id, source_event_id, tool, status_code, summary) "
+            "VALUES ($1, $2, $3, 'uid-1:0', 'run_tests', 0, 'run_tests: 42 chars')",
+            OWNER, session_id, last_id,
+        )
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+        )
+    assert row["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_retrying_the_same_job_writes_the_work_item_once(store, clean_hermes_test_db):
+    session_id = "s5"
+    first_id = await _insert_span(store, session_id, "user", "Please summarize the sprint plan.")
+    last_id = await _insert_span(
+        store, session_id, "assistant", "I put together a short summary of the sprint plan.",
+    )
+    op_id = await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    # Simulate a retry: re-insert the SAME op_id as a fresh pending job
+    # (as if the lease expired and the job was reclaimed) and process it again.
+    async with store.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE durable_job SET status = 'pending', attempts = 0 "
+            "WHERE owner = $1 AND kind = 'extract_work' AND op_id = $2",
+            OWNER, op_id,
+        )
+    finished_again = await extraction_worker._run_work(store, WORKER)
+    assert finished_again == 1
+
+    async with store.pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT count(*) FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+        )
+    assert count == 1, "a retried job must never create a second work_item row"
+
+
+@pytest.mark.asyncio
+async def test_work_capture_off_never_claims_an_extract_work_job(store, clean_hermes_test_db):
+    session_id = "s6"
+    first_id = await _insert_span(store, session_id, "user", "Please do a thing.")
+    last_id = await _insert_span(store, session_id, "assistant", "I did the thing.")
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    provider = _fake_provider(work_capture=False)
+    finished = await extraction_worker.run_extraction_once(provider, store, embed=_embed, model=None)
+    assert finished == 0
+
+    async with store.pool.acquire() as conn:
+        job_status = await conn.fetchval(
+            "SELECT status FROM durable_job WHERE owner = $1 AND kind = 'extract_work'", OWNER,
+        )
+        item_count = await conn.fetchval(
+            "SELECT count(*) FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+        )
+    assert job_status == "pending", "the job row must be untouched -- never even claimed"
+    assert item_count == 0
+
+
+@pytest.mark.asyncio
+async def test_work_capture_on_claims_and_processes_the_job(store, clean_hermes_test_db):
+    session_id = "s7"
+    first_id = await _insert_span(store, session_id, "user", "Please do another thing.")
+    last_id = await _insert_span(store, session_id, "assistant", "I did the other thing.")
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    provider = _fake_provider(work_capture=True)
+    finished = await extraction_worker.run_extraction_once(provider, store, embed=_embed, model=None)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        item_count = await conn.fetchval(
+            "SELECT count(*) FROM work_item WHERE owner = $1 AND session_id = $2", OWNER, session_id,
+        )
+    assert item_count == 1

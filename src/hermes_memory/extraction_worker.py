@@ -15,11 +15,13 @@ from typing import Any, Awaitable, Callable, Optional, Sequence
 from .extract_model_client import ModelBatchInput
 from .extract_publish import publish_model, publish_rules
 from .model_extract import grounded_claims
+from .versions import WORK_VERSION
 
 logger = logging.getLogger("hermes_memory.extraction")
 
 RULES_LEASE_S = 60.0
 MODEL_LEASE_S = 120.0
+WORK_LEASE_S = 120.0
 IDLE_INTERVAL_S = 5.0
 
 ModelFn = Callable[[ModelBatchInput], Any]
@@ -174,6 +176,124 @@ async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn, *,
         return 0
 
 
+_BOUNDED_EXCERPT_CHARS = 300
+
+
+def _bounded_excerpt(text: str) -> str:
+    """A length-capped excerpt for ask_summary/outcome_summary in this
+    rules-only slice. NOT a real summarizer (that is T5.6's job) --
+    bounded so a work_item never carries an unbounded pasted wall of
+    text, but still just an excerpt, not a model-condensed summary."""
+    text = (text or "").strip().replace("\n", " ")
+    if len(text) <= _BOUNDED_EXCERPT_CHARS:
+        return text
+    return text[: _BOUNDED_EXCERPT_CHARS - 15].rstrip() + " ...(truncated)"
+
+
+async def _run_work(store, worker: str) -> int:
+    """Spec 5 T5.3 (scoped slice): claim and process one `extract_work`
+    job. Strips memory blocks before anything else touches the text,
+    keeps every work_item at status='unknown' (self-reports and work_event
+    structural signals are supporting evidence only -- the confirmation
+    path from an explicit user verdict is T5.4's job, not built here),
+    and is idempotent on the job's own op_id via
+    ON CONFLICT (owner, source_op_id) DO NOTHING. Never raises."""
+    from .turn_filter import segment_turn, strip_memory_blocks
+
+    claimed = await store.job_claim("extract_work", worker, 1, lease_s=WORK_LEASE_S,
+                                    session_ordered=True)
+    if not claimed:
+        return 0
+    job_id, fence, payload = claimed[0]
+    try:
+        async with store.pool.acquire() as conn:
+            job_row = await conn.fetchrow(
+                "SELECT owner, op_id FROM durable_job WHERE id = $1", int(job_id),
+            )
+            if job_row is None:
+                return 1 if await store.job_done(job_id, fence) else 0
+            owner = str(job_row["owner"])
+            op_id = str(job_row["op_id"])
+            session_id = str(payload.get("session_id") or "")
+            first_id = payload.get("first_span_id")
+            last_id = payload.get("last_span_id")
+            if not session_id or first_id is None or last_id is None:
+                return 1 if await store.job_done(job_id, fence) else 0
+
+            spans = await conn.fetch(
+                "SELECT id, role, content FROM conversations "
+                "WHERE agent_identity = $1 AND session_id = $2 AND id BETWEEN $3 AND $4 "
+                "ORDER BY id",
+                owner, session_id, int(first_id), int(last_id),
+            )
+            if not spans:
+                return 1 if await store.job_done(job_id, fence) else 0
+
+            # T4.3: strip injected memory blocks before anything else
+            # touches the text, so a reply quoting its own injected
+            # memory can never feed back into a work item.
+            authored_by_span: dict[int, str] = {}
+            for span in spans:
+                stripped = strip_memory_blocks(str(span["content"] or ""))
+                authored = "".join(
+                    stripped[seg.start:seg.end]
+                    for seg in segment_turn(stripped) if seg.kind == "authored"
+                )
+                if authored.strip():
+                    authored_by_span[int(span["id"])] = authored
+
+            if not authored_by_span:
+                return 1 if await store.job_done(job_id, fence) else 0
+
+            user_spans = [s for s in spans if s["role"] == "user" and int(s["id"]) in authored_by_span]
+            assistant_spans = [
+                s for s in spans if s["role"] == "assistant" and int(s["id"]) in authored_by_span
+            ]
+            ask_span = user_spans[0] if user_spans else spans[0]
+            ask_span_id = int(ask_span["id"])
+            ask_summary = _bounded_excerpt(authored_by_span.get(ask_span_id, ""))
+
+            outcome_span = assistant_spans[-1] if assistant_spans else None
+            outcome_span_id = int(outcome_span["id"]) if outcome_span is not None else None
+            outcome_summary = (
+                _bounded_excerpt(authored_by_span[outcome_span_id])
+                if outcome_span_id is not None else None
+            )
+
+            # Self-reports (assistant-only accounts, even ones using success
+            # language like "tests pass") and work_event status codes are
+            # supporting evidence only -- they already sit in work_event,
+            # joinable by (owner, session_id, span range), for a future
+            # confirmation step to consult. Nothing in this slice promotes
+            # status past 'unknown': only an explicit user verdict can, and
+            # that confirmation path is T5.4's job, not this one's.
+            status = "unknown"
+
+            topic_key = f"session:{session_id}"
+            async with conn.transaction():
+                item_row = await conn.fetchrow(
+                    "INSERT INTO work_item (owner, session_id, topic_key, source_op_id, "
+                    "ask_summary, outcome_summary, status, ask_span_id, outcome_span_id, "
+                    "extractor_version) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
+                    "ON CONFLICT (owner, source_op_id) DO NOTHING "
+                    "RETURNING id",
+                    owner, session_id, topic_key, op_id, ask_summary, outcome_summary,
+                    status, ask_span_id, outcome_span_id, WORK_VERSION,
+                )
+                if item_row is not None:
+                    await conn.execute(
+                        "INSERT INTO work_item_current (owner, topic_key, work_item_id) "
+                        "VALUES ($1, $2, $3) "
+                        "ON CONFLICT (owner, topic_key) DO UPDATE SET work_item_id = EXCLUDED.work_item_id",
+                        owner, topic_key, int(item_row["id"]),
+                    )
+        return 1 if await store.job_done(job_id, fence) else 0
+    except Exception as exc:
+        await _settle_failure(store, job_id, fence, "extract_work", exc)
+        return 0
+
+
 async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optional[ModelFn]) -> int:
     """Claim and settle at most one rules job and one model job. Returns jobs finished.
 
@@ -183,10 +303,12 @@ async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optiona
     worker = str(getattr(provider, "_outbox_owner", "") or "extraction")
     allow_assistant = bool(getattr(getattr(provider, "config", None),
                                    "extract_assistant_replies", False))
+    work_capture = bool(getattr(getattr(provider, "config", None), "work_capture", False))
     finished = 0
     for step in (lambda: _run_rules(store, worker, embed),
                  (lambda: _run_model(store, worker, model, embed,
-                                     allow_assistant=allow_assistant)) if model is not None else None):
+                                     allow_assistant=allow_assistant)) if model is not None else None,
+                 (lambda: _run_work(store, worker)) if work_capture else None):
         if step is None:
             continue
         try:
