@@ -172,6 +172,41 @@ class StoreJobsMixin:
                     owner, op_id,
                 )
 
+    async def job_add_model_batch_standalone(self, owner: str, session_id: str, span_id: int, *,
+                                             event_time=None) -> None:
+        """Always start a fresh batch containing only ``span_id`` -- never
+        append to an existing pending batch for this session.
+
+        Spec 4: an assistant reply with no known paired user turn (its
+        preceding user turn was dropped as noise, so there is no
+        previous_conversation_id to pin against) must not fall back to
+        job_add_model_batch's "append to the latest pending session batch"
+        heuristic -- that could silently glom it onto a different, unrelated
+        user turn's accumulating batch. It either gets its own batch (this
+        method) or is skipped; it never shares a batch by arrival-order luck.
+        """
+        span = int(span_id)
+        payload = {
+            "span_ids": [span],
+            "extractor": "model",
+            "version": "1",
+            "usage": {"calls": 0},
+        }
+        op_id = f"{session_id}:orphan:{span}:1"
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO durable_job (owner, kind, op_id, payload, session_id, event_time, "
+                "priority, status, fence) VALUES ($1, 'extract_model', $2, $3::jsonb, $4, "
+                "coalesce($5, now()), 0, 'pending', 0) ON CONFLICT (owner, kind, op_id) DO NOTHING",
+                owner, op_id, json.dumps(payload), session_id, event_time,
+            )
+            await conn.execute(
+                "UPDATE durable_job SET payload = jsonb_set(payload, '{batch_started_at}', "
+                "to_jsonb(now()::text), true) WHERE owner = $1 AND kind = 'extract_model' "
+                "AND op_id = $2 AND payload->>'batch_started_at' IS NULL",
+                owner, op_id,
+            )
+
     async def job_flush_model_batches(self, owner: str, session_id: str) -> int:
         """Make pending batches for a session claimable when its conversation closes."""
         async with self.pool.acquire() as conn:

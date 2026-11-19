@@ -821,9 +821,15 @@ class HybridAgeMemoryProvider(MemoryProvider):
                         paired_with=int(paired_user_id), event_time=event_time,
                     )
                 else:
-                    # No known paired user turn (or store lacks the paired
-                    # method) -- enqueue independently rather than drop it.
-                    await add_batch(owner, session_id, int(conv_id), event_time=event_time)
+                    # No known paired user turn (its user turn was dropped as
+                    # noise, so there is no previous_conversation_id) -- start
+                    # a standalone batch. Never fall back to
+                    # job_add_model_batch's append-to-latest-pending
+                    # heuristic here: that could silently attach this orphan
+                    # to a different, unrelated user turn's batch.
+                    add_standalone = getattr(store, "job_add_model_batch_standalone", None)
+                    if callable(add_standalone):
+                        await add_standalone(owner, session_id, int(conv_id), event_time=event_time)
                 return
 
             from .extraction_jobs import should_enqueue_model
