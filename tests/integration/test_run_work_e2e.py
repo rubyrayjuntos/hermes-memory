@@ -136,21 +136,21 @@ async def test_explicit_user_verdict_now_confirms_status_t54(store, clean_hermes
 
 
 @pytest.mark.asyncio
-async def test_work_event_status_promotes_when_no_user_verdict_exists_t54(
+async def test_work_event_failure_promotes_when_no_user_verdict_exists_t54(
     store, clean_hermes_test_db,
 ):
     """T5.4: with no explicit user verdict present, a test/eval tool's
-    status_code in work_event is tier-2 evidence and DOES set status --
-    self-reports (the assistant's own prose) never do this on their own,
-    but a real tool exit code is a different, structural signal the spec
-    explicitly ranks above 'unknown'."""
+    non-zero status_code in work_event is tier-2 evidence and DOES set
+    status to failed -- self-reports (the assistant's own prose) never
+    do this on their own, but a real tool exit code is a different,
+    structural signal the spec explicitly ranks above 'unknown'."""
     session_id = "s4"
     first_id = await _insert_span(store, session_id, "user", "Run the test suite please.")
-    last_id = await _insert_span(store, session_id, "assistant", "I ran the suite and it passed.")
+    last_id = await _insert_span(store, session_id, "assistant", "I ran the suite, done.")
     async with store.pool.acquire() as conn:
         event_id = await conn.fetchval(
             "INSERT INTO work_event (owner, session_id, span_id, source_event_id, tool, status_code, summary) "
-            "VALUES ($1, $2, $3, 'uid-1:0', 'run_tests', 0, 'run_tests: 42 chars') RETURNING id",
+            "VALUES ($1, $2, $3, 'uid-1:0', 'run_tests', 1, 'run_tests: 42 chars') RETURNING id",
             OWNER, session_id, last_id,
         )
     await _enqueue_extract_work(store, session_id, first_id, last_id)
@@ -163,9 +163,62 @@ async def test_work_event_status_promotes_when_no_user_verdict_exists_t54(
             "SELECT status, reason, reason_event_id FROM work_item "
             "WHERE owner = $1 AND session_id = $2", OWNER, session_id,
         )
-    assert row["status"] == "done"
+    assert row["status"] == "failed"
     assert row["reason"]
     assert row["reason_event_id"] == event_id
+
+
+@pytest.mark.asyncio
+async def test_work_event_success_alone_stays_unknown_t54(store, clean_hermes_test_db):
+    """Tightened T5.4 rule: a bare success status_code with no user
+    verdict must NOT confirm 'done' on its own -- a command can exit 0
+    while the actual work failed. This is the exact false confirmation
+    Spec 4 was built to prevent, one layer down."""
+    session_id = "s5"
+    first_id = await _insert_span(store, session_id, "user", "Run the test suite please.")
+    last_id = await _insert_span(store, session_id, "assistant", "I ran the suite, done.")
+    async with store.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO work_event (owner, session_id, span_id, source_event_id, tool, status_code, summary) "
+            "VALUES ($1, $2, $3, 'uid-1:0', 'run_tests', 0, 'run_tests: 42 chars')",
+            OWNER, session_id, last_id,
+        )
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, reason_event_id FROM work_item WHERE owner = $1 AND session_id = $2",
+            OWNER, session_id,
+        )
+    assert row["status"] == "unknown"
+    assert row["reason_event_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_later_user_turn_overrides_an_earlier_verdict_t54(store, clean_hermes_test_db):
+    """A later user turn can always reverse an earlier abandon/confirm --
+    the spec's own condition for letting 'abandoned' be text-inferred at
+    all. Picks the LAST matching span's id as reason_span_id, not the
+    first."""
+    session_id = "s6"
+    first_id = await _insert_span(store, session_id, "user", "Please build the thing.")
+    await _insert_span(store, session_id, "user", "Never mind, forget it.")
+    last_id = await _insert_span(store, session_id, "user", "Actually, confirmed, go ahead.")
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, reason_span_id FROM work_item WHERE owner = $1 AND session_id = $2",
+            OWNER, session_id,
+        )
+    assert row["status"] == "done"
+    assert row["reason_span_id"] == last_id
 
 
 @pytest.mark.asyncio

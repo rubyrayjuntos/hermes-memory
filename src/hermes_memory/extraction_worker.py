@@ -266,6 +266,8 @@ async def _run_work(store, worker: str) -> int:
             # which outranks 'unknown'. Self-reports (assistant-only
             # accounts, even success-sounding ones like "tests pass")
             # never appear in user_verdicts at all -- only USER spans do.
+            # The LAST matching user span wins (chronological override:
+            # a later turn can always reverse an earlier abandon/confirm).
             reason_span_id: Optional[int] = None
             reason_event_id: Optional[int] = None
             status = "unknown"
@@ -277,7 +279,6 @@ async def _run_work(store, worker: str) -> int:
                 if verdict is not None:
                     matched_user_span_id = span_id
                     status, reason = verdict, f"explicit user verdict: {verdict}"
-                    break
             if matched_user_span_id is not None:
                 reason_span_id = matched_user_span_id
             else:
@@ -289,11 +290,12 @@ async def _run_work(store, worker: str) -> int:
                 )
                 codes = [row["status_code"] for row in event_rows if row["status_code"] is not None]
                 status, reason = infer_status(user_verdicts=[], work_event_status_codes=codes)
-                if status in ("done", "failed"):
+                if status == "failed":
+                    # A success code alone never reaches here (infer_status
+                    # leaves it 'unknown' -- see work_status.py) -- only a
+                    # genuine failure code needs a reason_event_id.
                     representative = next(
-                        (row for row in event_rows
-                         if status == "failed" and row["status_code"] not in (None, 0)
-                         or status == "done" and row["status_code"] == 0),
+                        (row for row in event_rows if row["status_code"] not in (None, 0)),
                         None,
                     )
                     if representative is not None:
