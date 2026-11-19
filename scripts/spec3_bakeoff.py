@@ -27,11 +27,32 @@ def _norm(value: str | None) -> str:
     return s
 
 
+def _norm_role(role: str | None) -> str:
+    """Normalize role names for scoring: 'staff engineering' → 'staff engineer'."""
+    s = _norm(role)
+    if not s:
+        return s
+    # Gerund (-ing) to noun patterns for common role names
+    # "staff engineering" → "staff engineer"
+    # "software engineering" → "software engineer"
+    # "product management" → "product manager"
+    if s.endswith(" engineering"):
+        return s[:-3]  # Remove "ing"
+    if s.endswith(" management"):
+        return s.replace(" management", " manager")
+    return s
+
+
 def _claim_key(claim: dict) -> tuple[str, str, str, str, bool]:
+    verb = _norm(claim.get("verb"))
+    obj = _norm(claim.get("object"))
+    # For role_is verb, normalize the role name
+    if verb == "role_is":
+        obj = _norm_role(obj)
     return (
         _norm(claim.get("subject")),
-        _norm(claim.get("verb")),
-        _norm(claim.get("object")),
+        verb,
+        obj,
         _norm(claim.get("polarity") or "positive"),
         bool(claim.get("current")),
     )

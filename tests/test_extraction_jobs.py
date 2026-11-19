@@ -6,7 +6,7 @@ from hermes_memory.extraction_jobs import job_specs, should_enqueue_model
 def test_default_job_specs_only_enqueue_rules():
     specs = job_specs(42)
     assert specs == (
-        ("extract_rules", "42:rules:4", {"span_id": 42, "extractor": "rules", "version": "4"}),
+        ("extract_rules", "42:rules:5", {"span_id": 42, "extractor": "rules", "version": "5"}),
     )
     for _kind, _op, payload in specs:
         assert set(payload) == {"span_id", "extractor", "version"}
@@ -86,7 +86,7 @@ async def test_enqueue_defaults_to_rules_only_with_session_and_event_time():
     item = {"session_id": "s1", "captured_at": "2026-01-01T00:00:00Z", "agent_identity": "a"}
     await _provider()._enqueue_extraction_jobs(store, 42, item)
     assert [(c[0], c[1], c[2]) for c in store.calls] == [
-        ("a", "extract_rules", "42:rules:4"),
+        ("a", "extract_rules", "42:rules:5"),
     ]
     for _o, _k, _op, _payload, kw in store.calls:
         assert kw == {

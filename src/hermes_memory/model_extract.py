@@ -14,6 +14,14 @@ _FP_CUE = re.compile(
     r"\b(?:i|i'm|i've|i'd|i'll|me|my|mine|myself)\b",
     re.IGNORECASE,
 )
+_IMPLICIT_FP_VERBS = re.compile(
+    r"^(?:moved|started|joined|left)\b",
+    re.IGNORECASE,
+)
+_THIRD_PERSON_SUBJECT = re.compile(
+    r"\b(?:she|he|they|it|the\s+\w+)\s+(?:moved|started|joined|left)\b",
+    re.IGNORECASE,
+)
 _SELF_ALIAS = frozenset({"user", "the user", "me", "myself"})
 
 
@@ -31,7 +39,16 @@ def _keep_surface(surface: str) -> bool:
 
 
 def _has_first_person_cue(turn: str) -> bool:
-    return bool(_FP_CUE.search(turn or ""))
+    if not turn:
+        return False
+    # Explicit first-person pronouns
+    if _FP_CUE.search(turn):
+        return True
+    # Implicit first-person verbs at sentence start (e.g., "moved to...", "Started at...")
+    # but NOT if there's a third-person subject (e.g., "She moved...")
+    if _IMPLICIT_FP_VERBS.search(turn.strip()) and not _THIRD_PERSON_SUBJECT.search(turn):
+        return True
+    return False
 
 
 def _canonical_subject(subject: str, turn: str) -> str | None:
