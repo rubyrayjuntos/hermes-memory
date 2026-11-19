@@ -790,11 +790,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
             return
 
         config = getattr(self, "config", None)
+        role = item.get("role", "user")
+        extract_assistant = bool(getattr(config, "extract_assistant_replies", False))
         if (
             getattr(config, "extract_mode", "rules_only") != "rules_then_model"
             or not str(getattr(config, "extract_url", "") or "").strip()
             or not str(getattr(config, "extract_model", "") or "").strip()
-            or item.get("role", "user") != "user"
+            or (role != "user" and not (role == "assistant" and extract_assistant))
         ):
             return
         add_batch = getattr(store, "job_add_model_batch", None)
@@ -802,10 +804,30 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.error("model extraction batch storage is unavailable")
             return
         try:
-            from .extraction_jobs import should_enqueue_model
-
             content = str(item.get("content") or "")
             session_id = str(item.get("session_id") or self._session_id or "default")
+            if role == "assistant":
+                # Spec 4 T4.1: assistant replies skip should_enqueue_model
+                # (that filter's first-person/self-assertion heuristics are
+                # written for user text; speaker-aware filtering for
+                # assistant text is T4.2/T4.3). Still skip trivial noise.
+                if not content.strip() or _is_noise(content, role="assistant"):
+                    return
+                add_batch_paired = getattr(store, "job_add_model_batch_paired", None)
+                paired_user_id = item.get("previous_conversation_id")
+                if paired_user_id and callable(add_batch_paired):
+                    await add_batch_paired(
+                        owner, session_id, int(conv_id),
+                        paired_with=int(paired_user_id), event_time=event_time,
+                    )
+                else:
+                    # No known paired user turn (or store lacks the paired
+                    # method) -- enqueue independently rather than drop it.
+                    await add_batch(owner, session_id, int(conv_id), event_time=event_time)
+                return
+
+            from .extraction_jobs import should_enqueue_model
+
             recent_texts = []
             pool = getattr(store, "pool", None)
             if pool is not None and owner and session_id:

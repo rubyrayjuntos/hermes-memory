@@ -59,6 +59,7 @@ class _JobStore:
     def __init__(self, fail=False):
         self.calls = []
         self.batches = []
+        self.paired_batches = []
         self.fail = fail
 
     async def job_add(self, owner, kind, op_id, payload, **kw):
@@ -71,6 +72,11 @@ class _JobStore:
         if self.fail:
             raise RuntimeError("boom")
         self.batches.append((owner, session_id, span_id, kw))
+
+    async def job_add_model_batch_paired(self, owner, session_id, span_id, **kw):
+        if self.fail:
+            raise RuntimeError("boom")
+        self.paired_batches.append((owner, session_id, span_id, kw))
 
 
 def _provider():
@@ -137,6 +143,54 @@ async def test_enqueue_does_not_batch_assistant_turns():
         }
     )
     assert store.batches == []
+
+
+async def test_enqueue_pairs_assistant_reply_with_its_user_turn_when_flag_on():
+    from types import SimpleNamespace
+
+    store = _JobStore()
+    provider = _provider()
+    provider.config = SimpleNamespace(
+        extract_mode="rules_then_model",
+        extract_url="http://127.0.0.1:11434/v1",
+        extract_model="llama3.2:3b",
+        extract_assistant_replies=True,
+    )
+    await provider._enqueue_extraction_jobs(
+        store, 43, {
+            "session_id": "s",
+            "agent_identity": "a",
+            "role": "assistant",
+            "content": "You prefer to work from home on Fridays, and I will remember that.",
+            "previous_conversation_id": 42,
+        }
+    )
+    assert store.batches == []
+    assert store.paired_batches == [("a", "s", 43, {"paired_with": 42, "event_time": None})]
+
+
+async def test_enqueue_still_skips_assistant_turns_when_flag_off():
+    from types import SimpleNamespace
+
+    store = _JobStore()
+    provider = _provider()
+    provider.config = SimpleNamespace(
+        extract_mode="rules_then_model",
+        extract_url="http://127.0.0.1:11434/v1",
+        extract_model="llama3.2:3b",
+        extract_assistant_replies=False,
+    )
+    await provider._enqueue_extraction_jobs(
+        store, 43, {
+            "session_id": "s",
+            "agent_identity": "a",
+            "role": "assistant",
+            "content": "You prefer to work from home on Fridays, and I will remember that.",
+            "previous_conversation_id": 42,
+        }
+    )
+    assert store.batches == []
+    assert store.paired_batches == []
 
 
 def test_session_end_hook_logs_observation(caplog):
