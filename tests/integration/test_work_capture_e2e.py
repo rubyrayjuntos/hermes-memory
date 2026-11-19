@@ -12,6 +12,7 @@ from tests.fixtures.hermes_messages_contract import ALL_SCENARIOS
 pytestmark = [pytest.mark.store, pytest.mark.integration]
 
 OWNER = "spec5-t51-e2e"
+_TEST_HMAC_KEY_HEX = "ab" * 32  # 32 bytes hex-encoded, matches HYBRID_AGE_SHADOW_HMAC_KEY's format
 
 
 class _FakeEmbedder:
@@ -65,7 +66,9 @@ async def test_work_capture_off_by_default_writes_no_events(store, clean_hermes_
 
 
 @pytest.mark.asyncio
-async def test_work_capture_on_persists_events_with_no_raw_content(store, clean_hermes_test_db):
+async def test_work_capture_on_persists_events_with_no_raw_content(store, clean_hermes_test_db,
+                                                                     monkeypatch):
+    monkeypatch.setenv("HYBRID_AGE_WORK_EVENT_HMAC_KEY", _TEST_HMAC_KEY_HEX)
     provider = _make_provider(store, _FakeEmbedder(), work_capture=True)
     await _write_pair_with_messages(provider, "s2", ALL_SCENARIOS["simple_paired_batch"])
 
@@ -81,7 +84,26 @@ async def test_work_capture_on_persists_events_with_no_raw_content(store, clean_
 
 
 @pytest.mark.asyncio
-async def test_duplicate_id_within_one_response_persists_as_two_rows(store, clean_hermes_test_db):
+async def test_work_capture_on_with_no_hmac_key_configured_persists_null_hash(
+    store, clean_hermes_test_db, monkeypatch,
+):
+    """No HYBRID_AGE_WORK_EVENT_HMAC_KEY set (the out-of-the-box default)
+    -- capture still works, content_hash is simply NULL, never a silent
+    fallback to an unkeyed hash."""
+    monkeypatch.delenv("HYBRID_AGE_WORK_EVENT_HMAC_KEY", raising=False)
+    provider = _make_provider(store, _FakeEmbedder(), work_capture=True)
+    await _write_pair_with_messages(provider, "s2b", ALL_SCENARIOS["simple_paired_batch"])
+
+    async with store.pool.acquire() as conn:
+        rows = await conn.fetch("SELECT content_hash FROM work_event WHERE owner = $1", OWNER)
+    assert len(rows) == 1
+    assert rows[0]["content_hash"] is None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_id_within_one_response_persists_as_two_rows(store, clean_hermes_test_db,
+                                                                      monkeypatch):
+    monkeypatch.setenv("HYBRID_AGE_WORK_EVENT_HMAC_KEY", _TEST_HMAC_KEY_HEX)
     provider = _make_provider(store, _FakeEmbedder(), work_capture=True)
     await _write_pair_with_messages(
         provider, "s3", ALL_SCENARIOS["duplicate_id_within_one_response"],
