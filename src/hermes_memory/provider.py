@@ -85,6 +85,27 @@ def _work_event_hmac_key() -> Optional[bytes]:
     return secret
 
 
+def _extract_work_op_id(session_id: str, first_span_id: int, last_span_id: int) -> str:
+    """Spec 5 T5.2: deterministic from the session's current span range,
+    not from wall-clock or a random id. Calling on_session_end twice with
+    no new spans durable in between (a retry, a double callback) yields
+    the identical op id, so job_add's ON CONFLICT (owner, kind, op_id) DO
+    NOTHING makes the second enqueue a silent no-op -- exactly one
+    extract_work job per distinct range. A session that is later resumed
+    with new spans gets a NEW range and therefore a new op id, so this is
+    not a permanent one-shot-ever lock on the session_id."""
+    return f"extract_work:{session_id}:{first_span_id}-{last_span_id}"
+
+
+def _extract_work_payload(owner: str, session_id: str, first_span_id: int,
+                           last_span_id: int) -> Dict[str, Any]:
+    """Ids only, no text -- per the spec's own payload contract for this job."""
+    return {
+        "owner": owner, "session_id": session_id,
+        "first_span_id": first_span_id, "last_span_id": last_span_id,
+    }
+
+
 class HybridAgeMemoryProvider(MemoryProvider):
     # Optional shadow-retrieval hook: async (query, vector_ids, latency_ms) -> None.
     # None in the default mode; prefetch only schedules it after the string is built.
@@ -1667,6 +1688,41 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "model extraction session flush failed; idle flush remains available",
                 exc_info=True,
             )
+
+        if bool(getattr(self.config, "work_capture", False)):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._aenqueue_extract_work(store, owner, session_id), loop
+                ).result(timeout=2.0)
+            except Exception:
+                logger.warning("extract_work enqueue failed", exc_info=True)
+
+    async def _aenqueue_extract_work(self, store: Any, owner: str, session_id: str) -> None:
+        """Spec 5 T5.2: enqueue one extract_work job covering everything
+        durable so far in this session. Idempotent via _extract_work_op_id
+        (see its docstring) -- never duplicates a job for an unchanged
+        range, never raises, never waits for the job to actually run."""
+        job_add = getattr(store, "job_add", None)
+        if not callable(job_add):
+            return
+        try:
+            pool = getattr(store, "pool", None)
+            if pool is None:
+                return
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT min(id) AS first_id, max(id) AS last_id FROM conversations "
+                    "WHERE agent_identity = $1 AND session_id = $2",
+                    owner, session_id,
+                )
+            if row is None or row["last_id"] is None:
+                return  # nothing durable yet for this session -- nothing to capture
+            first_id, last_id = int(row["first_id"]), int(row["last_id"])
+            op_id = _extract_work_op_id(session_id, first_id, last_id)
+            payload = _extract_work_payload(owner, session_id, first_id, last_id)
+            await job_add(owner, "extract_work", op_id, payload, session_id=session_id)
+        except Exception:
+            logger.warning("extract_work enqueue failed", exc_info=True)
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return []  # pure context mode — no tools
