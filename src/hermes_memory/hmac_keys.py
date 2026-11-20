@@ -6,6 +6,17 @@ extraction_worker).
 Same validation everywhere a keyed hash is needed: hex, >=32 bytes;
 missing or invalid means no hash is computed at all, never a silent
 downgrade to an unkeyed hash of what might be a short secret.
+
+ROTATION (Spec 5 T5.7, documented 2026-11-21): rotating
+HYBRID_AGE_WORK_EVENT_HMAC_KEY makes every content_hash already stored
+under the old key permanently incomparable to a freshly-computed hash
+under the new one -- nothing here re-hashes historical work_event or
+work_artifact rows when the env var changes. A drift/identity check
+spanning a rotation is expected to "mismatch" for a reason that has
+nothing to do with the underlying content actually changing. This is
+inherent to a keyed hash and is not a bug to fix; an operator rotating
+the key should expect old hashes to go stale, same as rotating any
+other secret invalidates prior HMACs computed with it.
 """
 from __future__ import annotations
 

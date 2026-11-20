@@ -415,6 +415,14 @@ async def delete_spans_on_conn(conn, owner: str, span_ids: Sequence[int]) -> int
     Must run inside a transaction. Evidence, alias rows and turn_entity rows
     cascade; uptakes are removed first (RESTRICT). AGE Turn vertices are not
     touched here.
+
+    Spec 5 T5.7: work_event rows are deleted here explicitly, not left to
+    their span_id FK (ON DELETE SET NULL) -- that FK exists so an event can
+    outlive a span deletion elsewhere, but a full span/session delete must
+    remove work memory too, not just unlink it. work_item/work_item_current/
+    work_artifact need no explicit statement here: work_item.ask_span_id has
+    an ON DELETE CASCADE FK to conversations, and work_item_current/
+    work_artifact cascade from work_item in turn.
     """
     owned = [int(r["id"]) for r in await conn.fetch(
         "SELECT id FROM conversations WHERE agent_identity = $1 AND id = ANY($2::bigint[])",
@@ -434,8 +442,28 @@ async def delete_spans_on_conn(conn, owner: str, span_ids: Sequence[int]) -> int
     await conn.execute("UPDATE claims SET span_id = NULL WHERE span_id = ANY($1::bigint[])", owned)
     await conn.execute("DELETE FROM memory_chunk_nodes WHERE source = 'conversation' "
                        "AND chunk_id = ANY($1::text[])", [f"conv_{i}" for i in owned])
+    distinct_sessions = [r["session_id"] for r in await conn.fetch(
+        "SELECT DISTINCT session_id FROM conversations "
+        "WHERE agent_identity = $1 AND id = ANY($2::bigint[])", owner, owned)]
+    await conn.execute("DELETE FROM work_event WHERE owner = $1 AND span_id = ANY($2::bigint[])",
+                       owner, owned)
     status = await conn.execute("DELETE FROM conversations WHERE agent_identity = $1 AND id = ANY($2::bigint[])",
                                 owner, owned)
+    # T5.7: work_event.span_id is nullable (identity resolution can fail
+    # to pair an event to any span), so a NULL-span_id event can't be
+    # caught by the span_id-matched delete above. Once a session's last
+    # conversations row is gone, sweep up any such orphan-by-design
+    # events too -- but only then, so a partial delete of a still-live
+    # session leaves them alone.
+    for session_id in distinct_sessions:
+        still_live = await conn.fetchval(
+            "SELECT count(*) FROM conversations WHERE agent_identity = $1 AND session_id = $2",
+            owner, session_id,
+        )
+        if still_live == 0:
+            await conn.execute(
+                "DELETE FROM work_event WHERE owner = $1 AND session_id = $2", owner, session_id,
+            )
     keys |= await unmerge_unjustified(conn, owner)
     await rebuild_keys(conn, keys)
     return int(str(status).split()[-1])

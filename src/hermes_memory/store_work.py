@@ -52,7 +52,15 @@ class StoreWorkMixin:
         item 'retracted' and restores its predecessor as current if one
         exists, clearing the predecessor's own superseded_by so it is
         genuinely current again, not still pointing forward. Returns
-        False (a no-op) when the topic has no current item at all."""
+        False (a no-op) when the topic has no current item at all.
+
+        T5.7 (documented 2026-11-21, no code change): this never touches
+        the retracted item's work_artifact rows. They are never
+        re-verified once their parent item is retracted, so a retracted
+        item's content_hash/exists_now stays frozen at whatever it was
+        at the last real verification -- even if the underlying file
+        changes afterward. A retracted item's artifact hashes are a
+        historical record, not a live guarantee."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(

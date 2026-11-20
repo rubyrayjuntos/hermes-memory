@@ -305,6 +305,19 @@ async def _run_work(
                     if representative is not None:
                         reason_event_id = int(representative["id"])
 
+            # T5.6 gap (closed 2026-11-21): outcome_summary is built from
+            # leading sentences of conversation text, which includes the
+            # assistant's own turns -- those can carry the same
+            # false-claim risk as a bare "I fixed X, tests pass." self-
+            # report. When status settles at 'unknown' (no independent
+            # confirmation at all from either tier), label the outcome
+            # explicitly as the assistant's own account rather than let
+            # it read as settled fact. ask_summary never needs this: it
+            # is always drawn from a USER span (see ask_span above), so
+            # it is already "the user's own words," not a self-report.
+            if status == "unknown" and outcome_summary:
+                outcome_summary = f"(assistant's account, unconfirmed) {outcome_summary}"
+
             topic_key = f"session:{session_id}"
             resulting_item_id: Optional[int] = None
             async with conn.transaction():

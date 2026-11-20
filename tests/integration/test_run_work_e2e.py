@@ -145,6 +145,39 @@ async def test_assistant_only_self_report_stays_unconfirmed(store, clean_hermes_
 
 
 @pytest.mark.asyncio
+async def test_unconfirmed_outcome_summary_is_labeled_as_the_assistants_account(
+    store, clean_hermes_test_db,
+):
+    """T5.6 gap (closed 2026-11-21): outcome_summary is built from
+    leading sentences of conversation text, which includes the
+    assistant's own turns -- and those can carry the same false-claim
+    risk as "I fixed X, tests pass." When status settles at 'unknown'
+    (no independent confirmation at all -- see test above), the
+    summary must not read as settled fact: it carries an explicit
+    assistant's-account label rather than bare prose."""
+    session_id = "s2b"
+    first_id = await _insert_span(store, session_id, "user", "Please fix the bug in provider.py.")
+    last_id = await _insert_span(
+        store, session_id, "assistant",
+        "I fixed the bug in provider.py and the tests pass now.",
+    )
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, outcome_summary FROM work_item WHERE owner = $1 AND session_id = $2",
+            OWNER, session_id,
+        )
+    assert row["status"] == "unknown"
+    assert row["outcome_summary"] is not None
+    assert "assistant" in row["outcome_summary"].lower()
+    assert "fixed the bug in provider.py" in row["outcome_summary"]
+
+
+@pytest.mark.asyncio
 async def test_explicit_user_verdict_now_confirms_status_t54(store, clean_hermes_test_db):
     """T5.4 (status-source priority) is now built: an explicit,
     unambiguous user verdict span DOES set status, with reason_span_id
@@ -170,6 +203,31 @@ async def test_explicit_user_verdict_now_confirms_status_t54(store, clean_hermes
     assert row["status"] == "failed"
     assert row["reason"]
     assert row["reason_span_id"] == last_id
+
+
+@pytest.mark.asyncio
+async def test_confirmed_outcome_summary_is_not_labeled_t56(store, clean_hermes_test_db):
+    """The assistant's-account label is conditional, not always-on: once
+    an explicit user verdict (or a work_event status code) confirms the
+    item, outcome_summary reads as plain prose again -- there is at
+    least some independent confirmation behind it."""
+    session_id = "s3b"
+    first_id = await _insert_span(store, session_id, "user", "Please run the eval.")
+    await _insert_span(store, session_id, "assistant", "Done, the eval passed.")
+    last_id = await _insert_span(store, session_id, "user", "Confirmed, that's correct.")
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, outcome_summary FROM work_item WHERE owner = $1 AND session_id = $2",
+            OWNER, session_id,
+        )
+    assert row["status"] == "done"
+    assert row["outcome_summary"] is not None
+    assert not row["outcome_summary"].lower().startswith("assistant")
 
 
 @pytest.mark.asyncio
