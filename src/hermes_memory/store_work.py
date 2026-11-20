@@ -91,3 +91,38 @@ class StoreWorkMixin:
                         owner, topic_key,
                     )
         return True
+
+    async def verify_work_artifacts(
+        self, owner: str, work_item_id: int, repo_roots: list,
+    ) -> tuple:
+        """Spec 5 T5.5: verify every work_artifact row for this item
+        against the allowlisted repo_roots, using work_artifact_verify's
+        real, local, network-free checks. Returns (verified, skipped)
+        counts. An unverifiable artifact (checked=False) is left
+        exactly as-is -- kept in the table, exists_now/content_hash/
+        verified_at untouched -- never dropped and never written as
+        passed."""
+        from .work_artifact_verify import verify_one_artifact
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, kind, ref, repo FROM work_artifact "
+                "WHERE owner = $1 AND work_item_id = $2",
+                owner, work_item_id,
+            )
+            verified = 0
+            skipped = 0
+            for row in rows:
+                checked, exists_now, content_hash = verify_one_artifact(
+                    kind=row["kind"], ref=row["ref"], repo=row["repo"], repo_roots=repo_roots,
+                )
+                if not checked:
+                    skipped += 1
+                    continue
+                await conn.execute(
+                    "UPDATE work_artifact SET exists_now = $1, content_hash = $2, "
+                    "verified_at = now() WHERE id = $3 AND owner = $4",
+                    exists_now, content_hash, int(row["id"]), owner,
+                )
+                verified += 1
+        return verified, skipped

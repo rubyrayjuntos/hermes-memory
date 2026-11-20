@@ -191,13 +191,15 @@ def _bounded_excerpt(text: str) -> str:
     return text[: _BOUNDED_EXCERPT_CHARS - 15].rstrip() + " ...(truncated)"
 
 
-async def _run_work(store, worker: str) -> int:
-    """Spec 5 T5.3 (scoped slice): claim and process one `extract_work`
-    job. Strips memory blocks before anything else touches the text,
-    keeps every work_item at status='unknown' (self-reports and work_event
-    structural signals are supporting evidence only -- the confirmation
-    path from an explicit user verdict is T5.4's job, not built here),
-    and is idempotent on the job's own op_id via
+async def _run_work(store, worker: str, repo_roots: Optional[list] = None) -> int:
+    """Spec 5 T5.3+T5.4+T5.5: claim and process one `extract_work` job.
+    Strips memory blocks before anything else touches the text, infers
+    status via work_status.infer_status's priority order, supersedes an
+    existing current item under an owner/topic lock, and (T5.5) runs
+    verify_work_artifacts against repo_roots for whatever work_artifact
+    rows already exist for the resulting item -- outside the DB
+    transaction, since verification does its own filesystem/subprocess
+    I/O. Idempotent on the job's own op_id via
     ON CONFLICT (owner, source_op_id) DO NOTHING. Never raises."""
     from .turn_filter import segment_turn, strip_memory_blocks
 
@@ -302,6 +304,7 @@ async def _run_work(store, worker: str) -> int:
                         reason_event_id = int(representative["id"])
 
             topic_key = f"session:{session_id}"
+            resulting_item_id: Optional[int] = None
             async with conn.transaction():
                 # T5.3: "under an owner/topic lock, insert the successor,
                 # upsert work_item_current, and mark the predecessor
@@ -328,6 +331,7 @@ async def _run_work(store, worker: str) -> int:
                 )
                 if item_row is not None:
                     new_id = int(item_row["id"])
+                    resulting_item_id = new_id
                     predecessor_id = int(predecessor["work_item_id"]) if predecessor else None
                     if predecessor_id is not None and predecessor_id != new_id:
                         await conn.execute(
@@ -340,6 +344,20 @@ async def _run_work(store, worker: str) -> int:
                         "ON CONFLICT (owner, topic_key) DO UPDATE SET work_item_id = EXCLUDED.work_item_id",
                         owner, topic_key, new_id,
                     )
+                else:
+                    # Retry of an already-settled job: still need the
+                    # item's id for T5.5 verification below.
+                    existing = await conn.fetchrow(
+                        "SELECT id FROM work_item WHERE owner = $1 AND source_op_id = $2",
+                        owner, op_id,
+                    )
+                    resulting_item_id = int(existing["id"]) if existing is not None else None
+        # T5.5: verification is deliberately outside the DB transaction
+        # above -- it runs real subprocess/filesystem I/O, which must
+        # never hold a DB transaction open. "Never at prefetch" is
+        # satisfied structurally: this only runs from inside _run_work.
+        if resulting_item_id is not None and repo_roots:
+            await store.verify_work_artifacts(owner, resulting_item_id, list(repo_roots))
         return 1 if await store.job_done(job_id, fence) else 0
     except Exception as exc:
         await _settle_failure(store, job_id, fence, "extract_work", exc)
@@ -356,11 +374,12 @@ async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optiona
     allow_assistant = bool(getattr(getattr(provider, "config", None),
                                    "extract_assistant_replies", False))
     work_capture = bool(getattr(getattr(provider, "config", None), "work_capture", False))
+    repo_roots = list(getattr(getattr(provider, "config", None), "work_verify_repo_roots", None) or [])
     finished = 0
     for step in (lambda: _run_rules(store, worker, embed),
                  (lambda: _run_model(store, worker, model, embed,
                                      allow_assistant=allow_assistant)) if model is not None else None,
-                 (lambda: _run_work(store, worker)) if work_capture else None):
+                 (lambda: _run_work(store, worker, repo_roots)) if work_capture else None):
         if step is None:
             continue
         try:

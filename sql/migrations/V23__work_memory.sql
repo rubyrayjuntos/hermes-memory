@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS work_artifact (
   ref TEXT NOT NULL,                      -- repository-relative path / branch / sha / PR number / eval identifier
   repo TEXT,
   exists_now BOOLEAN,
+  content_hash TEXT,                      -- sha256 hex of the file's bytes; 'file' kind only, never set for others
   verified_at TIMESTAMPTZ,
   stale BOOLEAN NOT NULL DEFAULT false,
   UNIQUE (owner, work_item_id, kind, ref),
