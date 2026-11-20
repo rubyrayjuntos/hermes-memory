@@ -657,6 +657,9 @@ def main(argv: list[str] | None = None) -> int:
         "HYBRID_AGE_SHADOW_HMAC_KEY": (
             _existing_env_value("HYBRID_AGE_SHADOW_HMAC_KEY") or secrets.token_hex(32)
         ),
+        "HYBRID_AGE_WORK_EVENT_HMAC_KEY": (
+            _existing_env_value("HYBRID_AGE_WORK_EVENT_HMAC_KEY") or secrets.token_hex(32)
+        ),
     }
     parsed = urlparse(dsn)
     skill_dirs = (

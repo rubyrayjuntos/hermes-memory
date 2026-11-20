@@ -292,6 +292,71 @@ def test_memory_write_snapshots_agent_identity_before_enqueue() -> None:
     assert queued[0]["agent_identity"] == "agent-a"
 
 
+def test_sync_turn_drops_messages_when_work_capture_is_off() -> None:
+    """Spec 5 T5.1: with work_capture off (the default), sync_turn must do
+    exactly what it did before messages existed in this codepath -- no
+    extra reference held in the queued item, no memory growth on a long
+    session from a caller that always passes a (possibly large)
+    messages transcript."""
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+    provider.config = HybridAgeConfig(dsn="unused", work_capture=False)
+    provider._session_id = "session-a"
+    provider._agent_identity = "agent-a"
+    provider._last_turn_id = {}
+    provider._recent_topics = []
+    provider._recent_turns = []
+    provider._max_topics = 8
+    provider._max_turns = 6
+    queued: list[dict] = []
+    provider._enqueue_write = queued.append  # type: ignore[method-assign,assignment]
+
+    big_messages = [{"role": "user", "content": "x" * 10_000}] * 50
+    provider.sync_turn(
+        "Please remember that the Atlas service owns our persistent catalog.",
+        "I will remember that the Atlas service owns the persistent catalog.",
+        messages=big_messages,
+    )
+
+    assert all("messages" not in item for item in queued), (
+        "work_capture is off -- no item should carry a reference to the "
+        "messages transcript at all"
+    )
+
+
+def test_sync_turn_attaches_messages_only_to_the_assistant_item_when_on() -> None:
+    """With work_capture on, only the assistant item needs the messages
+    snapshot (that's the only item _capture_work_events reads it from) --
+    the user item carrying the same reference would be pure waste."""
+    from hermes_memory.config import HybridAgeConfig
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+    provider.config = HybridAgeConfig(dsn="unused", work_capture=True)
+    provider._session_id = "session-a"
+    provider._agent_identity = "agent-a"
+    provider._last_turn_id = {}
+    provider._recent_topics = []
+    provider._recent_turns = []
+    provider._max_topics = 8
+    provider._max_turns = 6
+    queued: list[dict] = []
+    provider._enqueue_write = queued.append  # type: ignore[method-assign,assignment]
+
+    messages = [{"role": "assistant", "content": "did a thing"}]
+    provider.sync_turn(
+        "Please remember that the Atlas service owns our persistent catalog.",
+        "I will remember that the Atlas service owns the persistent catalog.",
+        messages=messages,
+    )
+
+    by_role = {item["role"]: item for item in queued}
+    assert "messages" not in by_role["user"]
+    assert by_role["assistant"]["messages"] is messages
+
+
 
 async def test_prefetch_does_not_run_the_unrendered_graph_walk() -> None:
     """The walk's paths never reached the prompt; prefetch must not pay for it."""

@@ -62,6 +62,15 @@ class HybridAgeConfig:
     # always unconfirmed (speaker='assistant' never promotes to current).
     # Off by default -- enabling this changes which spans reach the model.
     extract_assistant_replies: bool = False
+    # Spec 5 T5.1/T5.2: work-memory tool-digest capture + extract_work enqueue.
+    # Off by default -- enabling this writes work_event rows and enqueues
+    # extract_work jobs; Gate G5 governs the default flip, not this commit.
+    work_capture: bool = False
+    # Spec 5 T5.5: artifact verification runs only against repos listed
+    # here (allowlist, not glob/env-wide access). Empty by default --
+    # Decision 5 says it starts with only the hermes-memory checkout,
+    # but that is a deployment choice, not a code default.
+    work_verify_repo_roots: list = field(default_factory=list)
     retrieval_mode: str = "vector"
     shadow_sample_rate: float = 0.2
     decay_half_life_days: float = 30.0
@@ -257,6 +266,22 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
             "1", "true", "yes", "on",
         )
 
+    _work_capture_raw = os.environ.get("HYBRID_AGE_WORK_CAPTURE")
+    if _work_capture_raw is None:
+        _work_capture_raw = raw.get("work_capture")
+    if _work_capture_raw is not None:
+        cfg.work_capture = str(_work_capture_raw).strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+
+    _verify_roots_raw = os.environ.get("HYBRID_AGE_WORK_VERIFY_REPO_ROOTS")
+    if _verify_roots_raw is None:
+        _verify_roots_raw = raw.get("work_verify_repo_roots")
+    if isinstance(_verify_roots_raw, str):
+        cfg.work_verify_repo_roots = [p for p in _verify_roots_raw.split(os.pathsep) if p]
+    elif isinstance(_verify_roots_raw, list):
+        cfg.work_verify_repo_roots = [str(p) for p in _verify_roots_raw]
+
     if raw.get("embed_model"):
         cfg.embed_model = str(raw["embed_model"])
     elif os.environ.get("HYBRID_AGE_EMBED_MODEL"):
@@ -375,6 +400,19 @@ CONFIG_SCHEMA_FIELDS = [
         "default": False,
         "type": "boolean",
         "env_var": "HYBRID_AGE_EXTRACT_ASSISTANT_REPLIES",
+    },
+    {
+        "key": "work_capture",
+        "description": (
+            "Off by default. When on, tool-result digests from `messages` are "
+            "captured into work_event, and on_session_end enqueues extract_work. "
+            "Never stores raw tool output -- only a bounded summary and a hash."
+        ),
+        "secret": False,
+        "required": False,
+        "default": False,
+        "type": "boolean",
+        "env_var": "HYBRID_AGE_WORK_CAPTURE",
     },
     {
         "key": "retrieval_mode",

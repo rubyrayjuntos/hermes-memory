@@ -84,6 +84,9 @@ class _JobStore:
             raise RuntimeError("boom")
         self.standalone_batches.append((owner, session_id, span_id, kw))
 
+    async def job_flush_model_batches(self, owner, session_id):
+        return 0
+
 
 def _provider():
     from hermes_memory.provider import HybridAgeMemoryProvider
@@ -240,6 +243,51 @@ def test_session_end_hook_logs_observation(caplog):
 
     assert provider._session_end_callbacks == 1
     assert "session-end callback observed count=1" in caplog.text
+
+
+def _run_session_end_with_real_loop(*, work_capture: bool):
+    """on_session_end marshals onto self._loop via run_coroutine_threadsafe,
+    so exercising its work_capture gate needs an actual running loop in
+    another thread -- a bare asyncio.run() in the test's own thread
+    cannot be the target of run_coroutine_threadsafe from that same
+    thread (it would deadlock waiting on itself)."""
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    from hermes_memory.provider import HybridAgeMemoryProvider
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    try:
+        provider = HybridAgeMemoryProvider.__new__(HybridAgeMemoryProvider)
+        provider.store = _JobStore()  # type: ignore[assignment]
+        provider._loop = loop
+        provider._write_queue = None
+        provider._agent_identity = "a"
+        provider._session_id = "s"
+        provider.config = SimpleNamespace(work_capture=work_capture)  # type: ignore[assignment]
+        calls: list[tuple] = []
+
+        async def fake_aenqueue(store, owner, session_id):
+            calls.append((owner, session_id))
+
+        provider._aenqueue_extract_work = fake_aenqueue  # type: ignore[method-assign]
+        provider.on_session_end([])
+        return calls
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+        loop.close()
+
+
+def test_on_session_end_skips_extract_work_enqueue_when_work_capture_off():
+    assert _run_session_end_with_real_loop(work_capture=False) == []
+
+
+def test_on_session_end_enqueues_extract_work_when_work_capture_on():
+    assert _run_session_end_with_real_loop(work_capture=True) == [("a", "s")]
 
 
 async def test_enqueue_swallows_failure_and_skips_store_without_job_add():

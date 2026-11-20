@@ -70,6 +70,36 @@ def _is_missing_embed_version_schema(exc: BaseException) -> bool:
     return "embed_model" in msg or "embed_dim" in msg
 
 
+def _work_event_hmac_key() -> Optional[bytes]:
+    """Spec 5 T5.1: the per-install key for work_event.content_hash --
+    delegates to hmac_keys.py, the shared module (provider.py already
+    imports extraction_worker.py, so the key readers live in a leaf
+    module neither needs to import the other to reach)."""
+    from .hmac_keys import work_event_hmac_key
+    return work_event_hmac_key()
+
+
+def _extract_work_op_id(session_id: str, first_span_id: int, last_span_id: int) -> str:
+    """Spec 5 T5.2: deterministic from the session's current span range,
+    not from wall-clock or a random id. Calling on_session_end twice with
+    no new spans durable in between (a retry, a double callback) yields
+    the identical op id, so job_add's ON CONFLICT (owner, kind, op_id) DO
+    NOTHING makes the second enqueue a silent no-op -- exactly one
+    extract_work job per distinct range. A session that is later resumed
+    with new spans gets a NEW range and therefore a new op id, so this is
+    not a permanent one-shot-ever lock on the session_id."""
+    return f"extract_work:{session_id}:{first_span_id}-{last_span_id}"
+
+
+def _extract_work_payload(owner: str, session_id: str, first_span_id: int,
+                           last_span_id: int) -> Dict[str, Any]:
+    """Ids only, no text -- per the spec's own payload contract for this job."""
+    return {
+        "owner": owner, "session_id": session_id,
+        "first_span_id": first_span_id, "last_span_id": last_span_id,
+    }
+
+
 class HybridAgeMemoryProvider(MemoryProvider):
     # Optional shadow-retrieval hook: async (query, vector_ids, latency_ms) -> None.
     # None in the default mode; prefetch only schedules it after the string is built.
@@ -347,17 +377,27 @@ class HybridAgeMemoryProvider(MemoryProvider):
         messages: Any = None,
     ) -> None:
         sid = session_id or self._session_id or "default"
+        config = getattr(self, "config", None)
+        work_capture_on = bool(getattr(config, "work_capture", False))
         for role, content in (("user", user_content), ("assistant", assistant_content)):
             if not content or _is_noise(content, role=role):
                 continue
-            self._enqueue_write({
+            item = {
                 "type": "turn",
                 "session_id": sid,
                 "agent_identity": self._agent_identity,
                 "role": role,
                 "content": content[:8000],
                 "previous_conversation_id": self._last_turn_id.get(sid),
-            })
+            }
+            if work_capture_on and messages is not None and role == "assistant":
+                # T5.1: only the assistant item's write triggers work-event
+                # capture (see _capture_work_events), and only when the
+                # feature is actually on -- otherwise this reference would
+                # sit in the write queue for no reason on every turn of
+                # every session, flag or not.
+                item["messages"] = messages
+            self._enqueue_write(item)
         self._track_turn(user_content, assistant_content)
 
     def on_memory_write(
@@ -851,6 +891,38 @@ class HybridAgeMemoryProvider(MemoryProvider):
         except Exception:
             logger.warning("model extraction batch enqueue failed", exc_info=True)
 
+    async def _capture_work_events(self, store: Any, conv_id: int, item: dict) -> None:
+        """Spec 5 T5.1: capture tool-digest work_event rows from `messages`,
+        once per sync_turn call (on the assistant item -- the pair is
+        already both queued durably by the time this runs). Never raises,
+        never stores raw tool output."""
+        config = getattr(self, "config", None)
+        if not bool(getattr(config, "work_capture", False)):
+            return
+        if item.get("role") != "assistant":
+            return
+        messages = item.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return
+        capture_batch = getattr(store, "work_event_capture_batch", None)
+        if not callable(capture_batch):
+            return
+        try:
+            from .work_capture import compute_work_events
+
+            owner = item.get("agent_identity") or self._agent_identity
+            session_id = str(item.get("session_id") or self._session_id or "default")
+            events, skipped, reasons = compute_work_events(
+                messages, owner=owner, session_id=session_id, span_id=int(conv_id),
+                hmac_key=_work_event_hmac_key(),
+            )
+            if skipped:
+                logger.info("work-event capture skipped %d occurrence(s): %s", skipped, reasons)
+            if events:
+                await capture_batch(events)
+        except Exception:
+            logger.warning("work-event capture failed", exc_info=True)
+
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
         from .extract_nouns import extract_nouns
@@ -946,6 +1018,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("reception stage failed", exc_info=True)
 
         await self._enqueue_extraction_jobs(store, int(conv_id), item)
+        await self._capture_work_events(store, int(conv_id), item)
 
         vertex_id = None
         try:
@@ -1609,6 +1682,41 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "model extraction session flush failed; idle flush remains available",
                 exc_info=True,
             )
+
+        if bool(getattr(self.config, "work_capture", False)):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._aenqueue_extract_work(store, owner, session_id), loop
+                ).result(timeout=2.0)
+            except Exception:
+                logger.warning("extract_work enqueue failed", exc_info=True)
+
+    async def _aenqueue_extract_work(self, store: Any, owner: str, session_id: str) -> None:
+        """Spec 5 T5.2: enqueue one extract_work job covering everything
+        durable so far in this session. Idempotent via _extract_work_op_id
+        (see its docstring) -- never duplicates a job for an unchanged
+        range, never raises, never waits for the job to actually run."""
+        job_add = getattr(store, "job_add", None)
+        if not callable(job_add):
+            return
+        try:
+            pool = getattr(store, "pool", None)
+            if pool is None:
+                return
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT min(id) AS first_id, max(id) AS last_id FROM conversations "
+                    "WHERE agent_identity = $1 AND session_id = $2",
+                    owner, session_id,
+                )
+            if row is None or row["last_id"] is None:
+                return  # nothing durable yet for this session -- nothing to capture
+            first_id, last_id = int(row["first_id"]), int(row["last_id"])
+            op_id = _extract_work_op_id(session_id, first_id, last_id)
+            payload = _extract_work_payload(owner, session_id, first_id, last_id)
+            await job_add(owner, "extract_work", op_id, payload, session_id=session_id)
+        except Exception:
+            logger.warning("extract_work enqueue failed", exc_info=True)
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return []  # pure context mode — no tools

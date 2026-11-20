@@ -15,11 +15,14 @@ from typing import Any, Awaitable, Callable, Optional, Sequence
 from .extract_model_client import ModelBatchInput
 from .extract_publish import publish_model, publish_rules
 from .model_extract import grounded_claims
+from .versions import WORK_VERSION
+from .work_status import classify_verdict, infer_status
 
 logger = logging.getLogger("hermes_memory.extraction")
 
 RULES_LEASE_S = 60.0
 MODEL_LEASE_S = 120.0
+WORK_LEASE_S = 120.0
 IDLE_INTERVAL_S = 5.0
 
 ModelFn = Callable[[ModelBatchInput], Any]
@@ -174,6 +177,208 @@ async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn, *,
         return 0
 
 
+_SUMMARY_CHARS = 300
+
+
+def _bounded_excerpt(text: str) -> str:
+    """Spec 5 T5.6: ask_summary/outcome_summary are rule-based extractive
+    summaries (whole leading sentences, never cut mid-word/mid-sentence),
+    not pasted text and not a model's -- gate G3's precedent (stay on
+    rules until a model wins a bake-off) applies here too. Delegates to
+    work_summarize.extractive_summary; kept under this name so call
+    sites below didn't need to change."""
+    from .work_summarize import extractive_summary
+    return extractive_summary(text, _SUMMARY_CHARS)
+
+
+async def _run_work(
+    store, worker: str, repo_roots: Optional[list] = None, hmac_key: Optional[bytes] = None,
+) -> int:
+    """Spec 5 T5.3+T5.4+T5.5: claim and process one `extract_work` job.
+    Strips memory blocks before anything else touches the text, infers
+    status via work_status.infer_status's priority order, supersedes an
+    existing current item under an owner/topic lock, and (T5.5) runs
+    verify_work_artifacts against repo_roots for whatever work_artifact
+    rows already exist for the resulting item -- outside the DB
+    transaction, since verification does its own filesystem/subprocess
+    I/O. Idempotent on the job's own op_id via
+    ON CONFLICT (owner, source_op_id) DO NOTHING. Never raises."""
+    from .turn_filter import segment_turn, strip_memory_blocks
+
+    claimed = await store.job_claim("extract_work", worker, 1, lease_s=WORK_LEASE_S,
+                                    session_ordered=True)
+    if not claimed:
+        return 0
+    job_id, fence, payload = claimed[0]
+    try:
+        async with store.pool.acquire() as conn:
+            job_row = await conn.fetchrow(
+                "SELECT owner, op_id FROM durable_job WHERE id = $1", int(job_id),
+            )
+            if job_row is None:
+                return 1 if await store.job_done(job_id, fence) else 0
+            owner = str(job_row["owner"])
+            op_id = str(job_row["op_id"])
+            session_id = str(payload.get("session_id") or "")
+            first_id = payload.get("first_span_id")
+            last_id = payload.get("last_span_id")
+            if not session_id or first_id is None or last_id is None:
+                return 1 if await store.job_done(job_id, fence) else 0
+
+            spans = await conn.fetch(
+                "SELECT id, role, content FROM conversations "
+                "WHERE agent_identity = $1 AND session_id = $2 AND id BETWEEN $3 AND $4 "
+                "ORDER BY id",
+                owner, session_id, int(first_id), int(last_id),
+            )
+            if not spans:
+                return 1 if await store.job_done(job_id, fence) else 0
+
+            # T4.3: strip injected memory blocks before anything else
+            # touches the text, so a reply quoting its own injected
+            # memory can never feed back into a work item.
+            authored_by_span: dict[int, str] = {}
+            for span in spans:
+                stripped = strip_memory_blocks(str(span["content"] or ""))
+                authored = "".join(
+                    stripped[seg.start:seg.end]
+                    for seg in segment_turn(stripped) if seg.kind == "authored"
+                )
+                if authored.strip():
+                    authored_by_span[int(span["id"])] = authored
+
+            if not authored_by_span:
+                return 1 if await store.job_done(job_id, fence) else 0
+
+            user_spans = [s for s in spans if s["role"] == "user" and int(s["id"]) in authored_by_span]
+            assistant_spans = [
+                s for s in spans if s["role"] == "assistant" and int(s["id"]) in authored_by_span
+            ]
+            ask_span = user_spans[0] if user_spans else spans[0]
+            ask_span_id = int(ask_span["id"])
+            ask_summary = _bounded_excerpt(authored_by_span.get(ask_span_id, ""))
+
+            outcome_span = assistant_spans[-1] if assistant_spans else None
+            outcome_span_id = int(outcome_span["id"]) if outcome_span is not None else None
+            outcome_summary = (
+                _bounded_excerpt(authored_by_span[outcome_span_id])
+                if outcome_span_id is not None else None
+            )
+
+            # T5.4: status-source priority -- an explicit, unambiguous
+            # user verdict span outranks eval/test status in work_event,
+            # which outranks 'unknown'. Self-reports (assistant-only
+            # accounts, even success-sounding ones like "tests pass")
+            # never appear in user_verdicts at all -- only USER spans do.
+            # The LAST matching user span wins (chronological override:
+            # a later turn can always reverse an earlier abandon/confirm).
+            reason_span_id: Optional[int] = None
+            reason_event_id: Optional[int] = None
+            status = "unknown"
+            reason: Optional[str] = None
+            matched_user_span_id: Optional[int] = None
+            for user_span in user_spans:
+                span_id = int(user_span["id"])
+                verdict = classify_verdict(authored_by_span[span_id])
+                if verdict is not None:
+                    matched_user_span_id = span_id
+                    status, reason = verdict, f"explicit user verdict: {verdict}"
+            if matched_user_span_id is not None:
+                reason_span_id = matched_user_span_id
+            else:
+                event_rows = await conn.fetch(
+                    "SELECT id, status_code FROM work_event "
+                    "WHERE owner = $1 AND session_id = $2 AND span_id BETWEEN $3 AND $4 "
+                    "ORDER BY id",
+                    owner, session_id, int(first_id), int(last_id),
+                )
+                codes = [row["status_code"] for row in event_rows if row["status_code"] is not None]
+                status, reason = infer_status(user_verdicts=[], work_event_status_codes=codes)
+                if status == "failed":
+                    # A success code alone never reaches here (infer_status
+                    # leaves it 'unknown' -- see work_status.py) -- only a
+                    # genuine failure code needs a reason_event_id.
+                    representative = next(
+                        (row for row in event_rows if row["status_code"] not in (None, 0)),
+                        None,
+                    )
+                    if representative is not None:
+                        reason_event_id = int(representative["id"])
+
+            # T5.6 gap (closed 2026-11-21): outcome_summary is built from
+            # leading sentences of conversation text, which includes the
+            # assistant's own turns -- those can carry the same
+            # false-claim risk as a bare "I fixed X, tests pass." self-
+            # report. When status settles at 'unknown' (no independent
+            # confirmation at all from either tier), label the outcome
+            # explicitly as the assistant's own account rather than let
+            # it read as settled fact. ask_summary never needs this: it
+            # is always drawn from a USER span (see ask_span above), so
+            # it is already "the user's own words," not a self-report.
+            if status == "unknown" and outcome_summary:
+                outcome_summary = f"(assistant's account, unconfirmed) {outcome_summary}"
+
+            topic_key = f"session:{session_id}"
+            resulting_item_id: Optional[int] = None
+            async with conn.transaction():
+                # T5.3: "under an owner/topic lock, insert the successor,
+                # upsert work_item_current, and mark the predecessor
+                # superseded in the same transaction." Same advisory-lock
+                # convention as store_claims.py's timeline lock.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    f"work_item_current|{owner}|{topic_key}",
+                )
+                predecessor = await conn.fetchrow(
+                    "SELECT work_item_id FROM work_item_current WHERE owner = $1 AND topic_key = $2",
+                    owner, topic_key,
+                )
+                item_row = await conn.fetchrow(
+                    "INSERT INTO work_item (owner, session_id, topic_key, source_op_id, "
+                    "ask_summary, outcome_summary, status, reason, reason_span_id, "
+                    "reason_event_id, ask_span_id, outcome_span_id, extractor_version) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) "
+                    "ON CONFLICT (owner, source_op_id) DO NOTHING "
+                    "RETURNING id",
+                    owner, session_id, topic_key, op_id, ask_summary, outcome_summary,
+                    status, reason, reason_span_id, reason_event_id,
+                    ask_span_id, outcome_span_id, WORK_VERSION,
+                )
+                if item_row is not None:
+                    new_id = int(item_row["id"])
+                    resulting_item_id = new_id
+                    predecessor_id = int(predecessor["work_item_id"]) if predecessor else None
+                    if predecessor_id is not None and predecessor_id != new_id:
+                        await conn.execute(
+                            "UPDATE work_item SET superseded_by = $1 WHERE id = $2 AND owner = $3",
+                            new_id, predecessor_id, owner,
+                        )
+                    await conn.execute(
+                        "INSERT INTO work_item_current (owner, topic_key, work_item_id) "
+                        "VALUES ($1, $2, $3) "
+                        "ON CONFLICT (owner, topic_key) DO UPDATE SET work_item_id = EXCLUDED.work_item_id",
+                        owner, topic_key, new_id,
+                    )
+                else:
+                    # Retry of an already-settled job: still need the
+                    # item's id for T5.5 verification below.
+                    existing = await conn.fetchrow(
+                        "SELECT id FROM work_item WHERE owner = $1 AND source_op_id = $2",
+                        owner, op_id,
+                    )
+                    resulting_item_id = int(existing["id"]) if existing is not None else None
+        # T5.5: verification is deliberately outside the DB transaction
+        # above -- it runs real subprocess/filesystem I/O, which must
+        # never hold a DB transaction open. "Never at prefetch" is
+        # satisfied structurally: this only runs from inside _run_work.
+        if resulting_item_id is not None and repo_roots:
+            await store.verify_work_artifacts(owner, resulting_item_id, list(repo_roots), hmac_key)
+        return 1 if await store.job_done(job_id, fence) else 0
+    except Exception as exc:
+        await _settle_failure(store, job_id, fence, "extract_work", exc)
+        return 0
+
+
 async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optional[ModelFn]) -> int:
     """Claim and settle at most one rules job and one model job. Returns jobs finished.
 
@@ -183,10 +388,16 @@ async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optiona
     worker = str(getattr(provider, "_outbox_owner", "") or "extraction")
     allow_assistant = bool(getattr(getattr(provider, "config", None),
                                    "extract_assistant_replies", False))
+    work_capture = bool(getattr(getattr(provider, "config", None), "work_capture", False))
+    repo_roots = list(getattr(getattr(provider, "config", None), "work_verify_repo_roots", None) or [])
+    from .hmac_keys import work_artifact_hmac_key
+    artifact_hmac_key = work_artifact_hmac_key()
     finished = 0
     for step in (lambda: _run_rules(store, worker, embed),
                  (lambda: _run_model(store, worker, model, embed,
-                                     allow_assistant=allow_assistant)) if model is not None else None):
+                                     allow_assistant=allow_assistant)) if model is not None else None,
+                 (lambda: _run_work(store, worker, repo_roots, artifact_hmac_key))
+                 if work_capture else None):
         if step is None:
             continue
         try:
