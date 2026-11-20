@@ -177,18 +177,18 @@ async def _run_model(store, worker: str, model: ModelFn, embed: EmbedFn, *,
         return 0
 
 
-_BOUNDED_EXCERPT_CHARS = 300
+_SUMMARY_CHARS = 300
 
 
 def _bounded_excerpt(text: str) -> str:
-    """A length-capped excerpt for ask_summary/outcome_summary in this
-    rules-only slice. NOT a real summarizer (that is T5.6's job) --
-    bounded so a work_item never carries an unbounded pasted wall of
-    text, but still just an excerpt, not a model-condensed summary."""
-    text = (text or "").strip().replace("\n", " ")
-    if len(text) <= _BOUNDED_EXCERPT_CHARS:
-        return text
-    return text[: _BOUNDED_EXCERPT_CHARS - 15].rstrip() + " ...(truncated)"
+    """Spec 5 T5.6: ask_summary/outcome_summary are rule-based extractive
+    summaries (whole leading sentences, never cut mid-word/mid-sentence),
+    not pasted text and not a model's -- gate G3's precedent (stay on
+    rules until a model wins a bake-off) applies here too. Delegates to
+    work_summarize.extractive_summary; kept under this name so call
+    sites below didn't need to change."""
+    from .work_summarize import extractive_summary
+    return extractive_summary(text, _SUMMARY_CHARS)
 
 
 async def _run_work(

@@ -1,7 +1,7 @@
 """Spec 5 T5.3: extraction_worker._run_work, the extract_work job processor.
 
-Covers the T5.3 requirements plus T5.4 (status-source priority), now
-that both are built:
+Covers the T5.3 requirements plus T5.4 (status-source priority) and
+T5.6 (rule-based summaries), now that all are built:
   1. strip_memory_blocks runs before extraction touches the conversation text.
   2. Self-reports (assistant-only prose) never set status on their own --
      only an explicit user verdict span (T5.4) or a work_event
@@ -11,9 +11,14 @@ that both are built:
      own op_id).
   4. work_capture off means the worker never claims an extract_work job,
      even when one already exists in the table.
+  5. (T5.6) ask_summary/outcome_summary are rule-based extractive
+     summaries of AUTHORED conversation text only -- a pasted code
+     block never reaches them, and neither does work_event's raw tool
+     output (which _run_work never reads for summary content at all,
+     only for its structural status_code -- see test_run_work_e2e.py's
+     T5.4 tests).
 
-Artifact verification (T5.5) and model-based summarization (T5.6) are
-explicitly out of scope here.
+Artifact verification (T5.5) is explicitly out of scope here.
 """
 from __future__ import annotations
 
@@ -85,6 +90,38 @@ async def test_memory_block_is_stripped_before_extraction(store, clean_hermes_te
         )
     assert row is not None
     assert "Reykjavik" not in (row["outcome_summary"] or "")
+
+
+@pytest.mark.asyncio
+async def test_pasted_code_block_never_reaches_the_summary_t56(store, clean_hermes_test_db):
+    """T5.6: a pasted code block (segment_turn's 'pasted' kind) is
+    excluded from summarization input entirely -- it never appears in
+    ask_summary/outcome_summary, not even truncated or excerpted."""
+    session_id = "s1b"
+    secret_marker = "SECRET_API_KEY_zzz999"
+    pasted_reply = (
+        "Done, see the diff below.\n"
+        "```python\n"
+        f"API_KEY = '{secret_marker}'\n"
+        "def run():\n    pass\n"
+        "```\n"
+        "All set."
+    )
+    first_id = await _insert_span(store, session_id, "user", "Paste the fix please.")
+    last_id = await _insert_span(store, session_id, "assistant", pasted_reply)
+    await _enqueue_extract_work(store, session_id, first_id, last_id)
+
+    finished = await extraction_worker._run_work(store, WORKER)
+    assert finished == 1
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT outcome_summary FROM work_item WHERE owner = $1 AND session_id = $2",
+            OWNER, session_id,
+        )
+    assert row is not None
+    assert secret_marker not in (row["outcome_summary"] or "")
+    assert "```" not in (row["outcome_summary"] or "")
 
 
 @pytest.mark.asyncio
