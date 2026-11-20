@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,7 @@ class StoreWorkMixin:
 
     async def verify_work_artifacts(
         self, owner: str, work_item_id: int, repo_roots: list,
+        hmac_key: Optional[bytes] = None,
     ) -> tuple:
         """Spec 5 T5.5: verify every work_artifact row for this item
         against the allowlisted repo_roots, using work_artifact_verify's
@@ -101,7 +102,8 @@ class StoreWorkMixin:
         counts. An unverifiable artifact (checked=False) is left
         exactly as-is -- kept in the table, exists_now/content_hash/
         verified_at untouched -- never dropped and never written as
-        passed."""
+        passed. hmac_key gates file content_hash exactly like
+        work_event's -- no key, no hash, never an unkeyed fallback."""
         from .work_artifact_verify import verify_one_artifact
 
         async with self.pool.acquire() as conn:
@@ -115,6 +117,7 @@ class StoreWorkMixin:
             for row in rows:
                 checked, exists_now, content_hash = verify_one_artifact(
                     kind=row["kind"], ref=row["ref"], repo=row["repo"], repo_roots=repo_roots,
+                    hmac_key=hmac_key,
                 )
                 if not checked:
                     skipped += 1

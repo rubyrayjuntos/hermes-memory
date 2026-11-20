@@ -19,6 +19,7 @@ stored or returned.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import subprocess
 from pathlib import Path
@@ -72,11 +73,18 @@ def _resolve_file_within_repo(repo_root: Path, ref: str) -> Optional[Path]:
     return candidate
 
 
-def _sha256_file(path: Path) -> Optional[str]:
+def _file_hash(path: Path, hmac_key: Optional[bytes]) -> Optional[str]:
     """Reads the file only long enough to hash it -- the digest is the
-    only thing that ever leaves this function; content never is."""
+    only thing that ever leaves this function; content never is.
+
+    No hmac_key -> None, never a silent unkeyed fallback. A repo root
+    can hold a .env or other secret file, and a plain sha256 of a short
+    secret has the identical brute-force problem work_event.content_hash
+    was fixed for; the same rule applies here."""
+    if hmac_key is None:
+        return None
     try:
-        h = hashlib.sha256()
+        h = hmac.new(hmac_key, digestmod=hashlib.sha256)
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(65536), b""):
                 h.update(chunk)
@@ -101,6 +109,7 @@ def _git_ref_exists(repo_root: Path, git_ref: str) -> Optional[bool]:
 
 def verify_one_artifact(
     *, kind: str, ref: str, repo: Optional[str], repo_roots: Sequence[str],
+    hmac_key: Optional[bytes] = None,
 ) -> Tuple[bool, Optional[bool], Optional[str]]:
     """(checked, exists_now, content_hash).
 
@@ -110,9 +119,10 @@ def verify_one_artifact(
     never happened. checked=True means a real, local, network-free
     check ran and exists_now holds its honest result.
 
-    content_hash is populated for 'file' artifacts only (and only when
-    the file exists); commits/branches/pr/eval never get a content
-    hash -- there is no file content to hash for those kinds."""
+    content_hash is populated for 'file' artifacts only, and only when
+    a hmac_key is provided (see _file_hash) -- commits/branches/pr/eval
+    never get a content hash; there is no file content to hash for
+    those kinds."""
     if kind in _UNCHECKABLE_KINDS:
         return False, None, None
 
@@ -125,7 +135,7 @@ def verify_one_artifact(
         if path is None:
             return False, None, None
         exists = path.is_file()
-        content_hash = _sha256_file(path) if exists else None
+        content_hash = _file_hash(path, hmac_key) if exists else None
         return True, exists, content_hash
 
     if kind == "commit":

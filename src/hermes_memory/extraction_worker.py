@@ -191,7 +191,9 @@ def _bounded_excerpt(text: str) -> str:
     return text[: _BOUNDED_EXCERPT_CHARS - 15].rstrip() + " ...(truncated)"
 
 
-async def _run_work(store, worker: str, repo_roots: Optional[list] = None) -> int:
+async def _run_work(
+    store, worker: str, repo_roots: Optional[list] = None, hmac_key: Optional[bytes] = None,
+) -> int:
     """Spec 5 T5.3+T5.4+T5.5: claim and process one `extract_work` job.
     Strips memory blocks before anything else touches the text, infers
     status via work_status.infer_status's priority order, supersedes an
@@ -357,7 +359,7 @@ async def _run_work(store, worker: str, repo_roots: Optional[list] = None) -> in
         # never hold a DB transaction open. "Never at prefetch" is
         # satisfied structurally: this only runs from inside _run_work.
         if resulting_item_id is not None and repo_roots:
-            await store.verify_work_artifacts(owner, resulting_item_id, list(repo_roots))
+            await store.verify_work_artifacts(owner, resulting_item_id, list(repo_roots), hmac_key)
         return 1 if await store.job_done(job_id, fence) else 0
     except Exception as exc:
         await _settle_failure(store, job_id, fence, "extract_work", exc)
@@ -375,11 +377,14 @@ async def run_extraction_once(provider, store, *, embed: EmbedFn, model: Optiona
                                    "extract_assistant_replies", False))
     work_capture = bool(getattr(getattr(provider, "config", None), "work_capture", False))
     repo_roots = list(getattr(getattr(provider, "config", None), "work_verify_repo_roots", None) or [])
+    from .hmac_keys import work_artifact_hmac_key
+    artifact_hmac_key = work_artifact_hmac_key()
     finished = 0
     for step in (lambda: _run_rules(store, worker, embed),
                  (lambda: _run_model(store, worker, model, embed,
                                      allow_assistant=allow_assistant)) if model is not None else None,
-                 (lambda: _run_work(store, worker, repo_roots)) if work_capture else None):
+                 (lambda: _run_work(store, worker, repo_roots, artifact_hmac_key))
+                 if work_capture else None):
         if step is None:
             continue
         try:

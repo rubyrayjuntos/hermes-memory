@@ -71,18 +71,12 @@ def _is_missing_embed_version_schema(exc: BaseException) -> bool:
 
 
 def _work_event_hmac_key() -> Optional[bytes]:
-    """Spec 5 T5.1: the per-install key for work_event.content_hash, same
-    validation as HYBRID_AGE_SHADOW_HMAC_KEY (hex, >=32 bytes) -- missing
-    or invalid means no hash is computed at all, never a silent downgrade
-    to an unkeyed hash."""
-    secret_hex = os.environ.get("HYBRID_AGE_WORK_EVENT_HMAC_KEY", "")
-    try:
-        secret = bytes.fromhex(secret_hex)
-    except ValueError:
-        secret = b""
-    if len(secret) < 32:
-        return None
-    return secret
+    """Spec 5 T5.1: the per-install key for work_event.content_hash --
+    delegates to hmac_keys.py, the shared module (provider.py already
+    imports extraction_worker.py, so the key readers live in a leaf
+    module neither needs to import the other to reach)."""
+    from .hmac_keys import work_event_hmac_key
+    return work_event_hmac_key()
 
 
 def _extract_work_op_id(session_id: str, first_span_id: int, last_span_id: int) -> str:

@@ -17,6 +17,7 @@ import pytest
 pytestmark = [pytest.mark.store, pytest.mark.integration]
 
 OWNER = "spec5-t55-verify"
+_TEST_HMAC_KEY = bytes.fromhex("22" * 32)
 
 
 async def _insert_work_item(store, session_id: str) -> int:
@@ -52,7 +53,7 @@ async def test_existing_allowlisted_file_is_marked_verified(store, clean_hermes_
     item_id = await _insert_work_item(store, "s1")
     artifact_id = await _insert_artifact(store, item_id, "file", "thing.py", repo_root)
 
-    verified, skipped = await store.verify_work_artifacts(OWNER, item_id, [repo_root])
+    verified, skipped = await store.verify_work_artifacts(OWNER, item_id, [repo_root], _TEST_HMAC_KEY)
     assert verified == 1
     assert skipped == 0
 
@@ -63,6 +64,30 @@ async def test_existing_allowlisted_file_is_marked_verified(store, clean_hermes_
     assert row["exists_now"] is True
     assert row["content_hash"] is not None
     assert row["verified_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_file_hash_is_not_computed_without_an_hmac_key(store, clean_hermes_test_db, tmp_path):
+    """A repo root can hold a .env or other secret file; a plain sha256
+    of a short secret is brute-forceable, the same problem fixed for
+    work_event.content_hash. No key -> content_hash stays NULL, even
+    though exists_now is correctly reported True."""
+    repo_root = str(tmp_path)
+    with open(os.path.join(repo_root, "thing.py"), "w") as f:
+        f.write("print(1)\n")
+    item_id = await _insert_work_item(store, "s1b")
+    artifact_id = await _insert_artifact(store, item_id, "file", "thing.py", repo_root)
+
+    verified, skipped = await store.verify_work_artifacts(OWNER, item_id, [repo_root], None)
+    assert verified == 1
+    assert skipped == 0
+
+    async with store.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT exists_now, content_hash FROM work_artifact WHERE id = $1", artifact_id,
+        )
+    assert row["exists_now"] is True
+    assert row["content_hash"] is None
 
 
 @pytest.mark.asyncio
@@ -166,7 +191,7 @@ async def test_run_work_verifies_artifacts_for_the_item_it_just_processed(
             "WHERE owner = $1 AND kind = 'extract_work' AND op_id = $2",
             OWNER, op_id,
         )
-    assert await extraction_worker._run_work(store, "test-worker", [repo_root]) == 1
+    assert await extraction_worker._run_work(store, "test-worker", [repo_root], _TEST_HMAC_KEY) == 1
 
     async with store.pool.acquire() as conn:
         row = await conn.fetchrow(

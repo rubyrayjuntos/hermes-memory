@@ -29,17 +29,39 @@ def _write(repo_root, rel_path: str, content: str = "hello") -> None:
         f.write(content)
 
 
-def test_existing_file_is_verified_with_a_hash(tmp_path):
+def test_missing_hmac_key_leaves_content_hash_none_even_though_file_exists(tmp_path):
+    """A repo root can hold a .env or other secret file; a plain sha256
+    of a short secret is brute-forceable, the exact problem fixed for
+    work_event.content_hash. No key configured -> content_hash stays
+    None, never a silent unkeyed fallback -- even though the file
+    genuinely exists and exists_now is still reported."""
     repo_root = str(tmp_path)
     _write(repo_root, "src/thing.py", "print('hi')\n")
     checked, exists_now, content_hash = verify_one_artifact(
-        kind="file", ref="src/thing.py", repo=repo_root, repo_roots=[repo_root],
+        kind="file", ref="src/thing.py", repo=repo_root, repo_roots=[repo_root], hmac_key=None,
+    )
+    assert checked is True
+    assert exists_now is True
+    assert content_hash is None
+
+
+def test_existing_file_with_hmac_key_gets_a_keyed_hash_not_a_plain_one(tmp_path):
+    import hashlib
+    import hmac as hmac_module
+    repo_root = str(tmp_path)
+    content = b"SECRET_TOKEN=abc123\n"
+    _write(repo_root, ".env", content.decode())
+    key = bytes.fromhex("11" * 32)
+    checked, exists_now, content_hash = verify_one_artifact(
+        kind="file", ref=".env", repo=repo_root, repo_roots=[repo_root], hmac_key=key,
     )
     assert checked is True
     assert exists_now is True
     assert content_hash is not None
-    import hashlib
-    assert content_hash == hashlib.sha256(b"print('hi')\n").hexdigest()
+    assert content_hash == hmac_module.new(key, content, hashlib.sha256).hexdigest()
+    assert content_hash != hashlib.sha256(content).hexdigest(), (
+        "must be the keyed hash, not the brute-forceable plain sha256"
+    )
 
 
 def test_missing_file_is_verified_as_not_existing(tmp_path):
@@ -142,4 +164,4 @@ def test_assistant_claiming_a_file_was_written_is_never_consulted():
     parameter through which "I wrote X" could reach it, by construction."""
     import inspect
     params = set(inspect.signature(verify_one_artifact).parameters)
-    assert params == {"kind", "ref", "repo", "repo_roots"}
+    assert params == {"kind", "ref", "repo", "repo_roots", "hmac_key"}
