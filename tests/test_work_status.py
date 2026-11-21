@@ -142,3 +142,106 @@ def test_never_infers_failed_from_a_missing_artifact():
     test pins down."""
     status, _ = infer_status(user_verdicts=[], work_event_status_codes=[])
     assert status != "failed"
+
+
+# 2026-11-20 fix: classify_verdict matched bare "placeholder"/"verified"/
+# etc. anywhere in a span, including long pasted documents and policy
+# prompts that merely discuss the concept. Real-corpus false positives:
+# a PDLC quality-gate prompt containing "Placeholder tests are REJECTED"
+# (classified 160/610 sessions "failed" from sheer coincidence of
+# wording), a code-review task prompt containing "is verified" (about a
+# golden fixture, not the delivered work), and an image-generation
+# request containing "fixed and verified" (describing a desired render,
+# not confirming one). None of these are the user handing down a verdict.
+
+
+def test_placeholder_inside_long_policy_prompt_is_not_a_verdict():
+    """The actual production false positive: a PDLC quality-gate prompt
+    using "placeholder" as a rejected-pattern name, not a user calling
+    delivered work fake."""
+    long_prompt = (
+        "# PDLC HARD POLICY (factory-enforced)\n"
+        "# 1. Write deliverables immediately — empty completion is failure.\n"
+        "A deterministic scan REJECTS the handoff on any of these:\n\n"
+        "1. **Placeholder tests** — `expect(true).toBe(true)`, `assert True`, "
+        "or any trivially-true assertion that proves nothing.\n"
+        + ("padding to push this well past the 300-char verdict-span limit. " * 3)
+    )
+    status, reason = infer_status(user_verdicts=[long_prompt], work_event_status_codes=[])
+    assert status == "unknown"
+    assert reason is None
+
+
+def test_verdict_span_over_length_limit_is_ignored():
+    """A real verdict is a short reactive statement. Any span over the
+    length cap is policy/document/pasted-content territory, not a user
+    reacting to delivered work -- skip classification entirely rather
+    than let a long document's incidental wording decide the status."""
+    long_text = "that's fake, this never worked. " + ("filler " * 100)
+    assert len(long_text) > 300
+    status, reason = infer_status(user_verdicts=[long_text], work_event_status_codes=[])
+    assert status == "unknown"
+    assert reason is None
+
+
+def test_short_negative_verdict_still_classifies_under_the_limit():
+    """The length cap must not blanket-suppress real short verdicts."""
+    status, reason = infer_status(
+        user_verdicts=["that's fake, this never worked"], work_event_status_codes=[],
+    )
+    assert status == "failed"
+    assert reason
+
+
+def test_code_review_prompt_mentioning_verified_fixture_is_not_a_verdict():
+    """Leftover false positive #1 (still 'done' after the length-cap
+    fix alone): a code-review TASK PROMPT referencing an already-verified
+    golden fixture is not the user confirming the agent's own work."""
+    status, reason = infer_status(
+        user_verdicts=[
+            "Code-quality review of Spec 2 on /tmp/hermes-memory-spec2 (cc3d707). "
+            "Read-only. G2 golden is verified at scratch/spec2-golden-v2.json. "
+            "Verdict APPROVED or REQUEST_CHANGES."
+        ],
+        work_event_status_codes=[],
+    )
+    assert status == "unknown"
+    assert reason is None
+
+
+def test_image_request_mentioning_verified_render_is_not_a_verdict():
+    """Leftover false positive #2: an image-generation REQUEST describing
+    a desired end state ("fixed and verified before render") is not a
+    confirmation of delivered work."""
+    status, reason = infer_status(
+        user_verdicts=[
+            "modern glass cabin on your island terrain, golden-hour Cycles "
+            "exterior, with the material-assignment bug fixed and verified "
+            "before render."
+        ],
+        work_event_status_codes=[],
+    )
+    assert status == "unknown"
+    assert reason is None
+
+
+def test_short_standalone_confirmed_is_still_done():
+    """The narrowed confirmed/verified scoping must not lose the genuine
+    short reactive case it was built to catch."""
+    status, reason = infer_status(
+        user_verdicts=["Confirmed — that matches what I expected, thanks!"],
+        work_event_status_codes=[],
+    )
+    assert status == "done"
+    assert reason
+
+
+def test_verified_late_in_an_otherwise_short_message_still_counts():
+    """'verified' near the start of a short reactive message counts;
+    the position scoping is about excluding BURIED mentions deep in an
+    unrelated sentence, not about punishing short messages generally."""
+    status, reason = infer_status(
+        user_verdicts=["Yes, verified and working now."], work_event_status_codes=[],
+    )
+    assert status == "done"
+    assert reason
