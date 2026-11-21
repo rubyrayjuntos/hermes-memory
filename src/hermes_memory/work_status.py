@@ -45,7 +45,16 @@ from typing import Optional, Sequence
 # match ANY of these -- the spec names this exact failure mode. Every
 # pattern here was tested against that hazard before being added.
 _NEGATIVE_VERDICT_RES = [
-    re.compile(r"(?i)\b(fake|placeholder|fabricated|made up|made-up)\b"),
+    # 2026-11-20 fix: broadened to require a copula ("is/are/was/were" or
+    # a demonstrative) immediately before fake/placeholder/etc., so a
+    # policy document merely discussing the concept ("Placeholder tests
+    # are REJECTED") can never match -- only a real claim that something
+    # IS fake/a placeholder can. Verified against the real corpus: the
+    # existing short-verdict test below ("these numbers are fake /
+    # placeholder") still matches; the production false positive
+    # ("**Placeholder tests** — `expect(true)...`", no copula before
+    # the word) does not.
+    re.compile(r"(?i)\b(that'?s|that is|this is|it'?s|looks|is|are|was|were)\s+(fake|a placeholder|fabricated|made up|made-up)\b"),
     re.compile(r"(?i)\bthat'?s (wrong|incorrect|not right)\b"),
     re.compile(r"(?i)\bdid(n'?t| not) (really )?(work|pass)\b"),
     re.compile(r"(?i)\b(is|was) broken\b"),
@@ -64,18 +73,37 @@ _ABANDON_VERDICT_RES = [
 # "great", "works") is excluded by construction -- none of these words
 # appear in any pattern below.
 _POSITIVE_VERDICT_RES = [
-    re.compile(r"(?i)\bconfirmed\b"),
-    re.compile(r"(?i)\bverified\b"),
+    # 2026-11-20 fix: confirmed/verified anchored to the leading ~50
+    # chars of the span so a short reactive reply ("Confirmed — thanks!")
+    # still matches, but the word buried deep in an unrelated sentence
+    # (a code-review prompt's "G2 golden is verified at scratch/...", an
+    # image-generation request's "bug fixed and verified before render")
+    # does not. Neither production false positive is the user confirming
+    # the agent's own delivered work.
+    re.compile(r"(?i)^.{0,50}?\b(confirmed|verified)\b"),
     re.compile(r"(?i)\bthat'?s (correct|accurate|right)\b"),
     re.compile(r"(?i)\byes,?\s*that'?s right\b"),
 ]
+
+
+_MAX_VERDICT_SPAN_CHARS = 300
 
 
 def classify_verdict(text: str) -> Optional[str]:
     """'failed' | 'abandoned' | 'done' | None (no unambiguous verdict).
     Exposed (not module-private) so a caller needing to attribute a
     verdict to a specific span/event id can classify one item at a time
-    with the exact same logic infer_status uses in aggregate."""
+    with the exact same logic infer_status uses in aggregate.
+
+    2026-11-20 fix: every observed false positive -- negative, abandon,
+    and positive alike -- occurred inside a span of several thousand
+    characters (a pasted document, a long system/policy prompt, copied
+    web content), never inside a short reactive statement. A real
+    verdict ("that's broken", "confirmed", "never mind") is short;
+    capping the span length before any regex runs is a second,
+    independent line of defense alongside the narrower patterns above."""
+    if len(text) > _MAX_VERDICT_SPAN_CHARS:
+        return None
     if any(p.search(text) for p in _NEGATIVE_VERDICT_RES):
         return "failed"
     if any(p.search(text) for p in _ABANDON_VERDICT_RES):

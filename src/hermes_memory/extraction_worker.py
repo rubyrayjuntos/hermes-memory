@@ -25,6 +25,26 @@ MODEL_LEASE_S = 120.0
 WORK_LEASE_S = 120.0
 IDLE_INTERVAL_S = 5.0
 
+# 2026-11-20 fix: a compaction/handoff summary, or other synthetic
+# scaffolding row (background-process notice, async delegation complete,
+# skill-invocation notice, planning-state marker, etc.), is injected
+# verbatim as a user-role span and strip_memory_blocks does not remove
+# it (it is reference material, not injected memory). Picking one as
+# ask_span made the "ask" of a work_item a boilerplate marker instead of
+# what the user actually asked in that session. Prefix list mirrors
+# hermes-agent's own _SYNTHETIC_USER_ROW_PREFIXES
+# (agent/context_compressor.py) -- same convention, no cross-repo import
+# (this package has none).
+_SYNTHETIC_USER_ROW_PREFIXES = (
+    "[System:", "[CONTEXT", "[PRIOR CONTEXT", "[IMPORTANT:", "[Your active task list",
+    "[Planning state preserved", "[ASYNC DELEGATION", "[OUT-OF-BAND", "Cronjob Response:",
+)
+
+
+def _is_synthetic_user_row(text: str) -> bool:
+    head = (text or "")[:200].lstrip()
+    return head.startswith(_SYNTHETIC_USER_ROW_PREFIXES)
+
 ModelFn = Callable[[ModelBatchInput], Any]
 EmbedFn = Callable[[Sequence[str]], Awaitable[list]]
 
@@ -254,7 +274,18 @@ async def _run_work(
             assistant_spans = [
                 s for s in spans if s["role"] == "assistant" and int(s["id"]) in authored_by_span
             ]
-            ask_span = user_spans[0] if user_spans else spans[0]
+            # Prefer the first genuine (non-synthetic) user span as the
+            # ask; fall back to the marker itself only if that is all
+            # there is, so a session with nothing else still gets an ask.
+            non_synthetic_user_spans = [
+                s for s in user_spans
+                if not _is_synthetic_user_row(authored_by_span.get(int(s["id"]), ""))
+            ]
+            ask_span = (
+                non_synthetic_user_spans[0] if non_synthetic_user_spans
+                else user_spans[0] if user_spans
+                else spans[0]
+            )
             ask_span_id = int(ask_span["id"])
             ask_summary = _bounded_excerpt(authored_by_span.get(ask_span_id, ""))
 
