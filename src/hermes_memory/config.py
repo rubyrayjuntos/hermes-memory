@@ -18,10 +18,13 @@ environment variables named by ``dsn_env`` / ``embed_url_env``.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_DSN_ENV = "HYBRID_AGE_DSN"
 DEFAULT_EMBED_URL_ENV = "HYBRID_AGE_EMBED_URL"
@@ -176,6 +179,25 @@ def load_dotenv_files() -> None:
 _load_dotenv_files = load_dotenv_files
 
 
+def redacted_dsn(dsn: str) -> str:
+    """``postgres://user:***@host/db`` -- never the real password, always
+    safe to log. Used only for the startup log line (2026-11-21): a profile
+    whose resolved DSN silently diverges from its own .env (the shared
+    gateway/desktop process loads one profile's .env process-wide; see
+    ``dotenv_paths``) had no log line anywhere that would catch it."""
+    if not dsn:
+        return "<empty dsn>"
+    import re
+
+    m = re.match(r"^(postgres(?:ql)?://)(?:([^:@/]+)(?::([^@/]*))?@)?(.+)$", dsn)
+    if not m:
+        return "<unparseable dsn>"
+    scheme, user, _password, rest = m.groups()
+    if user is None:
+        return f"{scheme}{rest}"
+    return f"{scheme}{user}:***@{rest}"
+
+
 def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
     """Resolve configuration: yaml names env keys; secrets come from env after dotenv.
 
@@ -248,6 +270,7 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
             "Refusing silent fallback to :5450/hermes_memory."
         )
     cfg.dsn = explicit_dsn
+    logger.info("hybrid-age resolved Postgres target: %s", redacted_dsn(cfg.dsn))
     cfg.embed_url = os.environ.get(cfg.embed_url_env) or (
         raw.get("embed_url") if isinstance(raw.get("embed_url"), str) else None
     ) or cfg.embed_url
