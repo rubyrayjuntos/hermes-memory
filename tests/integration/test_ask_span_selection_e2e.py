@@ -71,7 +71,7 @@ async def test_compaction_marker_is_skipped_for_a_real_ask(store, clean_hermes_t
         "window — treat it as background reference, NOT as active instruction.",
     )
     await _insert_span(store, session_id, "assistant", "Got it — resuming where we left off.")
-    real_ask_id = await _insert_span(
+    await _insert_span(
         store, session_id, "user", "Please rename the config key to hybrid_age.work_capture.",
     )
     last_id = await _insert_span(
@@ -95,7 +95,7 @@ async def test_background_process_notice_is_skipped_for_a_real_ask(store, clean_
         "[IMPORTANT: Background process proc_39f2d94492e6 exited (exit code -15). "
         "Check its output before relying on it.]",
     )
-    real_ask_id = await _insert_span(
+    await _insert_span(
         store, session_id, "user", "Please restart the render job with the new seed.",
     )
     last_id = await _insert_span(store, session_id, "assistant", "Restarted with the new seed.")
@@ -117,7 +117,7 @@ async def test_skill_invocation_notice_is_skipped_for_a_real_ask(store, clean_he
         '[IMPORTANT: The user has invoked the "jobberworkee" skill, indicating '
         "they want job-search help. Load the skill before responding.]",
     )
-    real_ask_id = await _insert_span(
+    await _insert_span(
         store, session_id, "user", "Find me open roles for ML infra engineers in Austin.",
     )
     last_id = await _insert_span(store, session_id, "assistant", "Found 4 matching roles.")
@@ -139,7 +139,7 @@ async def test_async_delegation_notice_is_skipped_for_a_real_ask(store, clean_he
         "[ASYNC DELEGATION BATCH COMPLETE — deleg_91b4aae6] A background "
         "fan-out finished; results are attached below.",
     )
-    real_ask_id = await _insert_span(
+    await _insert_span(
         store, session_id, "user", "Merge those results into the weekly report.",
     )
     last_id = await _insert_span(store, session_id, "assistant", "Merged into the report.")
@@ -160,7 +160,7 @@ async def test_cronjob_response_notice_is_skipped_for_a_real_ask(store, clean_he
         store, session_id, "user",
         "Cronjob Response: nightly backup completed successfully at 02:00 UTC.",
     )
-    real_ask_id = await _insert_span(
+    await _insert_span(
         store, session_id, "user", "Also back up the eval database tonight.",
     )
     last_id = await _insert_span(store, session_id, "assistant", "Added the eval DB to the backup job.")
