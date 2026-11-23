@@ -108,7 +108,7 @@ def test_dotenv_key_from_file_export_and_whitespace(tmp_path) -> None:
     path = tmp_path / ".env"
     path.write_text(
         "# comment\n"
-        "  export HYBRID_AGE_DSN=postgres://hermes:x@127.0.0.1:5452/hermes_memory_installed\n"
+        "  export HYBRID_AGE_DSN=postgres://hermes:***@127.0.0.1:5452/hermes_memory_installed\n"
         "OTHER=1\n",
         encoding="utf-8",
     )
@@ -116,3 +116,37 @@ def test_dotenv_key_from_file_export_and_whitespace(tmp_path) -> None:
     assert val is not None
     assert val.endswith("/hermes_memory_installed")
     assert dotenv_key_from_file(path, "MISSING") is None
+
+
+# 2026-11-21 fix: a profile's resolved HYBRID_AGE_DSN silently diverging from
+# the value its own .env names (observed for real: a shared gateway/desktop
+# process loads ~/.hermes/.env once, process-wide, and a profile without a
+# literal yaml `dsn:` override inherits whatever that first-loaded value is,
+# never its own profile's .env) had no log line anywhere to catch it. These
+# tests pin a `redacted_dsn()` helper (never prints a password) and that
+# `load_config` logs the resolved host/db through it exactly once.
+def test_redacted_dsn_strips_password_and_keeps_host_db() -> None:
+    from hermes_memory.config import redacted_dsn
+
+    assert redacted_dsn("postgres://hermes:s3cr3t@127.0.0.1:5452/hermes_memory_installed") == (
+        "postgres://hermes:***@127.0.0.1:5452/hermes_memory_installed"
+    )
+    # No ":" credentials at all (e.g. local trust auth) -- nothing to redact, host/db still visible.
+    assert redacted_dsn("postgres://127.0.0.1:5450/hermes_test") == "postgres://127.0.0.1:5450/hermes_test"
+    # Malformed/unparseable input never raises and never leaks the raw string with a password in it.
+    assert redacted_dsn("not-a-dsn-at-all") == "<unparseable dsn>"
+    assert redacted_dsn("") == "<empty dsn>"
+
+
+def test_load_config_logs_resolved_dsn_without_password(monkeypatch, caplog) -> None:
+    import logging
+
+    monkeypatch.setattr("hermes_memory.config.load_dotenv_files", lambda: None)
+    monkeypatch.setattr("hermes_memory.config._load_yaml_block", lambda *a, **k: {})
+    monkeypatch.setenv("HYBRID_AGE_DSN", "postgres://hermes:s3cr3t@127.0.0.1:5452/hermes_memory_installed")
+    with caplog.at_level(logging.INFO, logger="hermes_memory.config"):
+        load_config("/nonexistent/config.yaml")
+    messages = "\n".join(r.message for r in caplog.records)
+    assert "127.0.0.1:5452" in messages
+    assert "hermes_memory_installed" in messages
+    assert "s3cr3t" not in messages
