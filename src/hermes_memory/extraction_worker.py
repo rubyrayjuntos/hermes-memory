@@ -349,7 +349,13 @@ async def _run_work(
             if status == "unknown" and outcome_summary:
                 outcome_summary = f"(assistant's account, unconfirmed) {outcome_summary}"
 
-            topic_key = f"session:{session_id}"
+            # Spec 7 T7.3: segment-scoped, not session-scoped, so distinct
+            # segments of the same session never supersede each other --
+            # supersession still means "a later attempt at the same
+            # topic_key," which is now "the same segment position," not
+            # "the same session." first_id is the segment's own first
+            # span id (stable, order-preserving), set by T7.2's caller.
+            topic_key = f"session:{session_id}:{first_id}"
             resulting_item_id: Optional[int] = None
             async with conn.transaction():
                 # T5.3: "under an owner/topic lock, insert the successor,
