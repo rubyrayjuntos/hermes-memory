@@ -97,6 +97,44 @@ def test_asserted_spans_outrank_slogans_and_paste():
     assert 'paste="true"' in out
 
 
+def test_similarity_score_outranks_paste_and_noclaim_flags_when_present():
+    # 2026-11-25 review finding: the first recall eval measured 3 of 4
+    # misses where the TOP vector-similarity match got dropped by the
+    # token budget anyway, because _rank sorted purely on (paste,
+    # noclaim) with no regard for the actual similarity score. Within a
+    # bin, similarity must be the PRIMARY sort key -- paste/noclaim only
+    # break ties between items with the same (or no) score.
+    top_match_but_paste = dict(
+        USER, turn_id=1, score=0.91,
+        content="[IMPORTANT: Background process proc_1 completed\nthe actual answer]",
+    )
+    weaker_match_not_paste = dict(
+        USER, turn_id=2, score=0.60, content="a vaguely related aside",
+    )
+    # A tight budget that fits only ONE of the two real hits (each ~20-30
+    # tokens) -- the higher-similarity one must be the survivor, even
+    # though it is flagged paste and the weaker one isn't.
+    out = format_span_injection(
+        [weaker_match_not_paste, top_match_but_paste], token_budget=60,
+    )
+    assert 'id="1"' in out
+    assert 'id="2"' not in out
+
+
+def test_similarity_tie_falls_back_to_paste_and_noclaim_as_before():
+    # No score supplied at all (same shape the pre-existing asserted/
+    # slogan/paste test uses) -- every item ties on similarity, so the
+    # paste/noclaim tiebreak decides exactly as before. This pins that
+    # the fix is additive, not a behavior change when scores are absent.
+    slogan = dict(USER, turn_id=1, content="Tokyo Eye shares MLflow gates")
+    asserted = dict(USER, turn_id=2, content="Deloitte uses Azure.",
+                    live_claims=1)
+    paste = dict(USER, turn_id=3,
+                 content="[IMPORTANT: Background process proc_1 completed\nok]")
+    out = format_span_injection([slogan, paste, asserted])
+    assert out.index('id="2"') < out.index('id="1"') < out.index('id="3"')
+
+
 def test_facts_require_grounding_and_source_spans():
     out = format_facts([
         {

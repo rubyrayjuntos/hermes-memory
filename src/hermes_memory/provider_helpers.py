@@ -369,11 +369,21 @@ def format_span_injection(
                 (nspeaker, _span_tag(nb, neighbor=True, body_chars=neighbor_body_chars))
             )
 
-    def _rank(entry: tuple[str, dict]) -> tuple[int, int]:
+    def _rank(entry: tuple[str, dict]) -> tuple[float, int, int]:
         _, item = entry
+        # 2026-11-25 fix: similarity is the PRIMARY sort key within a
+        # bin; paste/noclaim only break ties. The first recall eval
+        # found 3 of 4 misses were the top vector match getting bumped
+        # by a lower-similarity item that simply wasn't flagged paste/
+        # noclaim -- packing order was fighting retrieval instead of
+        # respecting it. No score present (items built by hand, not
+        # from vector_search) ties at 0.0, preserving the original
+        # paste/noclaim-only ordering for that case.
+        score = item.get("score")
+        score_key = -float(score) if score is not None else 0.0
         paste = 1 if _is_paste(str(item.get("content") or "")) else 0
         noclaim = 0 if (item.get("live_claims") or 0) > 0 else 1
-        return (paste, noclaim)
+        return (score_key, paste, noclaim)
 
     grounded: list[str] = []
     unconfirmed: list[str] = []
