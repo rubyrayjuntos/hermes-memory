@@ -1,0 +1,120 @@
+/* The Hermes Librarian — generated from tokens.json */
+/* Do not edit: run `python scripts/build_design_tokens.py`. */
+
+:root, [data-theme="ink"] {
+  --brand-nous-gold: #dd8e35;
+  --brand-librarian-gold: #c9a86a;
+  --brand-lapis: #1a3a5f;
+  --brand-parchment: #f7f3eb;
+  --brand-ink: #0d1117;
+  --brand-vector-dot: #f5c518;
+  --brand-graph-edge: #5b8def;
+  --brand-weed-red: #8b3a2e;
+  --surface: #0d1117;
+  --surface-raised: #161b22;
+  --surface-sunken: #080b10;
+  --line: #262c36;
+  --line-strong: #6b7584;
+  --text: #f7f3eb;
+  --text-muted: #9aa3af;
+  --accent: var(--brand-nous-gold);
+  --on-accent: var(--brand-ink);
+  --focus-ring: var(--accent);
+  --seal: var(--brand-librarian-gold);
+  --vector: var(--brand-vector-dot);
+  --graph-edge: var(--brand-graph-edge);
+  --weed: #e08a78;
+  --status-grounded: var(--graph-edge);
+  --status-unconfirmed: var(--brand-nous-gold);
+  --status-leased: var(--vector);
+  --status-retracted: var(--weed);
+  --status-orphaned: #7a8594;
+  --shadow-raised: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.45);
+}
+
+[data-theme="parchment"] {
+  --surface: #f7f3eb;
+  --surface-raised: #fffdf8;
+  --surface-sunken: #efe9dc;
+  --line: #e2d9c6;
+  --line-strong: #8c8270;
+  --text: #0d1117;
+  --text-muted: #5b5446;
+  --accent: var(--brand-lapis);
+  --on-accent: var(--brand-parchment);
+  --focus-ring: var(--accent);
+  --seal: #9a6b1f;
+  --vector: #8a6a00;
+  --graph-edge: #3e6fd1;
+  --weed: var(--brand-weed-red);
+  --status-grounded: var(--graph-edge);
+  --status-unconfirmed: #9a6b1f;
+  --status-leased: var(--vector);
+  --status-retracted: var(--weed);
+  --status-orphaned: #6e7781;
+  --shadow-raised: 0 1px 0 rgba(13,17,23,0.04), 0 8px 24px rgba(26,58,95,0.10);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --surface: #f7f3eb;
+    --surface-raised: #fffdf8;
+    --surface-sunken: #efe9dc;
+    --line: #e2d9c6;
+    --line-strong: #8c8270;
+    --text: #0d1117;
+    --text-muted: #5b5446;
+    --accent: var(--brand-lapis);
+    --on-accent: var(--brand-parchment);
+    --focus-ring: var(--accent);
+    --seal: #9a6b1f;
+    --vector: #8a6a00;
+    --graph-edge: #3e6fd1;
+    --weed: var(--brand-weed-red);
+    --status-grounded: var(--graph-edge);
+    --status-unconfirmed: #9a6b1f;
+    --status-leased: var(--vector);
+    --status-retracted: var(--weed);
+    --status-orphaned: #6e7781;
+    --shadow-raised: 0 1px 0 rgba(13,17,23,0.04), 0 8px 24px rgba(26,58,95,0.10);
+  }
+}
+
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+  --font-display: "Cormorant Garamond", "EB Garamond", Georgia, serif;
+  --font-sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.display-xl { font-family: var(--font-display); font-size: 56px; line-height: 60px; font-weight: 600; }
+
+.display { font-family: var(--font-display); font-size: 40px; line-height: 44px; font-weight: 600; }
+
+.heading { font-family: var(--font-display); font-size: 26px; line-height: 32px; font-weight: 600; }
+
+.inscription { font-family: var(--font-display); font-size: 13px; line-height: 16px; font-weight: 600; letter-spacing: 0.18em; }
+
+.title { font-family: var(--font-sans); font-size: 17px; line-height: 24px; font-weight: 600; }
+
+.body { font-family: var(--font-sans); font-size: 15px; line-height: 24px; font-weight: 400; }
+
+.body-sm { font-family: var(--font-sans); font-size: 13px; line-height: 20px; font-weight: 400; }
+
+.label { font-family: var(--font-sans); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; }
+
+.metric { font-family: var(--font-sans); font-size: 22px; line-height: 26px; font-weight: 600; }
+
+.code { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-weight: 400; }
+
+.terminal { font-family: var(--font-mono); font-size: 12px; line-height: 18px; font-weight: 400; }

@@ -1,0 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* The Hermes Librarian — component classes.
+   Every value is a token from tokens.json (var(--…)); nothing here re-declares a token.
+   Class names keep the pane's existing `hx-` prefix (ui/graph-explorer/src/index.css)
+   so the pane can adopt this sheet without renaming markup. */
+
+body { background: var(--surface); color: var(--text); font-family: var(--font-sans); margin: 0; }
+:where(button, a, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Panel ------------------------------------------------------------- */
+.hx-panel { background: var(--surface-raised); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); }
+.hx-panel > .hx-eyebrow, .hx-eyebrow { font-family: var(--font-display); font-weight: 600; font-size: 13px; line-height: 16px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--seal); margin: 0 0 var(--space-2); }
+.hx-panel h2, .hx-panel-title { font-family: var(--font-sans); font-size: 17px; line-height: 24px; font-weight: 600; margin: 0 0 var(--space-3); color: var(--text); }
+.hx-header { position: sticky; top: 0; z-index: 30; background: var(--surface-raised); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); box-shadow: var(--shadow-raised); display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.hx-rule { height: 0; border: 0; border-top: 1px solid var(--line); margin: var(--space-4) 0; }
+
+/* Buttons ----------------------------------------------------------- */
+.hx-btn, .hx-btn-ghost, .hx-btn-danger { font-family: var(--font-sans); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); cursor: pointer; border: 1px solid transparent; }
+.hx-btn { background: var(--accent); color: var(--on-accent); }
+.hx-btn:hover { filter: brightness(1.08); }
+.hx-btn-ghost { background: transparent; color: var(--text); border-color: var(--line-strong); }
+.hx-btn-ghost:hover { background: var(--surface-sunken); }
+.hx-btn-danger { background: transparent; color: var(--weed); border-color: var(--weed); }
+.hx-btn:disabled, .hx-btn-ghost:disabled, .hx-btn-danger:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+
+/* Chip + gem -------------------------------------------------------- */
+.hx-chip { display: inline-flex; align-items: center; gap: var(--space-1); border: 1px solid var(--line-strong); background: var(--surface-raised); color: var(--text); border-radius: var(--radius-pill); padding: 2px var(--space-2); font-size: 12px; line-height: 18px; font-family: var(--font-sans); }
+.hx-chip.mono { font-family: var(--font-mono); }
+.hx-gem { width: 8px; height: 8px; transform: rotate(45deg); border-radius: 1px; display: inline-block; flex-shrink: 0; background: var(--text-muted); }
+
+/* Status: mark + word, never colour alone ---------------------------- */
+.hx-status { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-sans); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 3px var(--space-2) 3px 6px; background: var(--surface-raised); }
+.hx-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--hx-status, var(--status-orphaned)); }
+.hx-status[data-status="grounded"], .hx-status[data-status="done"] { --hx-status: var(--status-grounded); }
+.hx-status[data-status="unconfirmed"], .hx-status[data-status="retryable"] { --hx-status: var(--status-unconfirmed); }
+.hx-status[data-status="leased"] { --hx-status: var(--status-leased); }
+.hx-status[data-status="retracted"], .hx-status[data-status="withdrawn"], .hx-status[data-status="failed"] { --hx-status: var(--status-retracted); }
+.hx-status[data-status="orphaned"], .hx-status[data-status="pending"], .hx-status[data-status="null"] { --hx-status: var(--status-orphaned); }
+/* failure states get a square mark as a second, non-colour cue */
+.hx-status[data-status="retracted"]::before, .hx-status[data-status="withdrawn"]::before, .hx-status[data-status="failed"]::before { border-radius: 1px; }
+.hx-status[data-status="pending"]::before, .hx-status[data-status="orphaned"]::before, .hx-status[data-status="null"]::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--hx-status); }
+
+/* Tabs -------------------------------------------------------------- */
+.hx-tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--radius-pill); max-width: 100%; overflow-x: auto; }
+.hx-tab { border: 0; background: transparent; border-radius: var(--radius-pill); padding: 6px var(--space-3); font-family: var(--font-sans); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+.hx-tab:hover { color: var(--text); }
+.hx-tab.on, .hx-tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+
+/* Metric ------------------------------------------------------------ */
+.hx-metric { border: 1px solid var(--line); background: var(--surface-sunken); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); min-width: 96px; }
+.hx-metric .k { display: block; font-family: var(--font-sans); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.hx-metric .v { display: block; font-family: var(--font-sans); font-size: 22px; line-height: 26px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.hx-metric .src { display: block; font-family: var(--font-mono); font-size: 11px; line-height: 16px; color: var(--text-muted); }
+
+/* Terminal ---------------------------------------------------------- */
+.hx-term { background: var(--surface-sunken); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-3); font-family: var(--font-mono); font-size: 12px; line-height: 18px; white-space: pre-wrap; overflow: auto; max-height: 320px; margin: 0; }
+.hx-term .step { color: var(--text-muted); }
+.hx-term .ok { color: var(--status-grounded); }
+.hx-term .warn { color: var(--status-unconfirmed); }
+.hx-term .err { color: var(--weed); }
+.hx-term .lib { color: var(--accent); font-weight: 500; }
+.hx-term .vec { color: var(--vector); }
+.hx-term .edge { color: var(--graph-edge); }
+
+/* Banner (one-line system notice) ----------------------------------- */
+.hx-banner { display: flex; gap: var(--space-2); align-items: baseline; font-family: var(--font-mono); font-size: 12px; line-height: 18px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--line-strong); background: var(--surface-sunken); color: var(--text); }
+.hx-banner .tag { font-weight: 500; color: var(--status-unconfirmed); }
+.hx-banner.good .tag { color: var(--status-grounded); }
+.hx-banner.bad .tag { color: var(--weed); }

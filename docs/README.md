@@ -11,6 +11,7 @@ status lives only in the files below — not on the wiki, not in archived sprint
 | To know if a release row is Open or Met | [RELEASE_CRITERIA.md](../RELEASE_CRITERIA.md) **only** |
 | To know what evidence “done” needs | [DEFINITION_OF_DONE.md](../DEFINITION_OF_DONE.md) (pane = level 6 + artifact) |
 | To avoid restating a verified-wrong claim | [CORRECTIONS.md](CORRECTIONS.md) |
+| Colours, type, components, CLI/skin/pane look | [design-system/README.md](design-system/README.md) (`tokens.json` is the source) |
 | Pane hover / click / funnel rules | [PANE_INTERACTION_SPEC.md](PANE_INTERACTION_SPEC.md) |
 | The live inspector | `docs/graph/fountain.html` via `http://127.0.0.1:7890/api/librarian/pane` |
 | AGE / Cypher gotchas | [age-quirks.md](age-quirks.md) |
