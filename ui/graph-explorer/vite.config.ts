@@ -9,6 +9,8 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // the design system (tokens.css, components.css, marks) lives in docs/design-system
+    fs: { allow: ['.', '../../docs/design-system'] },
     proxy: {
       '/api': 'http://127.0.0.1:7890',
     },

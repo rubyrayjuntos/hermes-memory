@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import librarianIcon from '../../../docs/design-system/assets/minimal-icon.png';
 import {
   Search, ZoomIn, ZoomOut, RotateCcw, Play, Copy, Check, ChevronDown,
   Activity, Layers, Clock, Shield, Database, ArrowRight, Eye, GitBranch,
@@ -51,11 +52,13 @@ interface SchemaRow { table: string; role: string; keys: string; count: number }
 interface Mutation { kind: string; claimId?: string; evidenceId?: string; at: string }
 
 const TYPE_COLOR: Record<EntType, string> = {
-  person: '#234A8A', project: '#2F8F8A', place: '#C9943F', org: '#6D4AC6',
-  tool: '#B23A6B', concept: '#1F7A4D', other: '#6B7280',
+  person: 'var(--entity-person)', project: 'var(--entity-project)', place: 'var(--entity-place)',
+  org: 'var(--entity-org)', tool: 'var(--entity-tool)', concept: 'var(--entity-concept)',
+  other: 'var(--entity-other)',
 };
 const STATUS_COLOR: Record<ClaimStatus, string> = {
-  grounded: '#0E6B5A', unconfirmed: '#C9943F', retracted: '#8B3A2E', orphaned: '#6B7280',
+  grounded: 'var(--status-grounded)', unconfirmed: 'var(--status-unconfirmed)',
+  retracted: 'var(--status-retracted)', orphaned: 'var(--status-orphaned)',
 };
 const DEFAULT_FUNCTIONAL = ['based_in','owned_by','works_for','lives_in','role_is','status_is'];
 
@@ -627,45 +630,45 @@ export default function App() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-              style={{ background: 'var(--lapis-ink)', color: '#fff' }}>
-              <GitBranch size={18} />
+              style={{ background: 'var(--brand-ink)' }}>
+              <img src={librarianIcon} alt="" className="h-7 w-auto" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-[clamp(1.05rem,2.4vw,1.35rem)] leading-none font-bold truncate"
-                style={{ color: '#16325C' }}>
-                THE HERMES LIBRARIAN
+              <h1 className="text-[clamp(1.35rem,2.8vw,1.75rem)] leading-none font-semibold truncate"
+                style={{ color: 'var(--text)' }}>
+                The Hermes Librarian
               </h1>
-              <p className="text-[13px] italic mt-1" style={{ color: 'var(--muted)' }}>
+              <p className="text-[13px] mt-1" style={{ color: 'var(--text-muted)' }}>
                 Graph Explorer — claims · evidence · storage · owner-scoped
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2 ml-auto flex-wrap">
-            <div className="flex rounded-full p-1 max-w-full overflow-x-auto" style={{ background: '#DCE8FA' }}>
+            <div className="flex rounded-full p-1 max-w-full overflow-x-auto" style={{ background: 'var(--surface-sunken)', border: '1px solid var(--line)' }}>
               {(owners.length ? owners : ['—']).map(o => (
                 <button key={o} disabled={o === '—' || busy}
                   onClick={() => { setOwner(o); setSelectedClaim(null); setFocusNode(null); }}
                   className="px-3 py-1.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
                   style={owner === o
-                    ? { background: 'var(--lapis-ink)', color: '#fff' }
-                    : { color: 'var(--muted)' }}>
+                    ? { background: 'var(--accent)', color: 'var(--on-accent)' }
+                    : { color: 'var(--text-muted)' }}>
                   {o}
                 </button>
               ))}
             </div>
-            <div className="flex rounded-full p-1" style={{ background: '#DCE8FA' }}>
+            <div className="flex rounded-full p-1" style={{ background: 'var(--surface-sunken)', border: '1px solid var(--line)' }}>
               {(['vector', 'shadow', 'hybrid'] as const).map(m => (
                 <button key={m} onClick={() => setMode(m)}
                   className="px-3 py-1.5 rounded-full text-[10px] font-semibold capitalize"
                   style={mode === m
-                    ? { background: '#fff', border: '1px solid rgba(42,93,176,.25)' }
-                    : { color: 'var(--muted)' }}>
+                    ? { background: 'var(--accent)', color: 'var(--on-accent)' }
+                    : { color: 'var(--text-muted)' }}>
                   {m}
                 </button>
               ))}
             </div>
             <label className="flex items-center gap-2 rounded-full px-3 py-2 text-sm min-w-[180px] flex-1 sm:flex-none"
-              style={{ border: '1px solid rgba(42,93,176,.25)', background: '#fff' }}>
+              style={{ border: '1px solid var(--line-strong)', background: 'var(--surface-raised)' }}>
               <Search size={15} /><input value={globalSearch} onChange={e => setGlobalSearch(e.target.value)}
                 placeholder="Search graph…" className="bg-transparent outline-none w-full text-sm"
                 aria-label="Global search" />
@@ -682,10 +685,10 @@ export default function App() {
           ].map(s => (
             <span key={s.l} className="hx-chip">{s.l} <b className="ml-1 mono">{s.v}</b></span>
           ))}
-          <span className="hx-chip" style={{ background: 'rgba(47,143,138,.12)' }}>
+          <span className="hx-chip">
             Retrieval: {mode} · Owner: {owner || '—'}
           </span>
-          <span className="mono text-[10px]" style={{ color: 'var(--muted-2)' }}>
+          <span className="mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
             {loadedMsg} {saveMsg}
           </span>
         </div>
@@ -693,17 +696,17 @@ export default function App() {
 
       <main className="flex flex-col lg:flex-row items-start gap-3 px-3 pb-4 overflow-x-clip">
         <aside className="hx-sidebar w-full lg:w-[280px] shrink-0 p-4">
-          <p className="text-[10px] tracking-[0.18em] font-semibold" style={{ color: '#8ED8E8' }}>
+          <p className="text-[10px] tracking-[0.18em] font-semibold" style={{ color: 'var(--seal)' }}>
             ENTITY BROWSER
           </p>
           <label className="mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
-            style={{ background: 'var(--sidebar-2)' }}>
+            style={{ background: 'var(--surface-sunken)', border: '1px solid var(--line-strong)' }}>
             <Search size={15} />
             <input value={entitySearch} onChange={e => setEntitySearch(e.target.value)}
-              placeholder="Search entities / aliases" className="bg-transparent outline-none w-full text-white placeholder:text-white/50"
+              placeholder="Search entities / aliases" className="bg-transparent outline-none w-full placeholder:text-[color:var(--text-muted)]"
               aria-label="Search entities" />
           </label>
-          <label className="mt-2 flex items-center gap-2 text-[11px] text-white/70">
+          <label className="mt-2 flex items-center gap-2 text-[11px]">
             <input type="checkbox" checked={showMerged} onChange={e => setShowMerged(e.target.checked)} />
             Show merged-away rows
           </label>
@@ -713,11 +716,11 @@ export default function App() {
               return (
                 <button key={t} onClick={() => setTypeFilter(active ? typeFilter.filter(x => x !== t) : [...typeFilter, t])}
                   className="w-full flex items-center justify-between rounded-lg px-2 py-1.5 text-sm"
-                  style={{ background: active ? '#2A3442' : 'transparent' }}>
+                  style={{ background: active ? 'var(--surface-sunken)' : 'transparent', boxShadow: active ? 'inset 0 0 0 1px var(--line-strong)' : 'none' }}>
                   <span className="flex items-center gap-2 capitalize">
                     <span className="hx-gem" style={{ background: TYPE_COLOR[t] }} />{t}
                   </span>
-                  <span className="mono text-xs text-white/60">{typeCounts[t] || 0}</span>
+                  <span className="mono text-xs" style={{ color: 'var(--text-muted)' }}>{typeCounts[t] || 0}</span>
                 </button>
               );
             })}
@@ -729,20 +732,19 @@ export default function App() {
                 <button key={e.id} onClick={() => { setSelectedEntity(e.id); setSelectedClaim(null); setTab('graph'); }}
                   className="w-full text-left rounded-xl p-3 border"
                   style={{
-                    background: sel ? 'var(--surface)' : 'transparent',
-                    color: sel ? 'var(--ink)' : '#E8F1FF',
-                    borderColor: sel ? 'var(--border)' : '#2A3442',
+                    background: sel ? 'var(--surface-sunken)' : 'transparent',
+                    color: 'var(--text)',
+                    borderColor: sel ? 'var(--accent)' : 'var(--line)',
                     opacity: e.merged_into ? 0.65 : 1,
                   }}>
                   <span className="flex items-center justify-between gap-2">
                     <span className="font-semibold text-sm truncate">{e.name}</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full capitalize shrink-0 text-white"
-                      style={{ background: TYPE_COLOR[e.type] }}>
-                      {e.type_db || e.type}
+                    <span className="hx-chip capitalize shrink-0">
+                      <span className="hx-gem" style={{ background: TYPE_COLOR[e.type] }} />{e.type_db || e.type}
                     </span>
                   </span>
                   <span className="text-xs block mt-1"
-                    style={{ color: sel ? 'var(--muted)' : 'rgba(255,255,255,.6)' }}>
+                    style={{ color: 'var(--text-muted)' }}>
                     {claimCountFor(e.id)} claims · {groundedCountFor(e.id)} grounded
                     {e.aliases.length ? ` · aka ${e.aliases.slice(0, 3).join(', ')}` : ''}
                     {e.merged_into ? ` · merged→ ${e.merged_into}` : ''}
@@ -751,32 +753,30 @@ export default function App() {
               );
             })}
             {filteredEntities.length === 0 && (
-              <p className="text-sm text-white/70 rounded-xl border border-dashed p-3" style={{ borderColor: '#2A3442' }}>
+              <p className="text-sm rounded-xl border border-dashed p-3" style={{ borderColor: 'var(--line)' }}>
                 No entities match this filter.
               </p>
             )}
           </div>
-          <div className="mt-5 rounded-xl p-3" style={{ background: 'var(--sidebar-2)', border: '1px solid #2A5DB0' }}>
-            <p className="text-sm font-semibold text-white">Live graph slice</p>
-            <p className="text-xs mt-1 text-white/60">
+          <div className="mt-5 rounded-xl p-3" style={{ background: 'var(--surface-sunken)', border: '1px solid var(--line)' }}>
+            <p className="text-sm font-semibold">Live graph slice</p>
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
               Snapshot from Postgres. Confirm/retract remain preview-only.
             </p>
             <button disabled={busy || !owner} onClick={() => owner && loadSnapshot(owner)}
-              className="mt-3 w-full rounded-lg py-2 text-[10px] font-semibold flex items-center justify-center gap-2"
-              style={{ background: 'var(--amber)', color: '#171B21' }}>
+              className="hx-btn mt-3 w-full flex items-center justify-center gap-2">
               <RotateCcw size={14} /> RELOAD SNAPSHOT
             </button>
           </div>
         </aside>
 
         <section className="flex-1 min-w-0 w-full">
-          <div className="flex flex-wrap gap-1 rounded-full p-1 w-fit max-w-full"
-            style={{ background: 'var(--surface)', border: '2px solid var(--border)' }}>
+          <div className="hx-tabs flex-wrap w-fit" role="tablist">
             {([
               ['graph', 'Graph'], ['claims', 'Claims'], ['timelines', 'Timelines'],
               ['schema', 'Schema'], ['query', 'Query'], ['jobs', 'Jobs'], ['shadow', 'Shadow'],
             ] as const).map(([k, l]) => (
-              <button key={k} onClick={() => setTab(k)}
+              <button key={k} onClick={() => setTab(k)} role="tab" aria-selected={tab === k}
                 className={`hx-tab ${tab === k ? 'on' : ''}`}>{l}</button>
             ))}
           </div>
@@ -784,11 +784,11 @@ export default function App() {
           {tab === 'graph' && (
             <div className="hx-panel mt-4 overflow-hidden">
               <div className="flex flex-wrap items-center gap-2 p-3 border-b"
-                style={{ borderColor: 'rgba(42,93,176,.2)' }}>
+                style={{ borderColor: 'var(--line)' }}>
                 <span className="text-[11px] font-semibold tracking-[0.14em]"
-                  style={{ color: 'var(--lapis-ink)' }}>GRAPH CANVAS</span>
+                  style={{ color: 'var(--seal)' }}>GRAPH CANVAS</span>
                 <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)}
-                  className="text-xs rounded-full px-2 py-1.5" style={{ border: '1px solid rgba(42,93,176,.25)', background: '#fff' }}
+                  className="text-xs rounded-full px-2 py-1.5" style={{ border: '1px solid var(--line-strong)', background: 'var(--surface-raised)' }}
                   aria-label="Filter by status">
                   <option value="all">All statuses</option>
                   <option value="grounded">Grounded</option>
@@ -799,11 +799,11 @@ export default function App() {
                 <label className="text-xs flex items-center gap-1">
                   <input type="checkbox" checked={showLiterals} onChange={e => setShowLiterals(e.target.checked)} /> Literals
                 </label>
-                <div className="flex rounded-full overflow-hidden text-xs" style={{ border: '1px solid rgba(42,93,176,.25)' }}>
+                <div className="flex rounded-full overflow-hidden text-xs" style={{ border: '1px solid var(--line-strong)' }}>
                   <button onClick={() => setHop(1)} className="px-2 py-1"
-                    style={{ background: hop === 1 ? 'var(--lapis-ink)' : 'transparent', color: hop === 1 ? '#fff' : '' }}>1-hop</button>
+                    style={{ background: hop === 1 ? 'var(--accent)' : 'transparent', color: hop === 1 ? 'var(--on-accent)' : '' }}>1-hop</button>
                   <button onClick={() => setHop(2)} className="px-2 py-1"
-                    style={{ background: hop === 2 ? 'var(--lapis-ink)' : 'transparent', color: hop === 2 ? '#fff' : '' }}>2-hop</button>
+                    style={{ background: hop === 2 ? 'var(--accent)' : 'transparent', color: hop === 2 ? 'var(--on-accent)' : '' }}>2-hop</button>
                 </div>
                 <div className="flex gap-1 ml-auto">
                   <button onClick={() => zoomBy(1.2)} className="hx-btn-ghost p-2" aria-label="Zoom in"><ZoomIn size={15} /></button>
@@ -814,10 +814,10 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <p className="text-xs px-3 pt-2 italic" style={{ color: 'var(--muted)' }}>
-                Traversal: grounded + valid_to IS NULL only · orange = hop path from {selectedEnt?.name || '—'}
+              <p className="text-xs px-3 pt-2 italic" style={{ color: 'var(--text-muted)' }}>
+                Traversal: grounded + valid_to IS NULL only · highlight = hop path from {selectedEnt?.name || '—'}
               </p>
-              <div ref={wrapperRef} className="relative" style={{ background: 'var(--graph-bg)' }}>
+              <div ref={wrapperRef} className="relative" style={{ background: 'var(--surface)' }}>
                 <svg viewBox="0 0 800 560" className="w-full h-[520px] sm:h-[560px] touch-none select-none"
                   onMouseDown={e => { dragRef.current = { x: e.clientX, y: e.clientY }; }}
                   onMouseMove={e => {
@@ -830,7 +830,7 @@ export default function App() {
                   onMouseLeave={() => { dragRef.current = null; setHover(null); }}>
                   <defs>
                     <filter id="gemGlow" x="-40%" y="-40%" width="180%" height="180%">
-                      <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#1E3A5F" floodOpacity="0.25" />
+                      <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#000000" floodOpacity="0.3" />
                     </filter>
                   </defs>
                   <g transform={`translate(${pan.x},${pan.y}) scale(${pan.k})`}>
@@ -849,10 +849,10 @@ export default function App() {
                       return (
                         <g key={c.id}>
                           <path d={`M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`} fill="none"
-                            stroke={isTrav ? 'var(--seed)' : STATUS_COLOR[c.status]}
+                            stroke={isTrav ? 'var(--accent)' : STATUS_COLOR[c.status]}
                             strokeWidth={isTrav ? 3 : 1.6} opacity={isTrav ? 1 : 0.55} />
-                          <text x={lx} y={ly - 6} fontSize="10" fill={isTrav ? 'var(--seed)' : '#4B5563'}
-                            textAnchor="middle" style={{ fontFamily: 'JetBrains Mono' }}>{c.verb}</text>
+                          <text x={lx} y={ly - 6} fontSize="10" fill={isTrav ? 'var(--accent)' : 'var(--text-muted)'}
+                            textAnchor="middle" style={{ fontFamily: 'var(--font-mono)' }}>{c.verb}</text>
                         </g>
                       );
                     })}
@@ -863,10 +863,10 @@ export default function App() {
                       return (
                         <g key={c.id}>
                           <line x1={a.x} y1={a.y} x2={lit.x} y2={lit.y}
-                            stroke={isTrav ? 'var(--seed)' : '#9AA3AF'} strokeDasharray="3 3" />
+                            stroke={isTrav ? 'var(--accent)' : 'var(--line-strong)'} strokeDasharray="3 3" />
                           <rect x={lit.x - 38} y={lit.y - 12} width={76} height={24} rx={5}
-                            fill="#fff" stroke={isTrav ? 'var(--seed)' : '#D1D5DB'} />
-                          <text x={lit.x} y={lit.y + 4} fontSize="10" textAnchor="middle" fill="var(--ink)">
+                            fill="var(--surface-raised)" stroke={isTrav ? 'var(--accent)' : 'var(--line-strong)'} />
+                          <text x={lit.x} y={lit.y + 4} fontSize="10" textAnchor="middle" fill="var(--text)">
                             {c.object_literal}
                           </text>
                         </g>
@@ -888,17 +888,17 @@ export default function App() {
                           style={{ cursor: 'pointer' }}>
                           <rect x={-r * 0.72} y={-r * 0.72} width={r * 1.44} height={r * 1.44}
                             rx={3} transform="rotate(45)" fill={TYPE_COLOR[n.type]}
-                            stroke={sel || inTrav ? 'var(--seed)' : '#fff'}
+                            stroke={sel || inTrav ? 'var(--accent)' : 'var(--surface)'}
                             strokeWidth={sel || inTrav ? 3 : 1.5} filter="url(#gemGlow)" />
-                          <text y={4} textAnchor="middle" fontSize="11" fontWeight="700" fill="#fff"
-                            style={{ fontFamily: 'Cinzel' }}>
+                          <text y={4} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--surface)"
+                            style={{ fontFamily: 'var(--font-sans)' }}>
                             {n.name.split(' ').map(w => w[0]).slice(0, 2).join('')}
                           </text>
-                          <text y={r + 16} textAnchor="middle" fontSize="12" fontWeight="600" fill="var(--ink)">
+                          <text y={r + 16} textAnchor="middle" fontSize="12" fontWeight="600" fill="var(--text)">
                             {n.name}
                           </text>
-                          <text y={r + 30} textAnchor="middle" fontSize="9" fill="var(--muted)" className="capitalize"
-                            style={{ fontFamily: 'JetBrains Mono' }}>
+                          <text y={r + 30} textAnchor="middle" fontSize="9" fill="var(--text-muted)" className="capitalize"
+                            style={{ fontFamily: 'var(--font-mono)' }}>
                             {n.type_db || n.type} · {deg}
                           </text>
                         </g>
@@ -908,13 +908,13 @@ export default function App() {
                 </svg>
                 {hover && (
                   <div className="absolute pointer-events-none rounded-xl px-3 py-2 text-xs shadow-lg"
-                    style={{ left: hover.x, top: hover.y, background: 'var(--term)', color: 'var(--term-fg)', maxWidth: 220 }}>
-                    <b style={{ color: '#fff' }}>{hover.name}</b> · <span className="capitalize">{hover.type}</span><br />
+                    style={{ left: hover.x, top: hover.y, background: 'var(--surface-raised)', color: 'var(--text-muted)', border: '1px solid var(--line-strong)', maxWidth: 220 }}>
+                    <b style={{ color: 'var(--text)' }}>{hover.name}</b> · <span className="capitalize">{hover.type}</span><br />
                     {hover.grounded} grounded · click select · double-click focus
                   </div>
                 )}
                 <div className="absolute left-3 bottom-3 rounded-xl px-3 py-2 text-[11px] flex flex-wrap gap-3"
-                  style={{ background: 'var(--surface)', border: '1px solid rgba(42,93,176,.25)' }}>
+                  style={{ background: 'var(--surface-raised)', border: '1px solid var(--line)' }}>
                   <span><b>Legend</b></span>
                   {(['person','project','place','org','tool','concept'] as EntType[]).map(t => (
                     <span key={t} className="flex items-center gap-1 capitalize">
@@ -922,7 +922,7 @@ export default function App() {
                     </span>
                   ))}
                   <span className="flex items-center gap-1">
-                    <span style={{ width: 14, height: 2, background: 'var(--seed)', display: 'inline-block' }} /> traversal
+                    <span style={{ width: 14, height: 2, background: 'var(--accent)', display: 'inline-block' }} /> traversal
                   </span>
                 </div>
               </div>
@@ -931,12 +931,12 @@ export default function App() {
 
           {tab === 'claims' && (
             <div className="hx-panel mt-4 overflow-hidden">
-              <div className="flex flex-wrap gap-2 p-3 border-b" style={{ borderColor: 'rgba(42,93,176,.2)' }}>
+              <div className="flex flex-wrap gap-2 p-3 border-b" style={{ borderColor: 'var(--line)' }}>
                 <input value={claimSearch} onChange={e => setClaimSearch(e.target.value)}
                   placeholder="Filter facts / excerpts…" className="rounded-full px-3 py-2 text-sm flex-1 min-w-[180px]"
-                  style={{ border: '1px solid rgba(42,93,176,.25)' }} aria-label="Filter claims" />
+                  style={{ border: '1px solid var(--line-strong)' }} aria-label="Filter claims" />
                 <select value={claimStatus} onChange={e => setClaimStatus(e.target.value as any)}
-                  className="text-sm rounded-full px-2 py-2" style={{ border: '1px solid rgba(42,93,176,.25)' }}>
+                  className="text-sm rounded-full px-2 py-2" style={{ border: '1px solid var(--line-strong)' }}>
                   <option value="all">All statuses</option>
                   <option value="grounded">Grounded</option>
                   <option value="unconfirmed">Unconfirmed</option>
@@ -944,19 +944,19 @@ export default function App() {
                   <option value="orphaned">Orphaned</option>
                 </select>
                 <select value={claimVerb} onChange={e => setClaimVerb(e.target.value)}
-                  className="text-sm rounded-full px-2 py-2" style={{ border: '1px solid rgba(42,93,176,.25)' }}>
+                  className="text-sm rounded-full px-2 py-2" style={{ border: '1px solid var(--line-strong)' }}>
                   <option value="all">All verbs</option>
                   {verbs.map(v => <option key={v} value={v}>{v}</option>)}
                 </select>
                 <label className="text-xs flex items-center gap-1 self-center">
                   <input type="checkbox" checked={currentOnly} onChange={e => setCurrentOnly(e.target.checked)} /> Current only
                 </label>
-                <span className="text-xs self-center mono" style={{ color: 'var(--muted)' }}>{filteredClaims.length} claims</span>
+                <span className="text-xs self-center mono" style={{ color: 'var(--text-muted)' }}>{filteredClaims.length} claims</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm min-w-[860px]">
                   <thead>
-                    <tr className="text-left text-[10px] tracking-[0.12em]" style={{ color: 'var(--muted)' }}>
+                    <tr className="text-left text-[10px] tracking-[0.12em]" style={{ color: 'var(--text-muted)' }}>
                       {([['fact_text','Fact'],['subject_id','Subject'],['verb','Verb'],['object_id','Object'],['status','Status'],['event_date','Event'],['span_id','Span']] as const).map(([k, l]) => (
                         <th key={k} className="px-3 py-2 font-medium">
                           <button onClick={() => {
@@ -972,22 +972,21 @@ export default function App() {
                     {filteredClaims.map(c => (
                       <tr key={c.id} onClick={() => { setSelectedClaim(c.id); setSelectedEntity(c.subject_id); }}
                         className="border-t cursor-pointer hover:bg-black/5"
-                        style={{ borderColor: 'rgba(42,93,176,.12)', background: selectedClaim === c.id ? 'var(--callout)' : '' }}>
+                        style={{ borderColor: 'var(--line)', background: selectedClaim === c.id ? 'var(--surface-sunken)' : '' }}>
                         <td className="px-3 py-2.5 max-w-[280px]">
                           <span className="block truncate">{c.fact_text}</span>
                           {c.span_excerpt && (
-                            <span className="block text-[11px] italic truncate mt-0.5" style={{ color: 'var(--muted)' }}>
+                            <span className="block text-[11px] italic truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>
                               “{c.span_excerpt}”
                             </span>
                           )}
-                          <span className="mono text-[10px]" style={{ color: 'var(--muted-2)' }}>{c.id}</span>
+                          <span className="mono text-[10px]" style={{ color: 'var(--text-muted)' }}>{c.id}</span>
                         </td>
                         <td className="px-3 py-2.5">{entName(c.subject_id)}</td>
                         <td className="px-3 py-2.5 mono text-xs">{c.verb}</td>
                         <td className="px-3 py-2.5">{objLabel(c)}</td>
                         <td className="px-3 py-2.5">
-                          <span className="text-[11px] px-2 py-1 rounded-full text-white capitalize"
-                            style={{ background: STATUS_COLOR[c.status] }}>{c.status}</span>
+                          <span className="hx-status shrink-0" data-status={c.status}>{c.status}</span>
                         </td>
                         <td className="px-3 py-2.5 mono text-xs">{c.event_date}</td>
                         <td className="px-3 py-2.5 mono text-xs">{c.span_id}</td>
@@ -998,7 +997,7 @@ export default function App() {
                 </table>
               </div>
               {filteredClaims.length === 0 && (
-                <p className="p-6 text-sm" style={{ color: 'var(--muted)' }}>No claims match.</p>
+                <p className="p-6 text-sm" style={{ color: 'var(--text-muted)' }}>No claims match.</p>
               )}
             </div>
           )}
@@ -1007,7 +1006,7 @@ export default function App() {
             <div className="mt-4 space-y-4">
               <div className="hx-panel p-4">
                 <h2 className="text-sm tracking-[0.14em]">FUNCTIONAL TIMELINES</h2>
-                <p className="text-sm mt-1 italic" style={{ color: 'var(--muted)' }}>
+                <p className="text-sm mt-1 italic" style={{ color: 'var(--text-muted)' }}>
                   Functional verbs keep one live interval. Event time — not processing time — drives the bar.
                 </p>
               </div>
@@ -1025,12 +1024,14 @@ export default function App() {
                       return (
                         <div key={c.id}>
                           <div className="flex flex-wrap justify-between gap-2 text-xs">
-                            <span><b>{objLabel(c)}</b> · <span className="capitalize" style={{ color: STATUS_COLOR[c.status] }}>{c.status}</span></span>
+                            <span><b>{objLabel(c)}</b> · <span className="hx-status" data-status={c.status}>{c.status}</span></span>
                             <span className="mono">valid_from {from} · valid_to {c.valid_to || 'now'}</span>
                           </div>
-                          <div className="relative h-7 rounded-full mt-1" style={{ background: 'var(--surface-2)' }}>
-                            <div className="absolute top-0 h-7 rounded-full flex items-center px-2 text-[11px] font-semibold text-white whitespace-nowrap overflow-hidden"
-                              style={{ left: left + '%', width: width + '%', background: STATUS_COLOR[c.status], minWidth: 60 }}>
+                          <div className="relative h-7 rounded-full mt-1" style={{ background: 'var(--surface-sunken)' }}>
+                            <div className="absolute top-0 h-7 rounded-full flex items-center px-2 text-[11px] font-semibold whitespace-nowrap overflow-hidden"
+                              style={{ left: left + '%', width: width + '%', minWidth: 60, color: 'var(--text)',
+                                background: `color-mix(in srgb, ${STATUS_COLOR[c.status]} 22%, var(--surface-raised))`,
+                                border: `1.5px solid ${STATUS_COLOR[c.status]}` }}>
                               {objLabel(c)}
                             </div>
                           </div>
@@ -1053,7 +1054,7 @@ export default function App() {
                   <Table2 size={16} />
                   <h2 className="text-sm tracking-[0.14em]">STORAGE MAP</h2>
                 </div>
-                <p className="text-sm mt-1 italic" style={{ color: 'var(--muted)' }}>
+                <p className="text-sm mt-1 italic" style={{ color: 'var(--text-muted)' }}>
                   How the claim layer is stored for owner <b>{owner || '—'}</b>. Counts are live.
                 </p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
@@ -1069,7 +1070,7 @@ export default function App() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm min-w-[720px]">
                     <thead>
-                      <tr className="text-left text-[10px] tracking-[0.12em]" style={{ color: 'var(--muted)' }}>
+                      <tr className="text-left text-[10px] tracking-[0.12em]" style={{ color: 'var(--text-muted)' }}>
                         <th className="px-3 py-2">Table</th>
                         <th className="px-3 py-2">Role</th>
                         <th className="px-3 py-2">Keys</th>
@@ -1078,10 +1079,10 @@ export default function App() {
                     </thead>
                     <tbody>
                       {schema.map(s => (
-                        <tr key={s.table} className="border-t" style={{ borderColor: 'rgba(42,93,176,.12)' }}>
+                        <tr key={s.table} className="border-t" style={{ borderColor: 'var(--line)' }}>
                           <td className="px-3 py-2.5 mono text-xs font-semibold">{s.table}</td>
                           <td className="px-3 py-2.5 text-sm">{s.role}</td>
-                          <td className="px-3 py-2.5 mono text-[11px]" style={{ color: 'var(--muted)' }}>{s.keys}</td>
+                          <td className="px-3 py-2.5 mono text-[11px]" style={{ color: 'var(--text-muted)' }}>{s.keys}</td>
                           <td className="px-3 py-2.5 mono">{s.count}</td>
                         </tr>
                       ))}
@@ -1101,13 +1102,13 @@ export default function App() {
                 <label className="text-[11px] tracking-[0.14em] font-semibold">QUERY PLAYGROUND — {mode}</label>
                 <div className="flex flex-col sm:flex-row gap-2 mt-3">
                   <input value={query} onChange={e => { setQuery(e.target.value); setQueryRan(false); }}
-                    className="flex-1 rounded-full px-4 py-3 text-sm" style={{ border: '1px solid rgba(42,93,176,.25)' }}
+                    className="flex-1 rounded-full px-4 py-3 text-sm" style={{ border: '1px solid var(--line-strong)' }}
                     aria-label="Query" />
                   <button onClick={() => setQueryRan(true)} className="hx-btn flex items-center justify-center gap-2">
                     <Play size={15} /> RUN
                   </button>
                 </div>
-                <p className="text-xs mt-2 italic" style={{ color: 'var(--muted)' }}>
+                <p className="text-xs mt-2 italic" style={{ color: 'var(--text-muted)' }}>
                   Client-side preview over the loaded snapshot — not the live packer.
                 </p>
               </div>
@@ -1116,7 +1117,7 @@ export default function App() {
                   <div className="hx-panel p-4">
                     <h3 className="font-semibold flex items-center gap-2 text-sm tracking-[0.1em]"><Eye size={15} /> LINKED</h3>
                     {queryResult.linked.length === 0
-                      ? <p className="text-sm mt-2" style={{ color: 'var(--muted)' }}>No entity matched.</p>
+                      ? <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>No entity matched.</p>
                       : queryResult.linked.map(e => (
                         <p key={e.id} className="text-sm mt-2">{e.name}{' '}
                           <span className="mono text-xs">({e.type} · {e.id})</span></p>
@@ -1129,14 +1130,14 @@ export default function App() {
                   </div>
                   <div className="hx-panel p-4">
                     <h3 className="font-semibold text-sm tracking-[0.1em]">VECTOR vs HYBRID</h3>
-                    <div className="mt-3 rounded-xl p-3 text-sm" style={{ background: 'var(--callout)' }}>
+                    <div className="mt-3 rounded-xl p-3 text-sm" style={{ background: 'var(--surface-sunken)' }}>
                       <b>Vector-only:</b> {queryResult.vectorPick?.fact_text || '—'}<br />
                       <b>Hybrid:</b> {queryResult.hybridPick?.fact_text || 'No grounded current fact.'}
                     </div>
                   </div>
                 </div>
               ) : (
-                <p className="hx-panel p-5 text-sm" style={{ color: 'var(--muted)' }}>Run a query to see linked entities and packed facts.</p>
+                <p className="hx-panel p-5 text-sm" style={{ color: 'var(--text-muted)' }}>Run a query to see linked entities and packed facts.</p>
               )}
             </div>
           )}
@@ -1165,7 +1166,7 @@ export default function App() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm min-w-[760px]">
                     <thead>
-                      <tr className="text-left text-[10px] tracking-[0.12em]" style={{ color: 'var(--muted)' }}>
+                      <tr className="text-left text-[10px] tracking-[0.12em]" style={{ color: 'var(--text-muted)' }}>
                         <th className="px-3 py-2">Kind</th><th className="px-3 py-2">Op ID</th>
                         <th className="px-3 py-2">Status</th><th className="px-3 py-2">Fence</th>
                         <th className="px-3 py-2">Lease</th><th className="px-3 py-2">Attempts</th>
@@ -1174,17 +1175,11 @@ export default function App() {
                     </thead>
                     <tbody>
                       {ownerJobs.map(j => (
-                        <tr key={j.id} className="border-t" style={{ borderColor: 'rgba(42,93,176,.12)' }}>
+                        <tr key={j.id} className="border-t" style={{ borderColor: 'var(--line)' }}>
                           <td className="px-3 py-2.5 capitalize">{j.kind}</td>
                           <td className="px-3 py-2.5 mono text-xs">{j.op_id}</td>
                           <td className="px-3 py-2.5">
-                            <span className="text-[11px] px-2 py-1 rounded-full text-white capitalize"
-                              style={{
-                                background: j.status === 'done' ? '#0E6B5A'
-                                  : j.status === 'leased' ? '#234A8A'
-                                  : j.status === 'retryable' ? '#C9943F'
-                                  : j.status === 'failed' ? '#8B3A2E' : '#6B7280',
-                              }}>{j.status}</span>
+                            <span className="hx-status" data-status={j.status}>{j.status}</span>
                           </td>
                           <td className="px-3 py-2.5 mono text-xs">{j.fence}</td>
                           <td className="px-3 py-2.5 text-xs">{j.lease}</td>
@@ -1196,7 +1191,7 @@ export default function App() {
                   </table>
                 </div>
               </div>
-              <p className="text-xs flex items-center gap-2" style={{ color: 'var(--muted)' }}>
+              <p className="text-xs flex items-center gap-2" style={{ color: 'var(--text-muted)' }}>
                 <Shield size={13} /> Fence/lease controls shown here are preview simulations unless write routes land.
               </p>
             </div>
@@ -1208,17 +1203,17 @@ export default function App() {
                 Shadow compare is illustrative until live dual-retriever metrics are exposed on the viz API.
               </div>
               <div className="grid sm:grid-cols-3 gap-3">
-                <div className="rounded-2xl p-4" style={{ background: 'var(--turquoise)', color: '#fff' }}>
+                <div className="hx-panel p-4" style={{ background: 'var(--accent)', color: 'var(--on-accent)', borderColor: 'var(--accent)' }}>
                   <p className="text-[10px] tracking-[0.14em] opacity-80">MULTI-HOP RECALL</p>
-                  <p className="text-xl font-bold mt-1" style={{ fontFamily: 'Cinzel' }}>Vector → Hybrid</p>
+                  <p className="text-xl font-bold mt-1" style={{ fontFamily: 'var(--font-display)' }}>Vector → Hybrid</p>
                 </div>
                 <div className="hx-panel p-4">
-                  <p className="text-[10px] tracking-[0.14em]" style={{ color: 'var(--muted)' }}>UNRELATED CONTEXT</p>
-                  <p className="text-xl font-bold mt-1" style={{ fontFamily: 'Cinzel' }}>Hybrid keeps less noise</p>
+                  <p className="text-[10px] tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>UNRELATED CONTEXT</p>
+                  <p className="text-xl font-bold mt-1" style={{ fontFamily: 'var(--font-display)' }}>Hybrid keeps less noise</p>
                 </div>
                 <div className="hx-panel p-4">
-                  <p className="text-[10px] tracking-[0.14em]" style={{ color: 'var(--muted)' }}>LATENCY</p>
-                  <p className="text-xl font-bold mt-1" style={{ fontFamily: 'Cinzel' }}>p50 / p95 live TBD</p>
+                  <p className="text-[10px] tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>LATENCY</p>
+                  <p className="text-xl font-bold mt-1" style={{ fontFamily: 'var(--font-display)' }}>p50 / p95 live TBD</p>
                 </div>
               </div>
             </div>
@@ -1228,7 +1223,7 @@ export default function App() {
         <aside className="w-full lg:w-[360px] shrink-0 space-y-3">
           <div className="hx-panel p-4">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] tracking-[0.18em] font-semibold" style={{ color: 'var(--muted)' }}>
+              <p className="text-[10px] tracking-[0.18em] font-semibold" style={{ color: 'var(--text-muted)' }}>
                 DETAIL PANEL
               </p>
               <button className="hx-btn-ghost text-[9px] flex items-center gap-1"
@@ -1239,22 +1234,21 @@ export default function App() {
 
             {selectedCl ? (
               <div className="mt-3">
-                <span className="text-[11px] px-2 py-1 rounded-full text-white capitalize"
-                  style={{ background: STATUS_COLOR[selectedCl.status] }}>{selectedCl.status}</span>
+                <span className="hx-status shrink-0" data-status={selectedCl.status}>{selectedCl.status}</span>
                 <h2 className="text-xl font-bold leading-tight mt-2">{selectedCl.fact_text}</h2>
                 <div className="mt-4 rounded-xl p-3 text-sm flex flex-wrap items-center gap-1"
-                  style={{ background: 'var(--surface-2)' }}>
+                  style={{ background: 'var(--surface-sunken)' }}>
                   <b>{entName(selectedCl.subject_id)}</b><ArrowRight size={14} />
                   <span className="mono text-xs">{selectedCl.verb}</span><ArrowRight size={14} />
                   <b>{objLabel(selectedCl)}</b>
                 </div>
                 <dl className="text-xs mt-4 space-y-2">
-                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--muted)' }}>Event date</dt><dd className="mono">{selectedCl.event_date}</dd></div>
-                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--muted)' }}>Span ID</dt><dd className="mono">{selectedCl.span_id || '—'}</dd></div>
-                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--muted)' }}>Valid</dt><dd className="mono">{selectedCl.valid_from || '—'} → {selectedCl.valid_to || 'now'}</dd></div>
-                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--muted)' }}>Superseded by</dt><dd className="mono">{selectedCl.superseded_by || '—'}</dd></div>
-                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--muted)' }}>Polarity / uptake</dt><dd className="mono">{selectedCl.polarity || '—'} / {selectedCl.uptake || '—'}</dd></div>
-                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--muted)' }}>fact_vec</dt><dd className="mono">{selectedCl.has_fact_vec ? 'present' : 'null'}{selectedCl.embed_model ? ` · ${selectedCl.embed_model}` : ''}</dd></div>
+                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>Event date</dt><dd className="mono">{selectedCl.event_date}</dd></div>
+                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>Span ID</dt><dd className="mono">{selectedCl.span_id || '—'}</dd></div>
+                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>Valid</dt><dd className="mono">{selectedCl.valid_from || '—'} → {selectedCl.valid_to || 'now'}</dd></div>
+                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>Superseded by</dt><dd className="mono">{selectedCl.superseded_by || '—'}</dd></div>
+                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>Polarity / uptake</dt><dd className="mono">{selectedCl.polarity || '—'} / {selectedCl.uptake || '—'}</dd></div>
+                  <div className="flex justify-between gap-2"><dt style={{ color: 'var(--text-muted)' }}>fact_vec</dt><dd className="mono">{selectedCl.has_fact_vec ? 'present' : 'null'}{selectedCl.embed_model ? ` · ${selectedCl.embed_model}` : ''}</dd></div>
                 </dl>
 
                 {(selectedCl.span_excerpt || spanFor(selectedCl.span_id)) && (
@@ -1276,12 +1270,11 @@ export default function App() {
 
                 <div className="grid grid-cols-2 gap-2 mt-4">
                   <button disabled={busy} onClick={() => claimAction('confirm', selectedCl)}
-                    className="py-2 rounded-full text-[10px] font-semibold flex items-center justify-center gap-1"
-                    style={{ background: '#0E6B5A', color: '#fff' }}>
+                    className="hx-btn flex items-center justify-center gap-1">
                     <Check size={14} /> CONFIRM
                   </button>
                   <button disabled={busy} onClick={() => claimAction('retract', selectedCl)}
-                    className="hx-btn-ghost">RETRACT</button>
+                    className="hx-btn-danger">RETRACT</button>
                 </div>
 
                 <h3 className="font-semibold text-sm mt-5 flex items-center gap-2">
@@ -1292,25 +1285,19 @@ export default function App() {
                     const esp = spanFor(e.span_id);
                     return (
                       <div key={e.id} className="rounded-xl p-3 text-xs"
-                        style={{ border: '1px solid rgba(42,93,176,.2)', background: '#fff' }}>
+                        style={{ border: '1px solid var(--line)', background: 'var(--surface-raised)' }}>
                         <div className="flex justify-between gap-2">
                           <b>{e.extractor} · {e.version}</b>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] text-white capitalize"
-                            style={{
-                              background: e.state === 'live' ? '#0E6B5A'
-                                : (e.state === 'retracted' || e.state === 'withdrawn') ? '#8B3A2E' : '#6B7280',
-                            }}>
-                            {e.state_db || e.state}
-                          </span>
+                          <span className="hx-status" data-status={e.state}>{e.state_db || e.state}</span>
                         </div>
-                        <p className="mt-1 mono" style={{ color: 'var(--muted)' }}>
+                        <p className="mt-1 mono" style={{ color: 'var(--text-muted)' }}>
                           {e.speaker} · {e.act} · {e.polarity || '—'} · conf {e.confidence ?? '—'}
                           <br />{e.subject_surface} —{e.object_key || ''}→ {e.object_surface}
                           <br />event {e.event_time}
                           {e.span_id ? <> · span {e.span_id}</> : null}
                         </p>
                         {esp?.excerpt && (
-                          <p className="mt-2 italic" style={{ color: 'var(--muted)' }}>“{esp.excerpt}”</p>
+                          <p className="mt-2 italic" style={{ color: 'var(--text-muted)' }}>“{esp.excerpt}”</p>
                         )}
                         <button disabled={e.state === 'retracted' || e.state === 'withdrawn' || busy}
                           onClick={() => retractEv(selectedCl, e.id)}
@@ -1325,12 +1312,12 @@ export default function App() {
               </div>
             ) : selectedEnt ? (
               <div className="mt-3">
-                <span className="text-[11px] px-2 py-1 rounded-full text-white capitalize"
-                  style={{ background: TYPE_COLOR[selectedEnt.type] }}>
+                <span className="hx-chip capitalize">
+                  <span className="hx-gem" style={{ background: TYPE_COLOR[selectedEnt.type] }} />
                   {selectedEnt.type_db || selectedEnt.type}
                 </span>
                 <h2 className="text-2xl font-bold leading-tight mt-2">{selectedEnt.name}</h2>
-                <p className="mono text-[11px] mt-1" style={{ color: 'var(--muted)' }}>
+                <p className="mono text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
                   id {selectedEnt.id} · norm {selectedEnt.name_norm || '—'}
                   {selectedEnt.merged_into ? ` · merged_into ${selectedEnt.merged_into}` : ''}
                   {selectedEnt.has_name_vec ? ' · name_vec' : ' · no name_vec'}
@@ -1339,15 +1326,15 @@ export default function App() {
                 <h3 className="font-semibold text-sm mt-5">Aliases · {(selectedEnt.alias_detail || []).length}</h3>
                 <div className="space-y-1 mt-2">
                   {(selectedEnt.alias_detail || []).length === 0 && (
-                    <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                       {selectedEnt.aliases.length ? selectedEnt.aliases.join(', ') : 'No aliases.'}
                     </p>
                   )}
                   {(selectedEnt.alias_detail || []).map(a => (
                     <div key={a.surface_norm + a.source} className="rounded-lg px-2 py-1.5 text-xs flex justify-between gap-2"
-                      style={{ background: 'var(--surface-2)' }}>
+                      style={{ background: 'var(--surface-sunken)' }}>
                       <span className="mono">{a.surface_norm}</span>
-                      <span style={{ color: 'var(--muted)' }}>{a.source} · {a.state}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{a.source} · {a.state}</span>
                     </div>
                   ))}
                 </div>
@@ -1357,7 +1344,7 @@ export default function App() {
                 </h3>
                 <div className="space-y-1 mt-2 max-h-36 overflow-auto">
                   {(selectedEnt.passports || []).length === 0 && (
-                    <p className="text-xs" style={{ color: 'var(--muted)' }}>No passport rows for this entity.</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No passport rows for this entity.</p>
                   )}
                   {(selectedEnt.passports || []).map(p => {
                     const sp = spanFor(p.span_id);
@@ -1365,9 +1352,9 @@ export default function App() {
                       <button key={p.span_id + p.surface} type="button"
                         onClick={() => doCopy(p.span_id)}
                         className="w-full text-left rounded-lg px-2 py-1.5 text-xs"
-                        style={{ background: 'var(--surface-2)' }}>
+                        style={{ background: 'var(--surface-sunken)' }}>
                         <span className="mono">span {p.span_id}</span> · {p.surface}
-                        <span className="block italic mt-0.5" style={{ color: 'var(--muted)' }}>
+                        <span className="block italic mt-0.5" style={{ color: 'var(--text-muted)' }}>
                           {sp?.excerpt || 'no excerpt loaded'}
                         </span>
                       </button>
@@ -1383,13 +1370,12 @@ export default function App() {
                     .slice(0, 8).map(c => (
                       <button key={c.id} onClick={() => setSelectedClaim(c.id)}
                         className="w-full text-left rounded-xl p-3 text-xs"
-                        style={{ border: '1px solid rgba(42,93,176,.2)', background: '#fff' }}>
+                        style={{ border: '1px solid var(--line)', background: 'var(--surface-raised)' }}>
                         <span className="flex justify-between gap-2">
                           <span className="font-semibold">{c.fact_text}</span>
-                          <span className="shrink-0 px-1.5 py-0.5 rounded-full text-white capitalize"
-                            style={{ background: STATUS_COLOR[c.status], fontSize: 10 }}>{c.status}</span>
+                          <span className="hx-status shrink-0" data-status={c.status}>{c.status}</span>
                         </span>
-                        <span className="mono block mt-1" style={{ color: 'var(--muted)' }}>
+                        <span className="mono block mt-1" style={{ color: 'var(--text-muted)' }}>
                           {c.verb} · {c.event_date} · {c.span_id}
                         </span>
                       </button>
@@ -1397,7 +1383,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm mt-3" style={{ color: 'var(--muted)' }}>Select an entity or claim.</p>
+              <p className="text-sm mt-3" style={{ color: 'var(--text-muted)' }}>Select an entity or claim.</p>
             )}
           </div>
 
@@ -1406,7 +1392,7 @@ export default function App() {
               <h3 className="font-semibold text-sm flex items-center gap-2 tracking-[0.1em]">
                 <Braces size={14} /> RAW ROW
               </h3>
-              <p className="text-xs mt-1 italic" style={{ color: 'var(--muted)' }}>
+              <p className="text-xs mt-1 italic" style={{ color: 'var(--text-muted)' }}>
                 Direct fields from Postgres (vectors omitted as presence flags).
               </p>
               <div className="hx-term mt-3">{pretty(rawPayload)}</div>
@@ -1415,27 +1401,27 @@ export default function App() {
 
           <div className="hx-panel p-4">
             <h3 className="font-semibold text-sm flex items-center gap-2"><Layers size={14} /> PROVENANCE</h3>
-            <p className="text-xs mt-2 italic" style={{ color: 'var(--muted)' }}>
+            <p className="text-xs mt-2 italic" style={{ color: 'var(--text-muted)' }}>
               Copy a span id to trace a fact back to its turn.
             </p>
             <input ref={copyRef} value={provenanceValue} onChange={() => {}}
               className="w-full mt-3 rounded-lg px-3 py-2 mono text-xs"
-              style={{ border: '1px solid rgba(42,93,176,.25)', background: '#fff' }}
+              style={{ border: '1px solid var(--line-strong)', background: 'var(--surface-raised)' }}
               aria-label="Span id to copy" readOnly />
             <button onClick={() => doCopy(provenanceValue)}
               className="mt-2 w-full hx-btn-ghost flex items-center justify-center gap-2">
               <Copy size={13} /> COPY SPAN ID
             </button>
-            {copyDone && <p className="text-xs mt-2" style={{ color: 'var(--turquoise)' }}>{copyDone}</p>}
+            {copyDone && <p className="text-xs mt-2" style={{ color: 'var(--status-grounded)' }}>{copyDone}</p>}
           </div>
 
           <div className="rounded-2xl p-4 text-xs leading-relaxed"
-            style={{ background: 'var(--sidebar)', color: '#E8F1FF', border: '2px solid #2A5DB0' }}>
+            style={{ background: 'var(--surface-raised)', color: 'var(--text)', border: '1px solid var(--line)' }}>
             <p className="font-semibold flex items-center gap-2 tracking-[0.1em]"
-              style={{ fontFamily: 'Cinzel' }}>
+              style={{ fontFamily: 'var(--font-display)' }}>
               <Clock size={13} /> HOW TO READ THIS
             </p>
-            <p className="mt-2 text-white/70">
+            <p className="mt-2" style={{ color: 'var(--text-muted)' }}>
               Graph shows connections. Claims show what was said. Timelines show when it was true.
               Evidence shows why. Schema shows how it is stored. Raw shows the row.
             </p>
@@ -1443,7 +1429,7 @@ export default function App() {
         </aside>
       </main>
 
-      <footer className="px-5 pb-6 pt-1 flex flex-wrap gap-4 text-[11px]" style={{ color: 'var(--muted)' }}>
+      <footer className="px-5 pb-6 pt-1 flex flex-wrap gap-4 text-[11px]" style={{ color: 'var(--text-muted)' }}>
         <span className="flex items-center gap-1"><Activity size={12} /> Hermes Graph Explorer · live storage inspector</span>
         <span>Owner-scoped: {owner || '—'}</span>
         <span>Evidence, not counters · Event time, not processing time</span>

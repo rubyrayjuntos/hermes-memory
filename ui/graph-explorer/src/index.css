@@ -1,141 +1,41 @@
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* The Hermes Librarian — Graph Explorer.
+   Colours, type and component classes come from the design system
+   (docs/design-system: tokens.json -> tokens.css, components.css).
+   Do not declare colour values here; add a token instead. */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import '../../../docs/design-system/tokens.css';
+@import '../../../docs/design-system/components.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-:root {
-  --lapis: #234A8A;
-  --lapis-ink: #1E3A5F;
-  --turquoise: #2F8F8A;
-  --alabaster: #EAE3D6;
-  --amber: #C9943F;
-  --parchment: #ffffff;
-  --ink: #1E2D45;
-  --seed: #d946a6;
-  --mentions: #2F8F8A;
-  --ghost: #E040B0;
-  --border: #2A5DB0;
-  --muted: #5A6E87;
-  --muted-2: #7A92B1;
-  --surface: rgba(246, 243, 232, 0.96);
-  --surface-2: rgba(238, 245, 251, 0.92);
-  --panel: rgba(242, 248, 250, 0.94);
-  --sidebar: #0F2340;
-  --sidebar-2: #16325C;
-  --term: #0F2340;
-  --term-fg: #8ED8E8;
-  --callout: #FFF4E5;
-  --graph-bg: #FBFCFF;
-  --bg: #F7F4EC;
-  --good: #0E6B5A;
-  --warn: #C9943F;
-  --bad: #8B3A2E;
-  --violet: #6D4AC6;
-  --pink: #B23A6B;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0B1220;
-    --parchment: #121A28;
-    --surface: rgba(18, 28, 44, 0.96);
-    --surface-2: rgba(22, 36, 56, 0.94);
-    --panel: rgba(16, 28, 46, 0.94);
-    --ink: #E8F1FF;
-    --muted: #A7B0BC;
-    --muted-2: #7E8894;
-    --alabaster: #1B2638;
-    --graph-bg: #0E1624;
-    --callout: #2A2214;
-    --sidebar: #070D18;
-    --sidebar-2: #102038;
-  }
-}
 
 * { box-sizing: border-box; }
 html, body, #root {
   margin: 0;
   min-height: 100%;
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(42, 93, 176, 0.10), transparent 60%),
-    radial-gradient(900px 500px at 90% 0%, rgba(47, 143, 138, 0.08), transparent 55%),
-    var(--bg);
-  color: var(--ink);
-  font-family: "Cormorant Garamond", Georgia, serif;
-}
-.font-display, h1, h2, h3 { font-family: Cinzel, Georgia, serif; letter-spacing: 0.06em; }
-.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
-button { cursor: pointer; font-family: Cinzel, Georgia, serif; letter-spacing: 0.08em; }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
-input, select, textarea { font-family: inherit; color: inherit; }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #C8C0B0; border-radius: 99px; border: 2px solid var(--bg); }
-
-.hx-shell { min-height: 100vh; }
-.hx-header {
-  position: sticky; top: 0; z-index: 30;
-  border: 2.5px solid var(--border); border-radius: 18px;
-  margin: 12px; padding: 12px 16px;
   background: var(--surface);
-  box-shadow: 0 8px 28px rgba(30, 58, 95, 0.14);
+  color: var(--text);
+  font-family: var(--font-sans);
 }
-.hx-panel {
-  border: 2px solid var(--border); border-radius: 16px;
-  background: var(--panel);
-  box-shadow: 0 10px 28px rgba(30, 70, 120, 0.10);
+h1, h2, .font-display { font-family: var(--font-display); }
+.mono { font-family: var(--font-mono); }
+button { cursor: pointer; font-family: var(--font-sans); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+input, select, textarea {
+  font-family: inherit; color: var(--text);
+  background: var(--surface-raised);
 }
-.hx-chip {
-  border: 1px solid rgba(42, 93, 176, 0.22);
-  background: var(--surface-2);
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 12px;
-}
-.hx-gem {
-  width: 10px; height: 10px; transform: rotate(45deg); border-radius: 2px;
-  display: inline-block; flex-shrink: 0;
-}
-.hx-btn {
-  background: var(--lapis-ink); color: #fff; border: 0; border-radius: 999px;
-  padding: 7px 14px; font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
-}
-.hx-btn:hover { filter: brightness(1.08); }
-.hx-btn-ghost {
-  background: #DCE8FA; color: var(--lapis-ink); border: 0; border-radius: 999px;
-  padding: 7px 14px; font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
-}
-.hx-tab {
-  border-radius: 999px; padding: 7px 12px; font-size: 10px; font-weight: 700;
-  letter-spacing: 0.12em; color: var(--muted);
-}
-.hx-tab.on { background: var(--lapis-ink); color: #fff; }
-.hx-term {
-  background: var(--term); color: var(--term-fg); border-radius: 12px;
-  padding: 10px 12px; font-family: "JetBrains Mono", monospace;
-  font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow: auto;
-  max-height: 280px;
-}
-.hx-metric {
-  border: 1px solid rgba(42, 93, 176, 0.15);
-  background: rgba(238, 245, 251, 0.85);
-  border-radius: 10px; padding: 8px 10px;
-}
-.hx-metric .k {
-  display: block; font-family: Cinzel, serif; font-size: 8.5px;
-  letter-spacing: 0.14em; color: #6A86A8;
-}
-.hx-metric .v {
-  display: block; font-family: Cinzel, serif; font-size: 16px;
-  font-weight: 700; color: var(--lapis-ink);
-}
+input[type="checkbox"] { accent-color: var(--accent); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; border: 2px solid var(--surface); }
+
+/* Pane layout (pane-only; components live in components.css) */
+.hx-shell { min-height: 100vh; }
+.hx-header { display: block; margin: var(--space-3); }
 .hx-sidebar {
-  background: var(--sidebar); color: #E8F1FF;
-  border: 2px solid #2A5DB0; border-radius: 16px;
+  background: var(--surface-raised); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
 }
-.hx-banner {
-  font-family: "JetBrains Mono", monospace; font-size: 10px;
-  padding: 8px 10px; border-radius: 10px; background: #0F2340; color: #fde047;
-}
-.hx-banner.good { color: #86efac; }
+.hx-tabs.flex-wrap { flex-wrap: wrap; border-radius: var(--radius-lg); }
 .graph-node { transition: all 0.18s ease; }
-.chip { border: 1px solid rgba(42, 93, 176, 0.2); background: var(--surface); }
+.chip { border: 1px solid var(--line-strong); background: var(--surface-raised); }

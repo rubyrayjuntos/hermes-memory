@@ -82,11 +82,12 @@ def test_brand_palette_matches_style_guide() -> None:
 # ----------------------------------------------------------------------- contrast
 
 SURFACES = ("surface", "surface-raised", "surface-sunken")
+ENTITY_TYPES = ("person", "project", "place", "org", "tool", "concept", "other")
 TEXT_4_5 = [("text", s) for s in SURFACES] + [("text-muted", s) for s in SURFACES] + [
     ("on-accent", "accent"),
     ("accent", "surface"),
     ("accent", "surface-raised"),
-]
+] + [(f"entity-{e}", "surface") for e in ENTITY_TYPES]
 MARKS_3_0 = [
     (fg, s)
     for fg in (
@@ -102,6 +103,7 @@ MARKS_3_0 = [
         "status-leased",
         "status-retracted",
         "status-orphaned",
+        *(f"entity-{e}" for e in ENTITY_TYPES),
     )
     for s in SURFACES
 ]
@@ -128,6 +130,49 @@ def test_success_and_failure_differ_beyond_hue(theme: str) -> None:
     h = color("status-grounded", theme).lstrip("#")
     r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
     assert b > r and b > g, f"status-grounded drifted toward red/green in {theme}"
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("status-leased", "status-unconfirmed"),
+        ("status-grounded", "status-leased"),
+        ("status-retracted", "status-orphaned"),
+    ],
+)
+def test_adjacent_statuses_differ_in_lightness(theme: str, a: str, b: str) -> None:
+    """Statuses that sit side by side in the jobs/claims tables must differ in
+    lightness (contrast between them >= 1.4), not only in hue."""
+    ratio = contrast(color(a, theme), color(b, theme))
+    assert ratio >= 1.4, f"{a} vs {b} in {theme}: {ratio:.2f}"
+
+
+def _lab(hex_: str) -> tuple[float, float, float]:
+    h = hex_.lstrip("#")
+    lin = [
+        c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        for c in (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    ]
+    r, g, b = lin
+    x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+    y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+
+    def f(v: float) -> float:
+        return v ** (1 / 3) if v > 0.008856 else 7.787 * v + 16 / 116
+
+    return 116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_entity_type_colors_are_mutually_distinct(theme: str) -> None:
+    """Graph vertices are told apart by type colour: every pair >= 20 ΔE76 (CIELAB)."""
+    labs = {e: _lab(color(f"entity-{e}", theme)) for e in ENTITY_TYPES}
+    for i, a in enumerate(ENTITY_TYPES):
+        for b in ENTITY_TYPES[i + 1 :]:
+            d = sum((p - q) ** 2 for p, q in zip(labs[a], labs[b])) ** 0.5
+            assert d >= 20, f"entity-{a} vs entity-{b} in {theme}: ΔE {d:.1f}"
 
 
 # --------------------------------------------------------------- stylesheet wiring

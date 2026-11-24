@@ -56,6 +56,7 @@ The brand palette is exact from the style guide: `brand-nous-gold` `brand-librar
 - `weed` covers discard, drift, retraction and failure. It is `brand-weed-red` on Parchment and lifted to `#e08a78` on Ink, where the original reads 2.5:1.
 - **Status = mark + word.** Claim status and drain status always render through `hx-status`: a dot in `status-*` plus the literal status word. Grounded/done is **blue** (`graph-edge`), not green, so success and failure never differ only along red–green. Failure states use a square mark and pending/orphaned a hollow ring, so the three never depend on hue.
 - `seal` (Librarian Gold, darkened on Parchment) is for meander rules, stamps and eyebrows only.
+- `entity-person` … `entity-other` colour graph vertices, gems and type chips, always next to the type word. Each is ≥4.5:1 against `surface` (vertex initials are set in `surface` on the mark), and every pair is ≥20 ΔE apart in both themes.
 - Contrast: every text token holds ≥4.5:1, and every `line-strong`, `focus-ring` and status mark holds ≥3:1, on all three surfaces in both themes. Darkened Parchment values of the data colours exist for this reason. `line` is decorative (below 3:1) and never the only edge of a control.
 
 ### Type
@@ -149,6 +150,6 @@ The injected memory block is model-facing text, not UI. Keep it plain and stable
 
 - Shell: `hx-header` (minimal icon at 24px + `display` title + `hx-tabs`), then `hx-panel` grid on `surface`.
 - **View reads source fields.** Every metric shows the source field it came from (`.hx-metric .src`, e.g. `drain_status`, `LEDGER`, `beam_score`). Never show a derived number without its source.
-- Claim and drain states render only through `StatusBadge`.
-- Graph canvas: vertices are `hx-gem` diamonds. Edges use `graph-edge`, vector hits `vector`, traversal/selection `accent`, and retracted claims `weed` dashed.
+- Claim, drain/job and evidence states render only through `StatusBadge`. Evidence `live` maps to the grounded mark and `superseded_version` to the orphaned ring.
+- Graph canvas: vertices are diamonds filled with `entity-*`. Edges take their claim's `status-*` colour, traversal/selection takes `accent`, and literals are dashed `line-strong`.
 - Control actions (pane control is a Production criterion, not MVP) use `hx-btn-danger` for anything that weeds or discards, and always confirm.

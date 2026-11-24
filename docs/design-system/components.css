@@ -32,14 +32,14 @@ body { background: var(--surface); color: var(--text); font-family: var(--font-s
 /* Status: mark + word, never colour alone ---------------------------- */
 .hx-status { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-sans); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 3px var(--space-2) 3px 6px; background: var(--surface-raised); }
 .hx-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--hx-status, var(--status-orphaned)); }
-.hx-status[data-status="grounded"], .hx-status[data-status="done"] { --hx-status: var(--status-grounded); }
+.hx-status[data-status="grounded"], .hx-status[data-status="done"], .hx-status[data-status="live"] { --hx-status: var(--status-grounded); }
 .hx-status[data-status="unconfirmed"], .hx-status[data-status="retryable"] { --hx-status: var(--status-unconfirmed); }
 .hx-status[data-status="leased"] { --hx-status: var(--status-leased); }
 .hx-status[data-status="retracted"], .hx-status[data-status="withdrawn"], .hx-status[data-status="failed"] { --hx-status: var(--status-retracted); }
-.hx-status[data-status="orphaned"], .hx-status[data-status="pending"], .hx-status[data-status="null"] { --hx-status: var(--status-orphaned); }
+.hx-status[data-status="orphaned"], .hx-status[data-status="pending"], .hx-status[data-status="null"], .hx-status[data-status="superseded_version"] { --hx-status: var(--status-orphaned); }
 /* failure states get a square mark as a second, non-colour cue */
 .hx-status[data-status="retracted"]::before, .hx-status[data-status="withdrawn"]::before, .hx-status[data-status="failed"]::before { border-radius: 1px; }
-.hx-status[data-status="pending"]::before, .hx-status[data-status="orphaned"]::before, .hx-status[data-status="null"]::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--hx-status); }
+.hx-status[data-status="pending"]::before, .hx-status[data-status="orphaned"]::before, .hx-status[data-status="null"]::before, .hx-status[data-status="superseded_version"]::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--hx-status); }
 
 /* Tabs -------------------------------------------------------------- */
 .hx-tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--radius-pill); max-width: 100%; overflow-x: auto; }

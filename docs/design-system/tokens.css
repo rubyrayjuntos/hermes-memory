@@ -29,6 +29,13 @@
   --status-leased: var(--vector);
   --status-retracted: var(--weed);
   --status-orphaned: #7a8594;
+  --entity-person: var(--graph-edge);
+  --entity-project: var(--brand-nous-gold);
+  --entity-place: #4fb3a5;
+  --entity-org: #a68be0;
+  --entity-tool: #e07a9a;
+  --entity-concept: var(--brand-vector-dot);
+  --entity-other: var(--status-orphaned);
   --shadow-raised: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.45);
 }
 
@@ -49,9 +56,16 @@
   --weed: var(--brand-weed-red);
   --status-grounded: var(--graph-edge);
   --status-unconfirmed: #9a6b1f;
-  --status-leased: var(--vector);
+  --status-leased: var(--brand-lapis);
   --status-retracted: var(--weed);
   --status-orphaned: #6e7781;
+  --entity-person: #2f5fbf;
+  --entity-project: #8a5d14;
+  --entity-place: #1f7a6d;
+  --entity-org: #6d4ac6;
+  --entity-tool: #b23a6b;
+  --entity-concept: #5f7000;
+  --entity-other: #5f6873;
   --shadow-raised: 0 1px 0 rgba(13,17,23,0.04), 0 8px 24px rgba(26,58,95,0.10);
 }
 
@@ -73,9 +87,16 @@
     --weed: var(--brand-weed-red);
     --status-grounded: var(--graph-edge);
     --status-unconfirmed: #9a6b1f;
-    --status-leased: var(--vector);
+    --status-leased: var(--brand-lapis);
     --status-retracted: var(--weed);
     --status-orphaned: #6e7781;
+    --entity-person: #2f5fbf;
+    --entity-project: #8a5d14;
+    --entity-place: #1f7a6d;
+    --entity-org: #6d4ac6;
+    --entity-tool: #b23a6b;
+    --entity-concept: #5f7000;
+    --entity-other: #5f6873;
     --shadow-raised: 0 1px 0 rgba(13,17,23,0.04), 0 8px 24px rgba(26,58,95,0.10);
   }
 }
