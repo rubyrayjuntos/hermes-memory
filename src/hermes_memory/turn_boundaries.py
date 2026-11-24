@@ -20,6 +20,20 @@ from typing import Any, Mapping, Sequence
 
 from .extraction_worker import _is_synthetic_user_row
 
+# 2026-11-24, Spec 7 review fix: a compaction marker (context-management
+# scaffolding re-injecting a summary of EARLIER human-driven work) must
+# never become a segment's ask -- unlike a background-process, cron, or
+# delegation-batch marker, which really is what started that unit of
+# work with no human in the loop. Narrower than
+# extraction_worker._SYNTHETIC_USER_ROW_PREFIXES's "[CONTEXT" entry on
+# purpose: match only the literal compaction-marker shape actually seen
+# in the corpus, not every "[CONTEXT ...]"-prefixed scaffolding row.
+_COMPACTION_MARKER_PREFIX = "[CONTEXT COMPACTION"
+
+
+def _is_compaction_marker(text: str) -> bool:
+    return (text or "").lstrip().startswith(_COMPACTION_MARKER_PREFIX)
+
 
 @dataclass(frozen=True)
 class SpanRange:
@@ -84,7 +98,8 @@ def find_segment_boundaries(spans: Sequence[Mapping[str, Any]]) -> list[SpanRang
         prev_id = span_id
 
     segments.append(SpanRange(seg_start, prev_id, closed=False))
-    return _merge_marker_only_segments(segments, spans)
+    merged = _merge_marker_only_segments(segments, spans)
+    return _merge_compaction_marker_segments(merged, spans)
 
 
 def _merge_marker_only_segments(
@@ -146,3 +161,77 @@ def _merge_marker_only_segments(
             changed = True
             break
     return merged
+
+
+def _merge_compaction_marker_segments(
+    segments: list[SpanRange], spans: Sequence[Mapping[str, Any]],
+) -> list[SpanRange]:
+    """2026-11-24, Spec 7 review fix: a segment that OPENS with a
+    compaction marker merges backward into the segment holding the real
+    human ask that came before it -- even when the compaction-marker
+    segment contains genuine assistant work after the marker (it is
+    NOT marker-only, so ``_merge_marker_only_segments`` above leaves it
+    alone). Breakdown from the first fix's eval re-run: 47 of the
+    remaining marker-as-ask items were specifically compaction markers,
+    which are pure context-management scaffolding re-summarizing EARLIER
+    human-driven work, not a new autonomous trigger -- unlike a
+    background-process, cron, or delegation-batch marker, which really
+    is what started that unit of work with no human in the loop, and is
+    deliberately left untouched here. A compaction marker opening the
+    very FIRST segment of a session has nothing to merge backward into
+    and stays as its own segment (same fallback as the marker-only case).
+    """
+    by_id = {int(s["id"]): s for s in spans}
+
+    merged = list(segments)
+    changed = True
+    while changed:
+        changed = False
+        for i, seg in enumerate(merged):
+            if i == 0:
+                continue
+            first_span = by_id.get(seg.first_span_id)
+            if first_span is None or first_span.get("role") != "user":
+                continue
+            if not _is_compaction_marker(first_span.get("content") or ""):
+                continue
+            prev = merged[i - 1]
+            combined = SpanRange(prev.first_span_id, seg.last_span_id, closed=seg.closed)
+            merged = merged[: i - 1] + [combined] + merged[i + 1 :]
+            changed = True
+            break
+    return merged
+
+
+def find_status_lookahead_spans(
+    rows_after: Sequence[Mapping[str, Any]], *, cap: int,
+) -> list[Mapping[str, Any]]:
+    """2026-11-24, Spec 7 status-window fix: which spans AFTER a segment's
+    own last_span_id the status-inference pass may additionally look at.
+
+    Direct finding that drove this: 97.8% of 'unknown' work_items in the
+    first G7 eval had zero user rows anywhere in their own segment -- any
+    confirmation the user actually gave lives in the NEXT segment (the one
+    their next real ask opens), which classify_verdict never saw before
+    this. ``rows_after`` is the session's rows strictly after the
+    segment's last_span_id, already in ascending id order (same convention
+    as ``find_segment_boundaries``'s ``spans``) -- this function does not
+    re-sort or re-fetch anything; the caller owns pulling at most ``cap``
+    rows from the DB.
+
+    Returns a list containing just the first REAL (non-synthetic) user
+    row encountered -- that first reply is what answers the work, per
+    the design review. A synthetic marker encountered along the way does
+    not count as "the next real user message"; the scan continues past
+    it. Returns an empty list if no real user row appears within the
+    first ``cap`` rows, or if ``rows_after`` is empty.
+    """
+    if not rows_after:
+        return []
+    for span in rows_after[:cap]:
+        role = span.get("role")
+        if role == "user":
+            content = span.get("content") or ""
+            if not _is_synthetic_user_row(content):
+                return [span]
+    return []

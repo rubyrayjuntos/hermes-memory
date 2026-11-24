@@ -62,3 +62,50 @@ def test_whitespace_is_collapsed():
     result = extractive_summary(text, max_chars=300)
     assert "  " not in result
     assert "\n" not in result
+
+
+def test_labeled_password_is_redacted_not_copied_verbatim():
+    # 2026-11-24: a real credential leaked into an ask_summary because this
+    # function had zero redaction -- a short message fits under max_chars
+    # whole and was returned as-is, password included. Fake credential
+    # below, never a real one.
+    text = "username: faketestuser@example.com , pwd: Sup3rFake!Secret"
+    result = extractive_summary(text, max_chars=300)
+    assert "Sup3rFake!Secret" not in result
+    assert "[REDACTED]" in result
+    # The non-secret part of the message is still kept -- this is
+    # redaction, not wholesale suppression.
+    assert "faketestuser@example.com" in result
+
+
+def test_labeled_api_key_is_redacted():
+    text = "here is the api_key: fAkE1234567890abcdefGHIJKLMNOP for the service"
+    result = extractive_summary(text, max_chars=300)
+    assert "fAkE1234567890abcdefGHIJKLMNOP" not in result
+    assert "[REDACTED]" in result
+
+
+def test_bearer_token_shape_is_redacted_even_unlabeled():
+    text = "Authorization: Bearer fake.jwt.looking.token.abc123XYZ789 sent with the request"
+    result = extractive_summary(text, max_chars=300)
+    assert "fake.jwt.looking.token.abc123XYZ789" not in result
+    assert "[REDACTED]" in result
+
+
+def test_known_provider_key_prefix_is_redacted_even_unlabeled():
+    # sk-/ghp_/AIza-style keys are self-identifying even with no
+    # "password:"/"key:" label anywhere near them.
+    text = "I pasted sk-fAKEa1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6 into the .env by mistake"
+    result = extractive_summary(text, max_chars=300)
+    assert "sk-fAKEa1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6" not in result
+    assert "[REDACTED]" in result
+
+
+def test_redaction_runs_before_the_character_budget_not_after():
+    # Redact first, then apply the existing max_chars/sentence-boundary
+    # logic on the already-safe text -- never truncate first and leave a
+    # half-redacted secret in the kept prefix.
+    text = "pwd: Sup3rFake!Secret12345678901234567890. Then I ran the tests and they passed."
+    result = extractive_summary(text, max_chars=20)
+    assert "Sup3rFake!Secret12345678901234567890" not in result
+    assert len(result) <= 20

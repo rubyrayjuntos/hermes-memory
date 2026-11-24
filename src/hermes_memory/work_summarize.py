@@ -24,14 +24,54 @@ import re
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _WHITESPACE_RE = re.compile(r"\s+")
 
+# 2026-11-24: a real credential leaked into an ask_summary verbatim --
+# this module did purely extractive summarization (correctly avoiding
+# generative paraphrase) but had no redaction step at all, so any short
+# message fit under max_chars whole and came out with secrets intact.
+# Two tiers, applied before anything else touches the text:
+#   1. Labeled key: value pairs for common secret-ish labels (password,
+#      pwd, pass, secret, token, api key, apikey, auth) -- redact the
+#      value, keep the rest of the message (this is redaction, not
+#      wholesale suppression of an otherwise-ordinary message).
+#   2. Self-identifying shapes that don't need a label at all: Bearer
+#      tokens, JWT-looking dotted triples, and known provider key
+#      prefixes (sk-, ghp_, gho_, AIza, xox[abp]-).
+_LABELED_SECRET_RE = re.compile(
+    r"(?i)\b(password|pwd|pass|secret|token|api[_ -]?key|apikey|auth)\b"
+    r"\s*[:=]\s*(\S+)"
+)
+_BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+(\S+)")
+_JWT_SHAPE_RE = re.compile(r"\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]+\b")
+_PROVIDER_KEY_PREFIX_RE = re.compile(
+    r"\b(sk-|ghp_|gho_|ghu_|ghs_|AIza|xox[abp]-)[A-Za-z0-9_-]{10,}\b"
+)
+
+
+def _redact_secrets(text: str) -> str:
+    """Mask credential-shaped substrings; leave the rest of the message
+    intact. Order matters: labeled pairs first (so a labeled token's own
+    value doesn't also get caught, harmlessly, by a shape rule below),
+    then the self-identifying shapes that need no label."""
+    redacted = _LABELED_SECRET_RE.sub(
+        lambda m: f"{m.group(1)}: [REDACTED]", text
+    )
+    redacted = _BEARER_TOKEN_RE.sub("Bearer [REDACTED]", redacted)
+    redacted = _PROVIDER_KEY_PREFIX_RE.sub("[REDACTED]", redacted)
+    redacted = _JWT_SHAPE_RE.sub("[REDACTED]", redacted)
+    return redacted
+
 
 def extractive_summary(text: str, max_chars: int) -> str:
     """Whole leading sentences, collapsed whitespace, up to max_chars.
     Never cuts mid-sentence when more than one sentence fits; never
-    cuts mid-word even when a single sentence must be truncated."""
+    cuts mid-word even when a single sentence must be truncated.
+    Secrets are redacted before anything else happens to the text (see
+    _redact_secrets) -- truncation never gets a chance to leave a
+    half-redacted credential in the kept prefix."""
     normalized = _WHITESPACE_RE.sub(" ", (text or "").strip())
     if not normalized:
         return ""
+    normalized = _redact_secrets(normalized)
     if len(normalized) <= max_chars:
         return normalized
 
