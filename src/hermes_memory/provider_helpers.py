@@ -320,6 +320,11 @@ def _superseded_note(item: dict) -> str:
     return f'<note kind="superseded" span="{tid}">prior attempt superseded</note>'
 
 
+_RESERVE_FRACTION = 0.3  # share of token_budget reserved for the globally
+# strongest matches (any bucket), before the normal grounded-then-
+# unconfirmed bucket-priority pass runs on what's left of the budget.
+
+
 def format_span_injection(
     spans: list,
     *,
@@ -387,10 +392,12 @@ def format_span_injection(
 
     grounded: list[str] = []
     unconfirmed: list[str] = []
+    ranked_all: list[tuple[str, str]] = []  # (bbin, tag), global rank order
     for bbin, item in sorted(hits, key=_rank):
         tag = _span_tag(item)
         if _is_paste(str(item.get("content") or "")):
             tag = tag.replace("<span ", "<span paste=\"true\" ", 1)
+        ranked_all.append((bbin, tag))
         if bbin == "grounded":
             grounded.append(tag)
         else:
@@ -399,6 +406,27 @@ def format_span_injection(
     kept_grounded: list[str] = []
     kept_unconfirmed: list[str] = []
     kept_notes: list[str] = []
+    reserved_tags: set[int] = set()
+
+    # 2026-11-25 fix: the grounded bucket used to pack in full before
+    # unconfirmed ever got a turn, so a top-similarity unconfirmed hit
+    # could lose to a whole bucket of weaker grounded spans that simply
+    # arrived first (recall-eval Q1 finding). Reserve a slice of the
+    # budget up front for the globally strongest matches, in rank order,
+    # regardless of which bucket they fall in -- then run the normal
+    # bucket-priority pass on whatever's left for the rest.
+    reserve_budget = token_budget * _RESERVE_FRACTION
+    for bbin, tag in ranked_all:
+        cost = len(tag) // 4 + 20
+        if used + cost > reserve_budget:
+            break
+        if bbin == "grounded":
+            kept_grounded.append(tag)
+        else:
+            kept_unconfirmed.append(tag)
+        reserved_tags.add(id(tag))
+        used += cost
+
     buckets = (
         (grounded, kept_grounded),
         (unconfirmed, kept_unconfirmed),
@@ -406,6 +434,8 @@ def format_span_injection(
     )
     for source, dest in buckets:
         for tag in source:
+            if id(tag) in reserved_tags:
+                continue
             cost = len(tag) // 4 + 20
             if used + cost > token_budget:
                 break

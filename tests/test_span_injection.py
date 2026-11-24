@@ -135,6 +135,32 @@ def test_similarity_tie_falls_back_to_paste_and_noclaim_as_before():
     assert out.index('id="2"') < out.index('id="1"') < out.index('id="3"')
 
 
+def test_strong_unconfirmed_match_reserves_budget_ahead_of_weak_grounded():
+    # 2026-11-25 review finding (Q1 in the 10-question recall eval): the
+    # grounded bucket is ALWAYS packed in full before unconfirmed gets a
+    # turn, so a top-similarity unconfirmed hit can still lose to a whole
+    # bucket of weaker grounded spans that happened to arrive first. A
+    # slice of the budget (RESERVE_FRACTION) is now reserved up front for
+    # the single strongest match across BOTH buckets, before the normal
+    # bucket-priority pass runs on what's left.
+    strong_unconfirmed = dict(
+        turn_id=1, speaker="assistant", uptake="unknown", score=0.90,
+        content="The Nous Portal credential is in auth.json, matches both profiles, confirmed working.",
+    )
+    weak_grounded = [
+        dict(USER, turn_id=2, score=0.56,
+             content="a vaguely related note about something else entirely here"),
+        dict(USER, turn_id=3, score=0.55,
+             content="another loosely related aside about a different unrelated topic"),
+        dict(USER, turn_id=4, score=0.55,
+             content="yet another weak match about something tangential and unrelated"),
+    ]
+    out = format_span_injection(
+        [*weak_grounded, strong_unconfirmed], token_budget=200,
+    )
+    assert 'id="1"' in out, "top-similarity match must survive even though it's unconfirmed"
+
+
 def test_facts_require_grounding_and_source_spans():
     out = format_facts([
         {

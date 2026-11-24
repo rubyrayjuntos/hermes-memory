@@ -253,7 +253,7 @@ python scripts/release_gate.py
 | `shadow_sample_rate` | `0.2` | Fraction of queries compared when `retrieval_mode: shadow` |
 | `graph` | `hermes_knowledge` | Apache AGE graph name |
 | `vector_k` | `12` | Top-$k$ nearest neighbors for vector recall |
-| `min_similarity` | `0.55` | Cosine similarity cutoff floor |
+| `min_similarity` | `0.58` | Cosine similarity cutoff floor |
 | `max_tokens` | `1200` | Token budget for prompt injection block |
 
 ---
