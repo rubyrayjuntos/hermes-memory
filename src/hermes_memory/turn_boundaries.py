@@ -84,4 +84,65 @@ def find_segment_boundaries(spans: Sequence[Mapping[str, Any]]) -> list[SpanRang
         prev_id = span_id
 
     segments.append(SpanRange(seg_start, prev_id, closed=False))
-    return segments
+    return _merge_marker_only_segments(segments, spans)
+
+
+def _merge_marker_only_segments(
+    segments: list[SpanRange], spans: Sequence[Mapping[str, Any]],
+) -> list[SpanRange]:
+    """2026-11-24 fix: a marker should never stand alone as its own item.
+
+    Signal 1 makes every marker a hard boundary unconditionally, which is
+    right for closing off whatever came *before* it -- but it also means a
+    marker immediately followed by another hard boundary (another marker,
+    or a real ask after an assistant turn) produces a degenerate segment
+    containing nothing but the marker. The first G7 eval run measured this
+    directly: 450/3327 items (13.5%) were marker-only, concentrated in
+    sessions with heavy compaction activity (one session alone produced
+    331 items). A marker-only segment (first_span_id == last_span_id, and
+    that single span is itself a synthetic marker -- by construction of
+    signal 1, a marker-only segment can never contain more than one span)
+    merges into its neighbor: forward into the next segment if one exists,
+    otherwise backward into the previous one. A lone marker with no
+    neighbor at all (the entire session is just that marker) has nothing
+    to merge into and stays as itself -- the existing ask-selection
+    fallback-to-marker behavior already covers that case correctly.
+    """
+    by_id = {int(s["id"]): s for s in spans}
+    # Don't assume span ids are a contiguous integer range within one
+    # session -- conversations.id is a globally serial key, so another
+    # session's concurrent insert can leave a gap. Filter the real spans
+    # list by id membership in [first, last] instead of range()'ing the
+    # integers themselves.
+    ordered_ids = [int(s["id"]) for s in spans]
+
+    def is_marker_only(seg: SpanRange) -> bool:
+        ids_in_range = [sid for sid in ordered_ids if seg.first_span_id <= sid <= seg.last_span_id]
+        if not ids_in_range:
+            return False
+        for sid in ids_in_range:
+            span = by_id[sid]
+            if span.get("role") != "user":
+                return False
+            if not _is_synthetic_user_row(span.get("content") or ""):
+                return False
+        return True
+
+    merged = list(segments)
+    changed = True
+    while changed and len(merged) > 1:
+        changed = False
+        for i, seg in enumerate(merged):
+            if not is_marker_only(seg):
+                continue
+            if i + 1 < len(merged):
+                nxt = merged[i + 1]
+                combined = SpanRange(seg.first_span_id, nxt.last_span_id, closed=nxt.closed)
+                merged = merged[:i] + [combined] + merged[i + 2 :]
+            else:
+                prev = merged[i - 1]
+                combined = SpanRange(prev.first_span_id, seg.last_span_id, closed=seg.closed)
+                merged = merged[: i - 1] + [combined]
+            changed = True
+            break
+    return merged

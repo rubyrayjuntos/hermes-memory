@@ -54,6 +54,55 @@ def test_3_no_exemption_list_every_qualifying_user_row_is_a_boundary():
     ]
 
 
+def test_4b_marker_only_segment_merges_into_the_next_segment():
+    # 2026-11-24 fix: a marker should not stand alone as its own segment --
+    # a degenerate marker-only segment (first==last==just the marker) merges
+    # forward into whatever segment follows it. Real finding that drove
+    # this: 450/3327 items (13.5%) in the first G7 eval run were nothing but
+    # a marker, with one session alone producing 331 items from heavy
+    # compaction activity.
+    spans = [
+        _span(1, "user", "[CONTEXT COMPACTION — REFERENCE ONLY] first marker"),
+        _span(2, "user", "[OUT-OF-BAND USER MESSAGE] second marker, no work between"),
+        _span(3, "assistant", "ok"),
+    ]
+    result = find_segment_boundaries(spans)
+    assert result == [SpanRange(1, 3, closed=False)]
+
+
+def test_4c_marker_only_trailing_segment_merges_into_the_previous_segment():
+    # The marker-only segment is last (no "next" to merge forward into) --
+    # it must merge backward into the segment before it instead.
+    spans = [
+        _span(1, "user", "do the thing"),
+        _span(2, "assistant", "done"),
+        _span(3, "user", "[CONTEXT COMPACTION — REFERENCE ONLY] trailing marker, nothing after"),
+    ]
+    result = find_segment_boundaries(spans)
+    assert result == [SpanRange(1, 3, closed=False)]
+
+
+def test_4d_session_that_is_only_a_marker_has_nothing_to_merge_with():
+    # No neighbor exists at all -- the marker-only segment has to stay as
+    # itself (this is the legitimate "marker-only session" case the
+    # ask-selection fix's own fallback-to-marker test already covers).
+    spans = [_span(1, "user", "[CONTEXT COMPACTION — REFERENCE ONLY] the whole session is this")]
+    result = find_segment_boundaries(spans)
+    assert result == [SpanRange(1, 1, closed=False)]
+
+
+def test_4e_a_chain_of_consecutive_markers_all_merge_into_the_following_real_segment():
+    spans = [
+        _span(1, "user", "[CONTEXT COMPACTION — REFERENCE ONLY] marker one"),
+        _span(2, "user", "[OUT-OF-BAND USER MESSAGE] marker two"),
+        _span(3, "user", "[ASYNC DELEGATION BATCH COMPLETE] marker three"),
+        _span(4, "user", "a real ask, finally"),
+        _span(5, "assistant", "ok, working on it"),
+    ]
+    result = find_segment_boundaries(spans)
+    assert result == [SpanRange(1, 5, closed=False)]
+
+
 def test_4_synthetic_marker_is_always_a_hard_boundary():
     spans = [
         _span(1, "user", "start a long task"),
@@ -65,22 +114,6 @@ def test_4_synthetic_marker_is_always_a_hard_boundary():
     assert result == [
         SpanRange(1, 2, closed=True),
         SpanRange(3, 4, closed=False),
-    ]
-
-
-def test_4b_synthetic_marker_is_a_hard_boundary_even_with_no_assistant_row_between():
-    # A marker immediately after another marker (no assistant/tool activity
-    # between them) is still a hard boundary -- hard boundaries don't need
-    # signal 2's "work happened" gate.
-    spans = [
-        _span(1, "user", "[CONTEXT COMPACTION — REFERENCE ONLY] first marker"),
-        _span(2, "user", "[OUT-OF-BAND USER MESSAGE] second marker, no work between"),
-        _span(3, "assistant", "ok"),
-    ]
-    result = find_segment_boundaries(spans)
-    assert result == [
-        SpanRange(1, 1, closed=True),
-        SpanRange(2, 3, closed=False),
     ]
 
 
