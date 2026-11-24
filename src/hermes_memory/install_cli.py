@@ -285,13 +285,13 @@ def write_hybrid_age_block(config_path: Path, embed_model: str, graph: str) -> N
         "embed_model": embed_model,
         "graph": graph,
         "vector_k": 12,
-        "min_similarity": 0.55,
+        "min_similarity": 0.58,
         "max_tokens": 1200,
     }
     block_text = (
         f"hybrid_age:\n  dsn_env: HYBRID_AGE_DSN\n  embed_url_env: HYBRID_AGE_EMBED_URL\n"
         f"  embed_model: {embed_model}\n  graph: {graph}\n  vector_k: 12\n"
-        f"  min_similarity: 0.55\n  max_tokens: 1200\n"
+        f"  min_similarity: 0.58\n  max_tokens: 1200\n"
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     try:

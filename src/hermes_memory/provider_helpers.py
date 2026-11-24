@@ -140,7 +140,18 @@ def _note_header(item: dict) -> str:
 
 
 def _clean_excerpt(item: dict) -> str:
-    return str(item.get("content") or item.get("excerpt") or "").replace("\n", " ").strip()[:_EXCERPT_CHARS]
+    import html as _html
+
+    raw = str(item.get("content") or item.get("excerpt") or "").replace("\n", " ").strip()[:_EXCERPT_CHARS]
+    # 2026-11-24 fix: this excerpt is stored, attacker-reachable content
+    # (anything ever said in a session becomes a future retrieval
+    # candidate) rendered directly inside a <PAST_CONTEXT> fence with no
+    # other escaping anywhere in format_injection -- a span containing a
+    # literal "</PAST_CONTEXT>" could close the fence early and have
+    # whatever followed it (a fake <system> block, say) read by the model
+    # as live markup rather than quoted data. html.escape neutralizes
+    # that the same way _span_tag already does for format_span_injection.
+    return _html.escape(raw)
 
 
 def _hop_names(path: dict) -> tuple[str, str]:
@@ -309,6 +320,11 @@ def _superseded_note(item: dict) -> str:
     return f'<note kind="superseded" span="{tid}">prior attempt superseded</note>'
 
 
+_RESERVE_FRACTION = 0.3  # share of token_budget reserved for the globally
+# strongest matches (any bucket), before the normal grounded-then-
+# unconfirmed bucket-priority pass runs on what's left of the budget.
+
+
 def format_span_injection(
     spans: list,
     *,
@@ -358,18 +374,30 @@ def format_span_injection(
                 (nspeaker, _span_tag(nb, neighbor=True, body_chars=neighbor_body_chars))
             )
 
-    def _rank(entry: tuple[str, dict]) -> tuple[int, int]:
+    def _rank(entry: tuple[str, dict]) -> tuple[float, int, int]:
         _, item = entry
+        # 2026-11-25 fix: similarity is the PRIMARY sort key within a
+        # bin; paste/noclaim only break ties. The first recall eval
+        # found 3 of 4 misses were the top vector match getting bumped
+        # by a lower-similarity item that simply wasn't flagged paste/
+        # noclaim -- packing order was fighting retrieval instead of
+        # respecting it. No score present (items built by hand, not
+        # from vector_search) ties at 0.0, preserving the original
+        # paste/noclaim-only ordering for that case.
+        score = item.get("score")
+        score_key = -float(score) if score is not None else 0.0
         paste = 1 if _is_paste(str(item.get("content") or "")) else 0
         noclaim = 0 if (item.get("live_claims") or 0) > 0 else 1
-        return (paste, noclaim)
+        return (score_key, paste, noclaim)
 
     grounded: list[str] = []
     unconfirmed: list[str] = []
+    ranked_all: list[tuple[str, str]] = []  # (bbin, tag), global rank order
     for bbin, item in sorted(hits, key=_rank):
         tag = _span_tag(item)
         if _is_paste(str(item.get("content") or "")):
             tag = tag.replace("<span ", "<span paste=\"true\" ", 1)
+        ranked_all.append((bbin, tag))
         if bbin == "grounded":
             grounded.append(tag)
         else:
@@ -378,6 +406,27 @@ def format_span_injection(
     kept_grounded: list[str] = []
     kept_unconfirmed: list[str] = []
     kept_notes: list[str] = []
+    reserved_tags: set[int] = set()
+
+    # 2026-11-25 fix: the grounded bucket used to pack in full before
+    # unconfirmed ever got a turn, so a top-similarity unconfirmed hit
+    # could lose to a whole bucket of weaker grounded spans that simply
+    # arrived first (recall-eval Q1 finding). Reserve a slice of the
+    # budget up front for the globally strongest matches, in rank order,
+    # regardless of which bucket they fall in -- then run the normal
+    # bucket-priority pass on whatever's left for the rest.
+    reserve_budget = token_budget * _RESERVE_FRACTION
+    for bbin, tag in ranked_all:
+        cost = len(tag) // 4 + 20
+        if used + cost > reserve_budget:
+            break
+        if bbin == "grounded":
+            kept_grounded.append(tag)
+        else:
+            kept_unconfirmed.append(tag)
+        reserved_tags.add(id(tag))
+        used += cost
+
     buckets = (
         (grounded, kept_grounded),
         (unconfirmed, kept_unconfirmed),
@@ -385,6 +434,8 @@ def format_span_injection(
     )
     for source, dest in buckets:
         for tag in source:
+            if id(tag) in reserved_tags:
+                continue
             cost = len(tag) // 4 + 20
             if used + cost > token_budget:
                 break

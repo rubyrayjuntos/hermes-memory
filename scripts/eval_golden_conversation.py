@@ -156,9 +156,22 @@ def _drained(
 
 def _validate_dsn(dsn: str, *, allow_test_dsn: bool) -> None:
     parsed = urlparse(dsn)
-    if parsed.port == 5450 or ":5450" in dsn or re.search(r"(?:^|\s)port\s*=\s*5450(?:\s|$)", dsn):
-        raise SystemExit("refusing: port 5450 is out of scope")
+    is_port_5450 = (
+        parsed.port == 5450 or ":5450" in dsn
+        or re.search(r"(?:^|\s)port\s*=\s*5450(?:\s|$)", dsn)
+    )
     database = parsed.path.lstrip("/").split("?", 1)[0]
+    if "dbname" in dsn and not database:
+        m = re.search(r"(?:^|\s)dbname\s*=\s*(\S+)", dsn)
+        database = m.group(1) if m else ""
+    if is_port_5450:
+        # allow_test_dsn is a narrow, single-database exception (the
+        # fixture-managed hermes_test db), never a blanket port bypass --
+        # was previously unreachable dead code because this check raised
+        # before the flag got a chance to apply (2026-11-24 fix).
+        if allow_test_dsn and database == "hermes_test":
+            return
+        raise SystemExit("refusing: port 5450 is out of scope")
     allowed = bool(re.search(r"(?:^|_)eval(?:$|_)", database)) or database.startswith(
         "hermes_release_gate_"
     )

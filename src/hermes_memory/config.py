@@ -10,7 +10,7 @@ Config surface per docs/plans/v0.1.md §3.2:
       embed_model: nomic-embed-text      # behavior knobs -> yaml
       graph: hermes_knowledge
       vector_k: 12
-      min_similarity: 0.55
+      min_similarity: 0.58
       max_tokens: 1200
 
 Secrets/endpoints never live in code or committed yaml — they resolve from the
@@ -47,7 +47,7 @@ class HybridAgeConfig:
     embed_model: str = "nomic-embed-text"
     graph: str = "hermes_knowledge"
     vector_k: int = 12
-    min_similarity: float = 0.55
+    min_similarity: float = 0.58
     max_tokens: int = 1200
     embed_dim: int = 768
     queue_maxsize: int = 256
@@ -481,7 +481,7 @@ CONFIG_SCHEMA_FIELDS = [
         "description": "Minimum cosine similarity for a hit to be injected",
         "secret": False,
         "required": False,
-        "default": 0.55,
+        "default": 0.58,
         "type": "number",
         "minimum": 0.0,
         "maximum": 1.0,

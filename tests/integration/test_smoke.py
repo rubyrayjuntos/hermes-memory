@@ -63,7 +63,26 @@ def _can_connect(dsn: str) -> bool:
 
 
 @pytest.fixture(scope="module")
-def live_dsn(request: pytest.FixtureRequest) -> str:
+def live_dsn(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> str:
+    # 2026-11-24 fix: load_config() (called inside run_verify/verify_main
+    # with no path argument) reads ~/.hermes/config.yaml via HERMES_HOME,
+    # which is always SET to whatever profile's gateway happens to be
+    # running the test suite -- e.g. "/home/rswan/.hermes/profiles/
+    # linkibinki", whose real config.yaml declares a profile-specific
+    # dsn_env (HYBRID_AGE_DSN_LINKIBINKI) this test never sets, so
+    # load_config() raised "missing HYBRID_AGE_DSN_LINKIBINKI" regardless
+    # of the actual HYBRID_AGE_DSN this fixture resolves below. Point
+    # HERMES_HOME at an empty tmp dir for the module so load_config()
+    # finds no config.yaml at all and falls back to its coded default
+    # dsn_env name (HYBRID_AGE_DSN), which this fixture does set.
+    isolated_home = tmp_path_factory.mktemp("hermes_home_isolated")
+    old_home = os.environ.get("HERMES_HOME")
+    os.environ["HERMES_HOME"] = str(isolated_home)
+    request.addfinalizer(
+        lambda: os.environ.pop("HERMES_HOME", None) if old_home is None
+        else os.environ.__setitem__("HERMES_HOME", old_home)
+    )
+
     cli_dsn = request.config.getoption("--dsn")
     if cli_dsn:
         if "hermes_test" not in cli_dsn or "hermes_memory" in cli_dsn:

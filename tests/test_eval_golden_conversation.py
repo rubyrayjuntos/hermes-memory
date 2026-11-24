@@ -122,11 +122,28 @@ def test_event_time_agreement_scores_order_not_fixture_wall_clock():
 
 def test_golden_runner_refuses_installed_port_and_non_eval_database():
     with pytest.raises(SystemExit, match="port 5450"):
-        _validate_dsn("postgres://hermes:pw@127.0.0.1:5450/hermes_memory_eval", allow_test_dsn=False)
+        _validate_dsn("postgres://hermes:***@127.0.0.1:5450/hermes_memory_eval", allow_test_dsn=False)
     with pytest.raises(SystemExit, match="port 5450"):
         _validate_dsn("host=127.0.0.1 port=5450 dbname=hermes_memory_eval", allow_test_dsn=False)
     with pytest.raises(SystemExit, match="must name"):
-        _validate_dsn("postgres://hermes:pw@127.0.0.1:5453/hermes_memory", allow_test_dsn=False)
+        _validate_dsn("postgres://hermes:***@127.0.0.1:5453/hermes_memory", allow_test_dsn=False)
+
+
+def test_golden_runner_allow_test_dsn_permits_port_5450_hermes_test_only():
+    # 2026-11-24: allow_test_dsn=True was dead code -- the hard port-5450
+    # rejection fired before this flag got a chance to apply, so
+    # test_golden_ingest.py's own call with allow_test_dsn=True against the
+    # real hermes_test fixture DSN (port 5450) always raised. The
+    # allowed = allowed or database == "hermes_test" line a few lines down
+    # only makes sense if port 5450 can reach it at all.
+    _validate_dsn("postgres://hermes:***@127.0.0.1:5450/hermes_test", allow_test_dsn=True)
+    # Still refuses port 5450 for any OTHER database, even with the flag on --
+    # the flag is a narrow one-database exception, not a blanket port bypass.
+    with pytest.raises(SystemExit, match="port 5450"):
+        _validate_dsn("postgres://hermes:***@127.0.0.1:5450/hermes_memory", allow_test_dsn=True)
+    # And it changes nothing when the flag is off (same as the test above).
+    with pytest.raises(SystemExit, match="port 5450"):
+        _validate_dsn("postgres://hermes:***@127.0.0.1:5450/hermes_test", allow_test_dsn=False)
 
 
 def test_model_mode_requires_an_explicit_endpoint_and_model(monkeypatch):
