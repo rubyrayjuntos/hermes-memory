@@ -140,7 +140,18 @@ def _note_header(item: dict) -> str:
 
 
 def _clean_excerpt(item: dict) -> str:
-    return str(item.get("content") or item.get("excerpt") or "").replace("\n", " ").strip()[:_EXCERPT_CHARS]
+    import html as _html
+
+    raw = str(item.get("content") or item.get("excerpt") or "").replace("\n", " ").strip()[:_EXCERPT_CHARS]
+    # 2026-11-24 fix: this excerpt is stored, attacker-reachable content
+    # (anything ever said in a session becomes a future retrieval
+    # candidate) rendered directly inside a <PAST_CONTEXT> fence with no
+    # other escaping anywhere in format_injection -- a span containing a
+    # literal "</PAST_CONTEXT>" could close the fence early and have
+    # whatever followed it (a fake <system> block, say) read by the model
+    # as live markup rather than quoted data. html.escape neutralizes
+    # that the same way _span_tag already does for format_span_injection.
+    return _html.escape(raw)
 
 
 def _hop_names(path: dict) -> tuple[str, str]:
