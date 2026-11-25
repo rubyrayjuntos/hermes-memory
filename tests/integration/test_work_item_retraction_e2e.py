@@ -43,7 +43,7 @@ async def test_retracting_the_sole_item_marks_it_retracted_with_no_current_point
     await _enqueue_extract_work(store, session_id, first_id, last_id)
     await extraction_worker._run_work(store, WORKER)
 
-    topic_key = f"session:{session_id}"
+    topic_key = f"session:{session_id}:{first_id}"  # Spec 7 T7.3: segment-scoped topic_key
     retracted = await store.retract_work_item(OWNER, topic_key)
     assert retracted is True
 
@@ -78,7 +78,7 @@ async def test_retracting_restores_the_predecessor_as_current(store, clean_herme
         )
     predecessor_id, successor_id = int(rows[0]["id"]), int(rows[1]["id"])
 
-    topic_key = f"session:{session_id}"
+    topic_key = f"session:{session_id}:{first_id}"  # Spec 7 T7.3: segment-scoped topic_key
     retracted = await store.retract_work_item(OWNER, topic_key)
     assert retracted is True
 

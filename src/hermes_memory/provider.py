@@ -1692,29 +1692,51 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 logger.warning("extract_work enqueue failed", exc_info=True)
 
     async def _aenqueue_extract_work(self, store: Any, owner: str, session_id: str) -> None:
-        """Spec 5 T5.2: enqueue one extract_work job covering everything
-        durable so far in this session. Idempotent via _extract_work_op_id
-        (see its docstring) -- never duplicates a job for an unchanged
-        range, never raises, never waits for the job to actually run."""
+        """Spec 5 T5.2 + Spec 7 T7.2: enqueue one extract_work job per
+        detected task segment in this session (find_segment_boundaries),
+        not one job for the whole session. Idempotent per segment via
+        _extract_work_op_id, same as before -- a segment's op_id is scoped
+        to its own span range, so the 1-job-to-1-item shape and the
+        UNIQUE (owner, source_op_id) constraint need no change (7.4).
+
+        Spec 7 T7.5: a session already covered by a pre-Spec-7 whole-
+        session work_item (topic_key `session:{session_id}`, no segment
+        suffix) is left alone here -- re-splitting it is a deliberate,
+        opt-in backfill operation, never silent. Only _aenqueue_extract_work
+        is called this way; this is the single call site in this codebase,
+        always invoked from on_session_end, so every segment returned
+        (open or closed) is ready to enqueue -- there is no mid-session
+        call that would need to leave the tail for later."""
         job_add = getattr(store, "job_add", None)
         if not callable(job_add):
             return
+        from .turn_boundaries import find_segment_boundaries
         try:
             pool = getattr(store, "pool", None)
             if pool is None:
                 return
             async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT min(id) AS first_id, max(id) AS last_id FROM conversations "
-                    "WHERE agent_identity = $1 AND session_id = $2",
+                legacy_item = await conn.fetchval(
+                    "SELECT 1 FROM work_item WHERE owner = $1 AND session_id = $2 "
+                    "AND topic_key = $3 LIMIT 1",
+                    owner, session_id, f"session:{session_id}",
+                )
+                if legacy_item:
+                    return  # pre-Spec-7 whole-session item exists; T7.5 handles re-splitting, not this path
+                spans = await conn.fetch(
+                    "SELECT id, role, content FROM conversations "
+                    "WHERE agent_identity = $1 AND session_id = $2 ORDER BY id",
                     owner, session_id,
                 )
-            if row is None or row["last_id"] is None:
+            if not spans:
                 return  # nothing durable yet for this session -- nothing to capture
-            first_id, last_id = int(row["first_id"]), int(row["last_id"])
-            op_id = _extract_work_op_id(session_id, first_id, last_id)
-            payload = _extract_work_payload(owner, session_id, first_id, last_id)
-            await job_add(owner, "extract_work", op_id, payload, session_id=session_id)
+            segments = find_segment_boundaries(
+                [{"id": s["id"], "role": s["role"], "content": s["content"]} for s in spans]
+            )
+            for seg in segments:
+                op_id = _extract_work_op_id(session_id, seg.first_span_id, seg.last_span_id)
+                payload = _extract_work_payload(owner, session_id, seg.first_span_id, seg.last_span_id)
+                await job_add(owner, "extract_work", op_id, payload, session_id=session_id)
         except Exception:
             logger.warning("extract_work enqueue failed", exc_info=True)
 

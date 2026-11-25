@@ -25,6 +25,15 @@ MODEL_LEASE_S = 120.0
 WORK_LEASE_S = 120.0
 IDLE_INTERVAL_S = 5.0
 
+# 2026-11-24, Spec 7 status-window fix: how far past a segment's own
+# last_span_id the status-inference pass may look for the user's first
+# real reply (find_status_lookahead_spans stops at and includes it, or
+# returns nothing within this many rows). Chosen generously enough to
+# cross a few assistant/tool turns of narration before the user's next
+# message, without scanning deep into what is very likely a separate,
+# unrelated later segment if nothing shows up this soon.
+_STATUS_LOOKAHEAD_CAP = 40
+
 # 2026-11-20 fix: a compaction/handoff summary, or other synthetic
 # scaffolding row (background-process notice, async delegation complete,
 # skill-invocation notice, planning-state marker, etc.), is injected
@@ -223,6 +232,7 @@ async def _run_work(
     transaction, since verification does its own filesystem/subprocess
     I/O. Idempotent on the job's own op_id via
     ON CONFLICT (owner, source_op_id) DO NOTHING. Never raises."""
+    from .turn_boundaries import find_status_lookahead_spans
     from .turn_filter import segment_turn, strip_memory_blocks
 
     claimed = await store.job_claim("extract_work", worker, 1, lease_s=WORK_LEASE_S,
@@ -317,6 +327,38 @@ async def _run_work(
             if matched_user_span_id is not None:
                 reason_span_id = matched_user_span_id
             else:
+                # Spec 7 status-window fix: the confirmation (if any) may
+                # live in the NEXT segment -- the one the user's own real
+                # reply opens. Look past this segment's own end, up to and
+                # including that first real reply, capped at
+                # _STATUS_LOOKAHEAD_CAP rows so this never scans deep into
+                # an unrelated later part of the session.
+                lookahead_rows = await conn.fetch(
+                    "SELECT id, role, content FROM conversations "
+                    "WHERE agent_identity = $1 AND session_id = $2 AND id > $3 "
+                    "ORDER BY id LIMIT $4",
+                    owner, session_id, int(last_id), _STATUS_LOOKAHEAD_CAP,
+                )
+                lookahead_candidates = find_status_lookahead_spans(
+                    lookahead_rows, cap=_STATUS_LOOKAHEAD_CAP,
+                )
+                for candidate in lookahead_candidates:
+                    candidate_id = int(candidate["id"])
+                    stripped = strip_memory_blocks(str(candidate["content"] or ""))
+                    authored = "".join(
+                        stripped[seg.start:seg.end]
+                        for seg in segment_turn(stripped) if seg.kind == "authored"
+                    )
+                    if not authored.strip():
+                        continue
+                    verdict = classify_verdict(authored)
+                    if verdict is not None:
+                        matched_user_span_id = candidate_id
+                        status, reason = verdict, f"explicit user verdict: {verdict}"
+                if matched_user_span_id is not None:
+                    reason_span_id = matched_user_span_id
+
+            if matched_user_span_id is None:
                 event_rows = await conn.fetch(
                     "SELECT id, status_code FROM work_event "
                     "WHERE owner = $1 AND session_id = $2 AND span_id BETWEEN $3 AND $4 "
@@ -349,7 +391,13 @@ async def _run_work(
             if status == "unknown" and outcome_summary:
                 outcome_summary = f"(assistant's account, unconfirmed) {outcome_summary}"
 
-            topic_key = f"session:{session_id}"
+            # Spec 7 T7.3: segment-scoped, not session-scoped, so distinct
+            # segments of the same session never supersede each other --
+            # supersession still means "a later attempt at the same
+            # topic_key," which is now "the same segment position," not
+            # "the same session." first_id is the segment's own first
+            # span id (stable, order-preserving), set by T7.2's caller.
+            topic_key = f"session:{session_id}:{first_id}"
             resulting_item_id: Optional[int] = None
             async with conn.transaction():
                 # T5.3: "under an owner/topic lock, insert the successor,

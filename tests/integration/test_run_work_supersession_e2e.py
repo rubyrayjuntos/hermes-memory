@@ -68,7 +68,11 @@ async def test_a_grown_range_supersedes_the_prior_work_item_for_the_same_topic(
         )
         current = await conn.fetchrow(
             "SELECT work_item_id FROM work_item_current WHERE owner = $1 AND topic_key = $2",
-            OWNER, f"session:{session_id}",
+            # Spec 7 T7.3: topic_key is segment-scoped (session:{id}:{first_span_id}),
+            # not session-scoped. Both enqueue calls here share the same first_id
+            # (only last_id grows), so the topic_key -- and therefore the
+            # supersession chain -- is still the same across both, as intended.
+            OWNER, f"session:{session_id}:{first_id}",
         )
 
     assert len(rows) == 2
