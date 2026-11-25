@@ -1,0 +1,566 @@
+{
+  "grader1_verdicts": {
+    "0": 1.0,
+    "1": 0.5,
+    "2": 0.5,
+    "3": 0.5,
+    "4": 0.5,
+    "5": 0.5,
+    "6": 0.5,
+    "7": 0.5,
+    "8": 0.5,
+    "9": 1.0,
+    "10": 1.0,
+    "11": 0.5,
+    "12": 0.5,
+    "13": 0.5,
+    "14": 1.0,
+    "15": 0.0,
+    "16": 0.0,
+    "17": 1.0,
+    "18": 0.5,
+    "19": 1.0,
+    "20": 1.0,
+    "21": 0.5,
+    "22": 0.5,
+    "23": 0.5,
+    "24": 0.5,
+    "25": 1.0,
+    "26": 0.5,
+    "27": 0.0,
+    "28": 0.5,
+    "29": 0.5,
+    "30": 1.0,
+    "31": 0.0,
+    "32": 0.5,
+    "33": 0.5,
+    "34": 0.5,
+    "35": 0.0,
+    "36": 0.5,
+    "37": 0.5,
+    "38": 1.0,
+    "39": 0.0,
+    "40": 0.5,
+    "41": 1.0,
+    "42": 0.5,
+    "43": 0.0,
+    "44": 1.0,
+    "45": 0.5,
+    "46": 0.0,
+    "47": 1.0,
+    "48": 0.0,
+    "49": 0.5,
+    "50": 0.5,
+    "51": 0.5,
+    "52": 0.5,
+    "53": 0.0,
+    "54": 0.5,
+    "55": 0.5,
+    "56": 0.5,
+    "57": 1.0,
+    "58": 1.0,
+    "59": 0.5,
+    "60": 1.0,
+    "61": 0.0,
+    "62": 0.0,
+    "63": 0.5,
+    "64": 1.0,
+    "65": 0.0,
+    "66": 1.0,
+    "67": 0.0,
+    "68": 0.5,
+    "69": 0.5
+  },
+  "grader2_verdicts": [
+    {
+      "shuffle_id": 0,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Both the v2 positioning statement and the injection-vs-storage explanation are stated correctly."
+    },
+    {
+      "shuffle_id": 1,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly identifies llama3.2:3b but denies having the plugin path, which is in gt_content."
+    },
+    {
+      "shuffle_id": 2,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers the backfill blockers correctly but denies knowledge of the consolidated report."
+    },
+    {
+      "shuffle_id": 3,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers graph-extractor vs vector embedding correctly but denies the two-writers structure."
+    },
+    {
+      "shuffle_id": 4,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "States the HGNN fact correctly but denies/misses the Kanban 'done' bugs fact."
+    },
+    {
+      "shuffle_id": 5,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly describes xAI key offer but denies knowledge of the reddit mega thread content."
+    },
+    {
+      "shuffle_id": 6,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers the cycle-0 plan accurately but denies the Step 4/604 tests blocker."
+    },
+    {
+      "shuffle_id": 7,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers Eidetix Bio site correctly but denies knowing the v2 positioning statement wording."
+    },
+    {
+      "shuffle_id": 8,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers the PR #94/shadow replay goal correctly but denies the reddit mega thread."
+    },
+    {
+      "shuffle_id": 9,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly states retrieval_mode default and the partial merge status of origin/main."
+    },
+    {
+      "shuffle_id": 10,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly states no LinkedIn tool and accurately describes the verdict-matcher fix."
+    },
+    {
+      "shuffle_id": 11,
+      "score": 0.0,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "Denies the two-writers fact and invents an unrelated orchestrator-run narrative for the muse-spark welcome."
+    },
+    {
+      "shuffle_id": 12,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Both the HF SDXL/TokyoEye story and the origin/main merge status are accurately covered."
+    },
+    {
+      "shuffle_id": 13,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers the PR #94 goal correctly but denies knowledge of the reddit mega thread."
+    },
+    {
+      "shuffle_id": 14,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Both the vet-recall task count and the Eidetix Bio live site are stated correctly."
+    },
+    {
+      "shuffle_id": 15,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies both the Hermes status check details and the model identity, neither covered."
+    },
+    {
+      "shuffle_id": 16,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly covers the librarian-watchdog fix and the PR #94 shadow-replay goal."
+    },
+    {
+      "shuffle_id": 17,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Accurately restates the cycle-0 Shopify EAA Scanner plan."
+    },
+    {
+      "shuffle_id": 18,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly characterizes the xAI key offer but denies the reddit mega thread."
+    },
+    {
+      "shuffle_id": 19,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly states the vet-recall plan has 64 tasks."
+    },
+    {
+      "shuffle_id": 20,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Accurately summarizes the AGE 1.7.0 research brief content."
+    },
+    {
+      "shuffle_id": 21,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies the Hermes status check and only gives an unrelated fragment for the HGNN fact, not matching it."
+    },
+    {
+      "shuffle_id": 22,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly explains memory_char_limit but denies knowing the v2 positioning statement."
+    },
+    {
+      "shuffle_id": 23,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly says no LinkedIn tool but misses/denies the 43KB DESIGN-phase fact."
+    },
+    {
+      "shuffle_id": 24,
+      "score": 0.5,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "HGNN fact covered correctly, but the 'Hermes status check' answer invents an unrelated DB-health report not in gt_content."
+    },
+    {
+      "shuffle_id": 25,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Both the librarian-watchdog fix and graph-extractor/vector distinction are accurate."
+    },
+    {
+      "shuffle_id": 26,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly covers the watchdog fix and the PR #94 shadow-replay goal."
+    },
+    {
+      "shuffle_id": 27,
+      "score": 0.0,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "Denies the two-writers fact and fabricates an unrelated muse-spark bake-off narrative instead of the simple welcome message."
+    },
+    {
+      "shuffle_id": 28,
+      "score": 0.5,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "vet-recall count correct, but Eidetix Bio answer invents a local resume-site claim contradicting the actual rswan.org fact."
+    },
+    {
+      "shuffle_id": 29,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly covers the jobberworkee skill ask but denies the 800-rows fact."
+    },
+    {
+      "shuffle_id": 30,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Accurately restates the cycle-0 Shopify EAA Scanner plan."
+    },
+    {
+      "shuffle_id": 31,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies both the Meta/Llama plugin location and the xAI key configuration facts."
+    },
+    {
+      "shuffle_id": 32,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Accurately covers both the verdict-matcher fix and the AGE 1.7.0 brief."
+    },
+    {
+      "shuffle_id": 33,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correct GITHUB_TOKEN setup steps but denies knowledge of the 4 closed code-review issues."
+    },
+    {
+      "shuffle_id": 34,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies the model-identity fact but accurately covers the Kanban bugs."
+    },
+    {
+      "shuffle_id": 35,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies both the tool-fixability breakdown and the 800-rows fact."
+    },
+    {
+      "shuffle_id": 36,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correct GITHUB_TOKEN setup but denies knowledge of the 4 closed code-review issues."
+    },
+    {
+      "shuffle_id": 37,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correct on graph-extractor vs embedding but mischaracterizes the two-writers structure as graph-extractor + hybrid-age provider, contradicting gt_content's doc_indexer/graph_extractor split."
+    },
+    {
+      "shuffle_id": 38,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly states the jobberworkee skill request."
+    },
+    {
+      "shuffle_id": 39,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies having a record of the gateway-back consolidated report."
+    },
+    {
+      "shuffle_id": 40,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "HF SDXL/TokyoEye story correct, but the origin/main claim contradicts gt_content (says eval files missing when they're actually present)."
+    },
+    {
+      "shuffle_id": 41,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Accurately summarizes the AGE 1.7.0 research brief."
+    },
+    {
+      "shuffle_id": 42,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correct on origin/main merge status but denies the retrieval_mode default fact."
+    },
+    {
+      "shuffle_id": 43,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies the 43KB DESIGN phase and does not surface the Step 4/Reddit-blocked-routes blocker."
+    },
+    {
+      "shuffle_id": 44,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Both the v2 positioning statement and Eidetix Bio live site are correctly stated."
+    },
+    {
+      "shuffle_id": 45,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers cycle-0 plan correctly but denies the Step 4/604 tests blocker."
+    },
+    {
+      "shuffle_id": 46,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies both the tool-fixability breakdown and the 800-rows fact."
+    },
+    {
+      "shuffle_id": 47,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly states the vet-recall plan task count."
+    },
+    {
+      "shuffle_id": 48,
+      "score": 0.0,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "Denies model identity and gives an unrelated PDLC debugging anecdote not matching the Hermes status check fact."
+    },
+    {
+      "shuffle_id": 49,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers GITHUB_TOKEN setup correctly but denies the tool-fixability fact."
+    },
+    {
+      "shuffle_id": 50,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly explains memory_char_limit but denies the dry-run transaction setting."
+    },
+    {
+      "shuffle_id": 51,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "HF SDXL story correct but denies the 4 code-review issues fact."
+    },
+    {
+      "shuffle_id": 52,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correct on LinkedIn tool but gives wrong phase/size (RESEARCH/40KB vs actual DESIGN/43KB)."
+    },
+    {
+      "shuffle_id": 53,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly characterizes the xAI key offer but denies/misses the Meta/Llama plugin path."
+    },
+    {
+      "shuffle_id": 54,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Covers verdict-matcher fix correctly but denies having any AGE research brief."
+    },
+    {
+      "shuffle_id": 55,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly identifies the 43KB DESIGN phase but denies the Step 4 blocker fact."
+    },
+    {
+      "shuffle_id": 56,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "HF SDXL story correct but denies the 4 code-review issues fact."
+    },
+    {
+      "shuffle_id": 57,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly covers no-LinkedIn-tool and the verdict-matcher fix."
+    },
+    {
+      "shuffle_id": 58,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly covers the watchdog fix and the graph-extractor/vector distinction."
+    },
+    {
+      "shuffle_id": 59,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly identifies the better llama model but denies the plugin location fact."
+    },
+    {
+      "shuffle_id": 60,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly states the jobberworkee skill request."
+    },
+    {
+      "shuffle_id": 61,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies having a record of the gateway-back consolidated report."
+    },
+    {
+      "shuffle_id": 62,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies both the jobberworkee-skill fact and the 800-rows fact despite both being on record."
+    },
+    {
+      "shuffle_id": 63,
+      "score": 0.5,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "Correctly identifies the better llama model, but invents an LLM LoRA training dry-run story contradicting the actual Postgres read-only transaction dry-run fact."
+    },
+    {
+      "shuffle_id": 64,
+      "score": 0.5,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "Correctly covers why the backfill shouldn't run yet, but fabricates a different row-count diagnosis not matching the actual gateway-back report content."
+    },
+    {
+      "shuffle_id": 65,
+      "score": 0.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Denies both the dry-run setting fact and the llama-model fact."
+    },
+    {
+      "shuffle_id": 66,
+      "score": 1.0,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly covers the HGNN fact and the Kanban 'done' bugs."
+    },
+    {
+      "shuffle_id": 67,
+      "score": 0.0,
+      "hallucinated": true,
+      "harness_artifact": false,
+      "brief_reason": "Denies model identity and invents a 'fabricated status report' framing contradicting the real, specific Kanban bugs in gt_content."
+    },
+    {
+      "shuffle_id": 68,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correctly conveys the memory_char_limit fact but misses/denies the specific dry-run transaction setting."
+    },
+    {
+      "shuffle_id": 69,
+      "score": 0.5,
+      "hallucinated": false,
+      "harness_artifact": false,
+      "brief_reason": "Correct GITHUB_TOKEN setup but denies/misses the tool-fixability breakdown fact."
+    }
+  ]
+}

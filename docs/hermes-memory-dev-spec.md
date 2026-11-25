@@ -622,6 +622,31 @@ T8.4's own explanation for its null result was that the 40-question set never ac
 
 **Conclusion, superseding 8.5.1's "no gain" reading:** pointers earn their keep specifically when a question needs more than what fits in the full-span budget -- exactly as predicted. T8.4's flat result wasn't evidence tiering doesn't work; it was evidence the 40-question set didn't test the regime where it would. **Decision: flip `tiered_injection` toward on, but not yet unconditionally** -- 10 questions is still a small sample for a permanent default change. Recorded here as the live decision point: either (a) raise the default to `true` now given this directional evidence plus T8.1-T8.3's clean test coverage, or (b) run one more, larger multi-span round before flipping the default. Whichever Ray picks, cite the chosen path's own report JSON, same discipline as every number in this document.
 
+### 8.5.3 T8.4c: decision-grade round, two graders, pre-committed criteria (2026-11-25, `docs/evals/t84c_final_report.json`)
+
+Ray explicitly rejected 8.5.2's +0.161 result as a G8 pass: n=9/10 is too small, the "off" baseline (0.450) was suspiciously low, and the +45% token cost could offset the gain. Before any default change he required a bigger, better-powered round: **30 new multi-span questions with fresh anchors** (none reused from T8.4 or T8.4b's question *pairs* — individual fact anchors recur across more than one of the 30 new pairings by design, to get 30 distinct pairs out of a pool of independently-verified real facts without needing 60 separate topics) **plus 5 single-fact controls**, graded by **two independent graders** blind to condition, reported as a **95% CI or paired win/loss count**, against **criteria fixed before any answer existed** (`docs/evals/t84c_grading_rubric_and_decision_criteria.md`, committed with the frozen question set in the same commit as this spec section's predecessor).
+
+Same model/temp/seed/system-prompt/tools as T8.4 and T8.4b, same DB guard, spend $1.45/$10 cap. Grader 1 (primary) graded all 70 blind items; grader 2 was an independent subagent given only the shuffled, condition-stripped answers plus ground truth and the same rubric — no access to grader 1's verdicts. Agreement: 62/70 (88.6%).
+
+| | off | on | delta |
+|---|---|---|---|
+| Grader 1, all 35 | 0.457 | 0.600 | **+0.143** |
+| Grader 1, 30 multi-span | 0.400 | 0.567 | +0.167 (95% CI 0.069–0.264) |
+| Grader 1, 5 single-fact control | 0.800 | 0.800 | 0.000 |
+| Grader 2, all 35 | 0.457 | 0.643 | **+0.186** |
+| Grader 2, 30 multi-span | 0.400 | 0.617 | +0.217 (95% CI 0.126–0.307) |
+| Grader 2, 5 single-fact control | 0.800 | 0.800 | 0.000 |
+
+Paired win/loss on the 30 multi-span questions: grader 1 — on wins 11, off wins 1, ties 18. Grader 2 — on wins 13, off wins 0, ties 17. Tokens/call: off 2,799, on 4,101 (+46%, consistent with 8.5.2). Tokens-per-correct-point: off 6,125 both graders; on 6,836 (grader 1, +11.6%) / 6,378 (grader 2, +4.1%) — a materially smaller cost-per-point increase than 8.5.2's, because this round's accuracy gain is larger relative to the same token-cost increase.
+
+**All 4 of the pre-committed criteria pass**, by both graders independently:
+1. Both graders' deltas positive — yes (+0.143, +0.186).
+2. Win/loss favors "on" — yes, lopsidedly (11-1 and 13-0 among non-ties).
+3. Tokens-per-correct-point not meaningfully worse — borderline-pass; both graders show a far smaller cost increase than 8.5.2's +45% raw-token problem, because accuracy rose enough to roughly offset it.
+4. Single-fact controls don't regress — yes, exact tie (0.800/0.800) on both graders, confirming tiering costs nothing on the easy case.
+
+**This does not auto-flip the default.** Per Ray's explicit instruction, meeting the criteria is reported for his decision, not executed unilaterally by the agent. `tiered_injection: false` remains the config default as of this writing; whether it flips (globally or opt-in per profile) is Ray's call, citing this section and `docs/evals/t84c_final_report.json`.
+
 ### 8.6 Out of scope
 
 Any change to `vector_search`, ranking, or `min_similarity` -- this spec is a rendering/disclosure layer on top of retrieval exactly as it exists after PR #114, not a retrieval change. A CLI entry point for `memory_get`/`memory_search` outside the agent tool-calling path (e.g. a `hermes memory query` subcommand) is a separate, later idea, not bundled here. Cross-session summarization or any new model call for the pointer summary (8.3 is explicit: redaction + truncation only, no model).
