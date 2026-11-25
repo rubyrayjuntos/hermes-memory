@@ -320,6 +320,24 @@ def _superseded_note(item: dict) -> str:
     return f'<note kind="superseded" span="{tid}">prior attempt superseded</note>'
 
 
+def _pointer_tag(item: dict, *, summary_chars: int = 140) -> str:
+    """Spec 8 tier-2 line: id/similarity/date plus a redacted, escaped,
+    truncated summary -- same safety bar as a full span's body, never a
+    lower-safety path. Reuses the already-shipped redact+truncate helper
+    (work_summarize.extractive_summary) instead of a second summarizer."""
+    import html as _html
+
+    from .work_summarize import extractive_summary
+
+    when = _when(item.get("created_at") or item.get("ts"))
+    tid = item.get("turn_id") or item.get("id")
+    score = item.get("score")
+    sim = f"{float(score):.2f}" if score is not None else "?"
+    summary = extractive_summary(str(item.get("content") or ""), summary_chars)
+    body = _html.escape(summary)
+    return f'<pointer id="{tid}" sim="{sim}" when="{when}">{body}</pointer>'
+
+
 _RESERVE_FRACTION = 0.3  # share of token_budget reserved for the globally
 # strongest matches (any bucket), before the normal grounded-then-
 # unconfirmed bucket-priority pass runs on what's left of the budget.
@@ -330,6 +348,9 @@ def format_span_injection(
     *,
     token_budget: int = 1200,
     neighbor_body_chars: int = 300,
+    full_span_cap: int = 4,
+    pointer_cap: int = 15,
+    pointer_token_budget: int = 300,
 ) -> str:
     """Provenance-first renderer: quoted spans in grounded/unconfirmed bins.
 
@@ -348,6 +369,16 @@ def format_span_injection(
     superseded note instead of its body. Within a bin, asserted spans
     (live_claims > 0) outrank claims-empty ones and pasted tool output
     (``paste="true"``) packs last — slogans stay quotable but stop winning.
+
+    Spec 8 (2026-11-25), progressive disclosure: once ``full_span_cap`` full
+    spans have been rendered (today's reserve-then-bucket pack, now also
+    count-capped), the next ``pointer_cap`` ranked seeds render as one-line
+    ``<pointer>`` elements instead of being silently dropped -- redacted and
+    escaped exactly like a full span's body, never a lower-safety path.
+    ``pointer_token_budget`` is a ceiling CARVED OUT of ``token_budget``, never
+    additive: total rendered size never exceeds ``token_budget``. Anything
+    past both tiers becomes a bare ``<more count="N"/>`` line with no id,
+    score, or content of its own.
     """
     if not spans:
         return ""
@@ -392,12 +423,12 @@ def format_span_injection(
 
     grounded: list[str] = []
     unconfirmed: list[str] = []
-    ranked_all: list[tuple[str, str]] = []  # (bbin, tag), global rank order
+    ranked_all: list[tuple[str, dict, str]] = []  # (bbin, item, tag), global rank order
     for bbin, item in sorted(hits, key=_rank):
         tag = _span_tag(item)
         if _is_paste(str(item.get("content") or "")):
             tag = tag.replace("<span ", "<span paste=\"true\" ", 1)
-        ranked_all.append((bbin, tag))
+        ranked_all.append((bbin, item, tag))
         if bbin == "grounded":
             grounded.append(tag)
         else:
@@ -407,6 +438,7 @@ def format_span_injection(
     kept_unconfirmed: list[str] = []
     kept_notes: list[str] = []
     reserved_tags: set[int] = set()
+    full_count = 0  # Spec 8: tier-1 count ceiling, independent of tokens
 
     # 2026-11-25 fix: the grounded bucket used to pack in full before
     # unconfirmed ever got a turn, so a top-similarity unconfirmed hit
@@ -416,7 +448,9 @@ def format_span_injection(
     # regardless of which bucket they fall in -- then run the normal
     # bucket-priority pass on whatever's left for the rest.
     reserve_budget = token_budget * _RESERVE_FRACTION
-    for bbin, tag in ranked_all:
+    for bbin, item, tag in ranked_all:
+        if full_count >= full_span_cap:
+            break
         cost = len(tag) // 4 + 20
         if used + cost > reserve_budget:
             break
@@ -426,21 +460,56 @@ def format_span_injection(
             kept_unconfirmed.append(tag)
         reserved_tags.add(id(tag))
         used += cost
+        full_count += 1
 
     buckets = (
         (grounded, kept_grounded),
         (unconfirmed, kept_unconfirmed),
-        (sup_notes, kept_notes),
     )
     for source, dest in buckets:
         for tag in source:
             if id(tag) in reserved_tags:
                 continue
+            if full_count >= full_span_cap:
+                break
             cost = len(tag) // 4 + 20
             if used + cost > token_budget:
                 break
             dest.append(tag)
+            reserved_tags.add(id(tag))
             used += cost
+            full_count += 1
+
+    for tag in sup_notes:
+        cost = len(tag) // 4 + 20
+        if used + cost > token_budget:
+            break
+        kept_notes.append(tag)
+        used += cost
+
+    # Spec 8, tier 2: everything not rendered as a full span (tier 1),
+    # in the same rank order, up to pointer_cap AND a token ceiling
+    # carved OUT of the remaining token_budget -- never additive to it.
+    kept_pointers: list[str] = []
+    pointer_used = 0
+    pointer_budget_cap = min(pointer_token_budget, max(0, token_budget - used))
+    pointer_candidates = [
+        (bbin, item, tag) for bbin, item, tag in ranked_all if id(tag) not in reserved_tags
+    ]
+    consumed = 0
+    for bbin, item, tag in pointer_candidates:
+        if len(kept_pointers) >= pointer_cap:
+            break
+        ptag = _pointer_tag(item)
+        pcost = len(ptag) // 4 + 20
+        if pointer_used + pcost > pointer_budget_cap:
+            break
+        kept_pointers.append(ptag)
+        pointer_used += pcost
+        consumed += 1
+    leftover_count = len(pointer_candidates) - consumed
+    used += pointer_used
+
     for nspeaker, tag in neighbors:
         cost = len(tag) // 4 + 20
         if used + cost > token_budget:
@@ -452,7 +521,7 @@ def format_span_injection(
         else:
             kept_unconfirmed.append(tag)
         used += cost
-    if not kept_grounded and not kept_unconfirmed and not kept_notes:
+    if not kept_grounded and not kept_unconfirmed and not kept_notes and not kept_pointers:
         return ""
     lines = ["<memory>"]
     if kept_grounded:
@@ -465,10 +534,18 @@ def format_span_injection(
         )
         lines.extend(f"    {u}" for u in kept_unconfirmed)
         lines.append("  </unconfirmed>")
+    if kept_pointers:
+        lines.append(
+            '  <pointers title="related memories, not shown in full -- fetch by id with memory_get">'
+        )
+        lines.extend(f"    {p}" for p in kept_pointers)
+        lines.append("  </pointers>")
     if kept_notes:
         lines.append("  <superseded>")
         lines.extend(f"    {n}" for n in kept_notes)
         lines.append("  </superseded>")
+    if leftover_count:
+        lines.append(f'  <more count="{leftover_count}"/>')
     lines.append("</memory>")
     return "\n".join(lines) + "\n"
 
