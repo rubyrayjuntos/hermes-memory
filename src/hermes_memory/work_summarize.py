@@ -47,6 +47,29 @@ _PROVIDER_KEY_PREFIX_RE = re.compile(
 )
 
 
+# 2026-11-25: two more real leaks, both through paths this module
+# didn't cover at all:
+#   3. A password stated in PROSE with no ':'/'=' at all ("...with
+#      password **X**...") -- _LABELED_SECRET_RE requires a separator
+#      and never fires on plain sentences. Rule: the cue word itself
+#      ("password"/"pwd"/"pass", optionally preceded by "the"/"is"/
+#      markdown bold) followed directly by the next token, redact that
+#      token regardless of separator.
+#   4. PII that isn't a credential at all -- phone numbers and email
+#      addresses. A negative-control answer surfaced an unrelated real
+#      contact's phone number unprompted; the Gmail password leak also
+#      carried the account's own email address alongside it.
+_PROSE_PASSWORD_RE = re.compile(
+    r"(?i)\b(password|pwd|pass)\b\s+(?:is\s+)?\**([^\s*,.;:]+)\**"
+)
+_PHONE_RE = re.compile(
+    r"\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b"
+)
+_EMAIL_RE = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+)
+
+
 def _redact_secrets(text: str) -> str:
     """Mask credential-shaped substrings; leave the rest of the message
     intact. Order matters: labeled pairs first (so a labeled token's own
@@ -58,6 +81,11 @@ def _redact_secrets(text: str) -> str:
     redacted = _BEARER_TOKEN_RE.sub("Bearer [REDACTED]", redacted)
     redacted = _PROVIDER_KEY_PREFIX_RE.sub("[REDACTED]", redacted)
     redacted = _JWT_SHAPE_RE.sub("[REDACTED]", redacted)
+    redacted = _PROSE_PASSWORD_RE.sub(
+        lambda m: f"{m.group(1)}: [REDACTED]", redacted
+    )
+    redacted = _PHONE_RE.sub("[REDACTED]", redacted)
+    redacted = _EMAIL_RE.sub("[REDACTED]", redacted)
     return redacted
 
 

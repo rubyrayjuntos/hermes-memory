@@ -69,13 +69,16 @@ def test_labeled_password_is_redacted_not_copied_verbatim():
     # function had zero redaction -- a short message fits under max_chars
     # whole and was returned as-is, password included. Fake credential
     # below, never a real one.
+    # 2026-11-25: blanket email redaction (added for the Gmail-password
+    # leak, which carried its own email address alongside it) now also
+    # catches this fixture's plain "username: <email>" -- a deliberate
+    # behavior change, not a regression: PII redaction doesn't carve out
+    # an exception for "but it was just labeled username".
     text = "username: faketestuser@example.com , pwd: Sup3rFake!Secret"
     result = extractive_summary(text, max_chars=300)
     assert "Sup3rFake!Secret" not in result
+    assert "faketestuser@example.com" not in result
     assert "[REDACTED]" in result
-    # The non-secret part of the message is still kept -- this is
-    # redaction, not wholesale suppression.
-    assert "faketestuser@example.com" in result
 
 
 def test_labeled_api_key_is_redacted():
@@ -99,6 +102,51 @@ def test_known_provider_key_prefix_is_redacted_even_unlabeled():
     result = extractive_summary(text, max_chars=300)
     assert "sk-fAKEa1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6" not in result
     assert "[REDACTED]" in result
+
+
+def test_prose_password_with_no_colon_is_redacted():
+    # 2026-11-25: the real leak that exposed a live Gmail password.
+    # _LABELED_SECRET_RE only matched "password: X" / "password=X" --
+    # a plain sentence ("...with password **X**") has no ':'/'=' at all
+    # and sailed straight through unredacted. Fake credential below.
+    text = "You gave the persona a Gmail account, with password **Fake9Secret1!**, for sending email."
+    result = extractive_summary(text, max_chars=300)
+    assert "Fake9Secret1!" not in result
+    assert "[REDACTED]" in result
+    assert "Gmail account" in result  # redaction, not wholesale suppression
+
+
+def test_prose_password_markdown_bold_without_double_asterisks_also_redacted():
+    text = "the password is Fake9Secret1! and nothing else changed"
+    result = extractive_summary(text, max_chars=300)
+    assert "Fake9Secret1!" not in result
+    assert "[REDACTED]" in result
+
+
+def test_phone_number_is_redacted():
+    # 2026-11-25: a second real leak -- a negative-control answer surfaced
+    # an unrelated contact's real phone number unprompted. PII, not just
+    # credentials, needs a render-time rule.
+    text = "The only phone number I have on file is (832) 468-4304, for your friend."
+    result = extractive_summary(text, max_chars=300)
+    assert "832" not in result and "4304" not in result
+    assert "[REDACTED]" in result
+    assert "for your friend" in result
+
+
+def test_phone_number_dashed_format_is_redacted():
+    text = "call 832-468-4304 if you need to reach them"
+    result = extractive_summary(text, max_chars=300)
+    assert "832-468-4304" not in result
+    assert "[REDACTED]" in result
+
+
+def test_email_address_is_redacted():
+    text = "the account is linkiblinki090@gmail.com for outbound mail"
+    result = extractive_summary(text, max_chars=300)
+    assert "linkiblinki090@gmail.com" not in result
+    assert "[REDACTED]" in result
+    assert "for outbound mail" in result
 
 
 def test_redaction_runs_before_the_character_budget_not_after():

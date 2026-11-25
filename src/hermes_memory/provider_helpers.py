@@ -7,6 +7,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from .work_summarize import _redact_secrets
+
 _TRIPLE_ENDS = re.compile(
     r"\[(?:Noun\s+)?(.+?)\]\s*-.*?->\s*\[(?:Noun\s+)?(.+?)\]"
 )
@@ -151,7 +153,14 @@ def _clean_excerpt(item: dict) -> str:
     # whatever followed it (a fake <system> block, say) read by the model
     # as live markup rather than quoted data. html.escape neutralizes
     # that the same way _span_tag already does for format_span_injection.
-    return _html.escape(raw)
+    # 2026-11-25 fix: a real Gmail password (and its own email address)
+    # leaked through exactly this path -- this was the ONLY render-time
+    # function for Tier-1 full spans (and, via format_span_injection,
+    # for memory_get's results too) and it had no redaction step at all,
+    # only the fence-escaping above. Redact first, then escape -- same
+    # order extractive_summary already uses, so a redacted token's own
+    # punctuation can't get html-entity-mangled before the regexes see it.
+    return _html.escape(_redact_secrets(raw))
 
 
 def _hop_names(path: dict) -> tuple[str, str]:
@@ -288,7 +297,13 @@ def _span_tag(item: dict, *, neighbor: bool = False, body_chars: int = 600) -> s
     when = _when(item.get("created_at") or item.get("ts"))
     speaker = str(item.get("speaker") or item.get("role") or "unknown")
     tid = item.get("turn_id") or item.get("id")
-    body = _html.escape(str(item.get("content") or "").strip()[:body_chars])
+    # 2026-11-25 fix: this is the ACTUAL Tier-1 full-span renderer (not
+    # _clean_excerpt, which is a different, unrelated call site) -- a
+    # real Gmail password and email address leaked through here because
+    # it only escaped the body for fence-injection safety and never ran
+    # secret/PII redaction. Redact first, then escape, same order
+    # extractive_summary and _clean_excerpt both already use.
+    body = _html.escape(_redact_secrets(str(item.get("content") or "").strip()[:body_chars]))
     flag = ' neighbor="true"' if neighbor else ""
     return (
         f'<span id="{tid}" speaker="{speaker}" when="{when}" '

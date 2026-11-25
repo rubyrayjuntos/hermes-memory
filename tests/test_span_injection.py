@@ -80,6 +80,23 @@ def test_repaired_prior_becomes_superseded_note():
     assert "Nightingale uses Atlas" in out
 
 
+def test_tier1_full_span_content_is_redacted_not_just_escaped():
+    # 2026-11-25: a real Gmail password leaked through exactly this path --
+    # _clean_excerpt html-escaped the body (for fence-injection safety) but
+    # never ran secret/PII redaction, so a full Tier-1 span carrying a
+    # credential or a phone number went out verbatim. Redaction belongs at
+    # render time here, same bar as the Tier-2 pointer summary already has.
+    span = dict(USER, content=(
+        "You gave the persona a Gmail account, with password "
+        "**Fake9Secret1!**, and the backup contact is 832-468-4304."
+    ))
+    out = format_span_injection([span])
+    assert "Fake9Secret1!" not in out
+    assert "832-468-4304" not in out
+    assert "[REDACTED]" in out
+    assert "Gmail account" in out  # redaction, not wholesale suppression
+
+
 def test_repaired_without_subjects_still_noted():
     span = dict(ASSISTANT, uptake="repaired")
     out = format_span_injection([span])
