@@ -232,8 +232,8 @@ async def _run_work(
     transaction, since verification does its own filesystem/subprocess
     I/O. Idempotent on the job's own op_id via
     ON CONFLICT (owner, source_op_id) DO NOTHING. Never raises."""
-    from .turn_filter import segment_turn, strip_memory_blocks
     from .turn_boundaries import find_status_lookahead_spans
+    from .turn_filter import segment_turn, strip_memory_blocks
 
     claimed = await store.job_claim("extract_work", worker, 1, lease_s=WORK_LEASE_S,
                                     session_ordered=True)
