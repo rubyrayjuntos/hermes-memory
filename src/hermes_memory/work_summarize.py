@@ -41,7 +41,11 @@ _LABELED_SECRET_RE = re.compile(
     r"\s*[:=]\s*(\S+)"
 )
 _BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+(\S+)")
-_JWT_SHAPE_RE = re.compile(r"\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]+\b")
+# 2026-11-25 review: tightened to require the "eyJ" marker (the base64
+# encoding of a JSON header's opening '{"') -- without it this matched
+# any dot-separated triple of word chars at all: domains
+# (www.linkedin.com), IPs (127.0.0.1), version strings (3.13.11.final.0).
+_JWT_SHAPE_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _PROVIDER_KEY_PREFIX_RE = re.compile(
     r"\b(sk-|ghp_|gho_|ghu_|ghs_|AIza|xox[abp]-)[A-Za-z0-9_-]{10,}\b"
 )
@@ -60,7 +64,7 @@ _PROVIDER_KEY_PREFIX_RE = re.compile(
 #      contact's phone number unprompted; the Gmail password leak also
 #      carried the account's own email address alongside it.
 _PROSE_PASSWORD_RE = re.compile(
-    r"(?i)\b(password|pwd|pass)\b\s+(?:is\s+)?\**([^\s*,.;:]+)\**"
+    r"(?i)\b(password|pwd|pass)\b\s+(?:is\s+)?\**([^\s*,.;:]*\d[^\s*,.;:]*)\**"
 )
 _PHONE_RE = re.compile(
     r"\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b"
