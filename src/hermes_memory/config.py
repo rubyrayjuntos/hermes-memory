@@ -78,11 +78,14 @@ class HybridAgeConfig:
     shadow_sample_rate: float = 0.2
     decay_half_life_days: float = 30.0
     hnsw_ef_search: int = 100
-    # Spec 8 (progressive disclosure, 2026-11-25): tiered injection and the
-    # memory_get/memory_search fetch tools. Off by default -- enabling this
-    # changes the injected block's shape and exposes two new agent-facing
-    # tools; Gate G8 governs the default flip, not this commit.
-    tiered_injection: bool = False
+    # Spec 8 (progressive disclosure). Tiered injection + the
+    # memory_get/memory_search fetch tools. Gate G8 passed on T8.4c
+    # (docs/evals/t84c_final_report.json, 2026-11-25): both independent
+    # graders' 95% CIs on the paired multi-span delta exclude zero, win/loss
+    # favors "on" 11-1 and 13-0, and the 5 single-fact controls show zero
+    # regression. Default is now True. Set tiered_injection: false in a
+    # profile's config to opt back into the old unlimited-full-span behavior.
+    tiered_injection: bool = True
     full_span_cap: int = 4
     pointer_cap: int = 15
     pointer_token_budget: int = 300

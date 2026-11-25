@@ -27,6 +27,7 @@ versioning follows [SemVer](https://semver.org/).
 - Write capture uses the new `durable_job` table; `write_outbox` is no longer written.
 - Graph expansion is owner-scoped: a path is kept only if one of its provenance turns belongs to this memory owner, and its provenance is trimmed to those turns (`Store.owned_turn_ids`).
 - Embeddings default to in-process fastembed/ONNX (`nomic-embed-text`, 768-d). Ollama is no longer a prerequisite; `hermes-memory-install` warms the local model instead of probing/pulling Ollama. Set `HYBRID_AGE_EMBED_URL` only for an optional HTTP override. Upgrading installs: remove a leftover `HYBRID_AGE_EMBED_URL=…11434…` from `.env` to switch off Ollama.
+- **`tiered_injection` now defaults to `true`** (Spec 8, Gate G8 passed on T8.4c, `docs/evals/t84c_final_report.json`): both independent graders' 95% CIs on the paired multi-span accuracy delta exclude zero, win/loss favors "on" 11-1 and 13-0, and the 5 single-fact controls show zero regression. The injected memory block now packs a capped number of full spans plus pointer summaries, and the agent gets `memory_get`/`memory_search` fetch tools, instead of unlimited full spans. Set `tiered_injection: false` in a profile's config to opt back into the old unlimited-full-span behavior.
 
 ## [0.9.0] - 2026-11-14
 

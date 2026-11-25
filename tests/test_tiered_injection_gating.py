@@ -43,13 +43,24 @@ def _provider(**cfg_kwargs):
     return provider
 
 
-async def test_tiered_injection_off_by_default_preserves_old_unlimited_full_span_behavior():
-    provider = _provider()  # tiered_injection defaults to False
+async def test_tiered_injection_on_by_default_after_g8_pass():
+    # G8 passed on T8.4c (docs/evals/t84c_final_report.json): both independent
+    # graders' 95% CIs on the paired multi-span delta exclude zero, win/loss
+    # favors "on" 11-1 and 13-0, and the 5 single-fact controls show zero
+    # regression. tiered_injection now defaults to True; tiered_injection:
+    # false remains the documented opt-out for a profile that wants the old
+    # unlimited-full-span behavior back.
+    provider = _provider()  # tiered_injection defaults to True now
+    assert provider.config.tiered_injection is True
+
+
+async def test_tiered_injection_explicitly_off_preserves_old_unlimited_full_span_behavior():
+    provider = _provider(tiered_injection=False)  # explicit opt-out, not the default
     assert provider.config.tiered_injection is False
     block = await provider._aprefetch("something related")
     # 8 seeds, no cap: all 8 must render as full <span> elements, NOT
     # truncated to full_span_cap=4 and NOT overflowed into <pointer> --
-    # this is the exact pre-Spec-8 behavior.
+    # this is the exact pre-Spec-8 behavior, still reachable via the opt-out.
     full_spans = {i for i in range(1, 9) if f'<span id="{i}"' in block}
     assert full_spans == set(range(1, 9)), (
         "tiered_injection=False must not apply Spec 8's count cap at all"
