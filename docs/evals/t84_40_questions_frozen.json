@@ -1,0 +1,203 @@
+[
+  {
+    "q": "What did we decide about using my Nous login token?",
+    "gt_span_id": 11904,
+    "negative_control": false
+  },
+  {
+    "q": "Which database port is production, and which one is off-limits?",
+    "gt_span_id": 12807,
+    "negative_control": false
+  },
+  {
+    "q": "Why did the gateway send every profile's writes to the wrong database?",
+    "gt_span_id": 9311,
+    "negative_control": false
+  },
+  {
+    "q": "What was the --legacy-tcid setting for, and which value did we pick?",
+    "gt_span_id": 9166,
+    "negative_control": false
+  },
+  {
+    "q": "What's the status of the Clearpath Shopify app review?",
+    "gt_span_id": null,
+    "negative_control": null,
+    "note": "NO grounded content found anywhere in the 6-profile corpus for this topic -- flagged to the user rather than guessed, see report."
+  },
+  {
+    "q": "Which Llama model did I download, and why that one?",
+    "gt_span_id": 5763,
+    "negative_control": false
+  },
+  {
+    "q": "What's my rule about who opens and merges pull requests?",
+    "gt_span_id": 9289,
+    "negative_control": false
+  },
+  {
+    "q": "How did I set up Gmail access for linkibinki?",
+    "gt_span_id": 8237,
+    "negative_control": false
+  },
+  {
+    "q": "What did I eat for breakfast last Tuesday?",
+    "gt_span_id": null,
+    "negative_control": true
+  },
+  {
+    "q": "What's my sister's phone number?",
+    "gt_span_id": null,
+    "negative_control": true
+  },
+  {
+    "q": "What vision model options were available in my local Ollama, and what's the catch?",
+    "gt_span_id": 182,
+    "negative_control": false
+  },
+  {
+    "q": "Does the Kanban skill have direct database access, and what are the limits?",
+    "gt_span_id": 126,
+    "negative_control": false
+  },
+  {
+    "q": "How many jobs and applications does my Jobberworkee database actually have?",
+    "gt_span_id": 6925,
+    "negative_control": false
+  },
+  {
+    "q": "What are my three librarian cron jobs?",
+    "gt_span_id": 316,
+    "negative_control": false
+  },
+  {
+    "q": "What's the overall strategy for my AI/ML System Architect job search?",
+    "gt_span_id": 494,
+    "negative_control": false
+  },
+  {
+    "q": "What did the narrative consistency audit find across my portfolio, LinkedIn, and GitHub?",
+    "gt_span_id": 48,
+    "negative_control": false
+  },
+  {
+    "q": "What is the campaign desk, and where do I access it?",
+    "gt_span_id": 8155,
+    "negative_control": false
+  },
+  {
+    "q": "What happened with the Telegram bot token?",
+    "gt_span_id": 15,
+    "negative_control": false
+  },
+  {
+    "q": "What format are the HPC S2S tailored documents in?",
+    "gt_span_id": 8489,
+    "negative_control": false
+  },
+  {
+    "q": "What does the credential pool's failover reason mapping look like?",
+    "gt_span_id": 3482,
+    "negative_control": false
+  },
+  {
+    "q": "What two issues were found with my Render/DNS setup?",
+    "gt_span_id": 73,
+    "negative_control": false
+  },
+  {
+    "q": "How many GitHub repos do I actually have, and how many are really mine?",
+    "gt_span_id": 50,
+    "negative_control": false
+  },
+  {
+    "q": "Can Hermes post to LinkedIn directly via API?",
+    "gt_span_id": 3281,
+    "negative_control": false
+  },
+  {
+    "q": "What are my saved image generation defaults?",
+    "gt_span_id": 2931,
+    "negative_control": false
+  },
+  {
+    "q": "What tiny vision model did we try for my hardware, and why?",
+    "gt_span_id": 188,
+    "negative_control": false
+  },
+  {
+    "q": "Why couldn't I SSH into the Raspberry Pi on my LAN?",
+    "gt_span_id": 8190,
+    "negative_control": false
+  },
+  {
+    "q": "What did the production event backfill audit find?",
+    "gt_span_id": 9181,
+    "negative_control": false
+  },
+  {
+    "q": "What's the recommended database architecture plan for Hermes Agent?",
+    "gt_span_id": 1267,
+    "negative_control": false
+  },
+  {
+    "q": "Can I package my memory setup as a plugin for Hermes?",
+    "gt_span_id": 3380,
+    "negative_control": false
+  },
+  {
+    "q": "What pushback did you give on my Shopify product analysis ranking?",
+    "gt_span_id": 5716,
+    "negative_control": false
+  },
+  {
+    "q": "Where did the librarian visibility plan get saved, and how many tasks?",
+    "gt_span_id": 1622,
+    "negative_control": false
+  },
+  {
+    "q": "What did I want to add to Jobberworkee as a ZIP file?",
+    "gt_span_id": 8757,
+    "negative_control": false
+  },
+  {
+    "q": "Where does the embed URL environment variable default to?",
+    "gt_span_id": 322,
+    "negative_control": false
+  },
+  {
+    "q": "What was in the deployment summary for the database stack?",
+    "gt_span_id": 1292,
+    "negative_control": false
+  },
+  {
+    "q": "What stale artifacts did the audit find layered on top of each other?",
+    "gt_span_id": 8615,
+    "negative_control": false
+  },
+  {
+    "q": "What's the primary community hub for Nous Research?",
+    "gt_span_id": 3337,
+    "negative_control": false
+  },
+  {
+    "q": "What task was completed for the recalls reminder endpoint?",
+    "gt_span_id": 7679,
+    "negative_control": false
+  },
+  {
+    "q": "What GPU did we prove the LoRA training pipeline works on?",
+    "gt_span_id": 3167,
+    "negative_control": false
+  },
+  {
+    "q": "What's my mother's maiden name?",
+    "gt_span_id": null,
+    "negative_control": true
+  },
+  {
+    "q": "What did I have for Christmas dinner?",
+    "gt_span_id": null,
+    "negative_control": true
+  }
+]
