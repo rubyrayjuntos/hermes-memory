@@ -1,0 +1,179 @@
+{
+  "purpose": "LongMemEval_S dry run -- cost + ingest-time estimate before committing to the full 500-question run",
+  "dataset": "longmemeval_s_cleaned.json",
+  "dataset_hf_revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+  "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "sample_seed": 20261126,
+  "target_per_type": {
+    "single-session-user": 4,
+    "single-session-assistant": 3,
+    "single-session-preference": 3,
+    "temporal-reasoning": 4,
+    "knowledge-update": 3,
+    "multi-session": 3
+  },
+  "question_ids": [
+    "75499fd8",
+    "118b2229",
+    "faba32e5",
+    "6ade9755",
+    "7a8d0b71",
+    "18dcd5a5",
+    "1568498a",
+    "75832dbd",
+    "38146c39",
+    "0edc2aef",
+    "gpt4_59149c77",
+    "gpt4_7f6b06db",
+    "gpt4_4fc4f797",
+    "gpt4_e061b84g",
+    "f685340e",
+    "18bc8abd",
+    "42ec0761",
+    "e6041065",
+    "51c32626",
+    "6cb6f249"
+  ],
+  "questions": [
+    {
+      "question_id": "18bc8abd",
+      "question_type": "knowledge-update",
+      "question": "What brand of BBQ sauce am I currently obsessed with?",
+      "n_haystack_sessions": 44,
+      "n_haystack_turns": 436
+    },
+    {
+      "question_id": "42ec0761",
+      "question_type": "knowledge-update",
+      "question": "Do I have a spare screwdriver for opening up my laptop?",
+      "n_haystack_sessions": 48,
+      "n_haystack_turns": 521
+    },
+    {
+      "question_id": "f685340e",
+      "question_type": "knowledge-update",
+      "question": "How often do I play tennis with my friends at the local park previously? How often do I play now?",
+      "n_haystack_sessions": 41,
+      "n_haystack_turns": 424
+    },
+    {
+      "question_id": "51c32626",
+      "question_type": "multi-session",
+      "question": "When did I submit my research paper on sentiment analysis?",
+      "n_haystack_sessions": 51,
+      "n_haystack_turns": 490
+    },
+    {
+      "question_id": "6cb6f249",
+      "question_type": "multi-session",
+      "question": "How many days did I take social media breaks in total?",
+      "n_haystack_sessions": 41,
+      "n_haystack_turns": 470
+    },
+    {
+      "question_id": "e6041065",
+      "question_type": "multi-session",
+      "question": "What percentage of packed shoes did I wear on my last trip?",
+      "n_haystack_sessions": 45,
+      "n_haystack_turns": 493
+    },
+    {
+      "question_id": "1568498a",
+      "question_type": "single-session-assistant",
+      "question": "I'm looking back at our previous chess game and I was wondering, what was the move you made after 27. Kg2 Bd5+?",
+      "n_haystack_sessions": 47,
+      "n_haystack_turns": 478
+    },
+    {
+      "question_id": "18dcd5a5",
+      "question_type": "single-session-assistant",
+      "question": "I'm going back to our previous chat about the Lost Temple of the Djinn one-shot. Can you remind me how many mummies the party will face in the temple?",
+      "n_haystack_sessions": 50,
+      "n_haystack_turns": 503
+    },
+    {
+      "question_id": "7a8d0b71",
+      "question_type": "single-session-assistant",
+      "question": "I'm looking back at our previous chat about the DHL Wellness Retreats campaign. Can you remind me how much was allocated for influencer marketing in the campaign plan?",
+      "n_haystack_sessions": 45,
+      "n_haystack_turns": 489
+    },
+    {
+      "question_id": "0edc2aef",
+      "question_type": "single-session-preference",
+      "question": "Can you suggest a hotel for my upcoming trip to Miami?",
+      "n_haystack_sessions": 46,
+      "n_haystack_turns": 475
+    },
+    {
+      "question_id": "38146c39",
+      "question_type": "single-session-preference",
+      "question": "I've been feeling like my chocolate chip cookies need something extra. Any advice?",
+      "n_haystack_sessions": 46,
+      "n_haystack_turns": 538
+    },
+    {
+      "question_id": "75832dbd",
+      "question_type": "single-session-preference",
+      "question": "Can you recommend some recent publications or conferences that I might find interesting?",
+      "n_haystack_sessions": 48,
+      "n_haystack_turns": 474
+    },
+    {
+      "question_id": "118b2229",
+      "question_type": "single-session-user",
+      "question": "How long is my daily commute to work?",
+      "n_haystack_sessions": 45,
+      "n_haystack_turns": 485
+    },
+    {
+      "question_id": "6ade9755",
+      "question_type": "single-session-user",
+      "question": "Where do I take yoga classes?",
+      "n_haystack_sessions": 51,
+      "n_haystack_turns": 513
+    },
+    {
+      "question_id": "75499fd8",
+      "question_type": "single-session-user",
+      "question": "What breed is my dog?",
+      "n_haystack_sessions": 52,
+      "n_haystack_turns": 491
+    },
+    {
+      "question_id": "faba32e5",
+      "question_type": "single-session-user",
+      "question": "How long did Alex marinate the BBQ ribs in special sauce?",
+      "n_haystack_sessions": 46,
+      "n_haystack_turns": 473
+    },
+    {
+      "question_id": "gpt4_4fc4f797",
+      "question_type": "temporal-reasoning",
+      "question": "How many days passed between the day I received feedback about my car's suspension and the day I tested my new suspension setup?",
+      "n_haystack_sessions": 45,
+      "n_haystack_turns": 472
+    },
+    {
+      "question_id": "gpt4_59149c77",
+      "question_type": "temporal-reasoning",
+      "question": "How many days passed between my visit to the Museum of Modern Art (MoMA) and the 'Ancient Civilizations' exhibit at the Metropolitan Museum of Art?",
+      "n_haystack_sessions": 48,
+      "n_haystack_turns": 484
+    },
+    {
+      "question_id": "gpt4_7f6b06db",
+      "question_type": "temporal-reasoning",
+      "question": "What is the order of the three trips I took in the past three months, from earliest to latest?",
+      "n_haystack_sessions": 52,
+      "n_haystack_turns": 558
+    },
+    {
+      "question_id": "gpt4_e061b84g",
+      "question_type": "temporal-reasoning",
+      "question": "I mentioned participating in a sports event two weeks ago. What was the event?",
+      "n_haystack_sessions": 58,
+      "n_haystack_turns": 566
+    }
+  ]
+}
