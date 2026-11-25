@@ -1220,23 +1220,32 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.exception("prefetch failed")
             return ""
 
+    async def _aembed_and_search(self, query: str, k: int) -> tuple[Optional[list], List[dict]]:
+        """Shared embed+vector_search call. Spec 8 (T8.3, test 6/7): both
+        prefetch() and memory_search() call this SAME helper, so the two
+        paths can never independently drift -- one query, one place.
+        Returns (embedding, seeds) -- callers needing just the seeds can
+        ignore the first element."""
+        from .tokens import QUERY_TOKEN_CAP, truncate_tokens
+
+        enriched = self._enrich_query(query)
+        emb = await self.embedder.embed_text(
+            truncate_tokens(enriched, QUERY_TOKEN_CAP), as_query=True
+        ) if self.embedder else None
+        if not (emb and self.store):
+            return emb, []
+        seeds = await self.store.vector_search(
+            vec_to_literal(emb), k, agent_identity=self._agent_identity,
+        )
+        return emb, seeds
+
     async def _aprefetch(self, query: str) -> str:
         t0 = time.perf_counter()
         deadline = asyncio.get_running_loop().time() + self.config.prefetch_timeout_s
         try:
             async with asyncio.timeout_at(deadline):
-                enriched = self._enrich_query(query)
-                from .tokens import QUERY_TOKEN_CAP, truncate_tokens
-
-                emb = await self.embedder.embed_text(
-                    truncate_tokens(enriched, QUERY_TOKEN_CAP), as_query=True
-                ) if self.embedder else None
                 t_embed = time.perf_counter()
-                seeds = await self.store.vector_search(
-                    vec_to_literal(emb), self.config.vector_k,
-                    agent_identity=self._agent_identity,
-                ) \
-                    if (emb and self.store) else []
+                emb, seeds = await self._aembed_and_search(query, self.config.vector_k)
                 t_vec = time.perf_counter()
                 logger.info(
                     "prefetch k=%s hnsw.ef_search=%s seeds=%s",
@@ -1755,10 +1764,153 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("extract_work enqueue failed", exc_info=True)
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return []  # pure context mode — no tools
+        if not bool(getattr(self.config, "tiered_injection", False)):
+            return []  # pure context mode — no tools (default, Gate G8)
+        max_ids = int(getattr(self.config, "memory_get_max_ids", 10))
+        max_k = int(getattr(self.config, "memory_search_max_k", 10))
+        return [
+            {
+                "name": "memory_get",
+                "description": (
+                    "Fetch full content for memory ids shown as <pointer> "
+                    "elements in your context. Ids that don't exist, or "
+                    "that aren't yours, come back as 'not found' -- never "
+                    "another row."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "maxItems": max_ids,
+                            "description": f"Up to {max_ids} memory ids per call.",
+                        },
+                    },
+                    "required": ["ids"],
+                },
+            },
+            {
+                "name": "memory_search",
+                "description": "Search your own memory beyond what's already shown in context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "k": {
+                            "type": "integer", "maximum": max_k,
+                            "description": f"Number of results, up to {max_k}.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        ]
+
+    def on_turn_start(self, turn_number: int, message: str, **kwargs: Any) -> None:
+        """Spec 8: reset the per-turn memory_get/memory_search call budget
+        at the start of every turn -- a model cannot bank unused calls
+        across turns, and a new turn always starts with a fresh budget."""
+        self._memory_tool_calls_this_turn = 0
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> Any:
-        return {"error": "pure context mode — no tools"}
+        if not bool(getattr(self.config, "tiered_injection", False)):
+            return json.dumps({"error": "pure context mode — no tools"})
+        if tool_name not in ("memory_get", "memory_search"):
+            return json.dumps({"error": f"unknown tool {tool_name!r}"})
+        cap = int(getattr(self.config, "memory_tool_calls_per_turn", 5))
+        used = getattr(self, "_memory_tool_calls_this_turn", 0)
+        if used >= cap:
+            return json.dumps(
+                {"error": f"memory tool call budget ({cap} per turn) exceeded"}
+            )
+        self._memory_tool_calls_this_turn = used + 1
+        timeout = float(getattr(self.config, "prefetch_timeout_s", 2.0)) + 1.0
+        try:
+            if tool_name == "memory_get":
+                raw_ids = args.get("ids") or []
+                max_ids = int(getattr(self.config, "memory_get_max_ids", 10))
+                if len(raw_ids) > max_ids:
+                    return json.dumps(
+                        {"error": f"memory_get accepts at most {max_ids} ids per call"}
+                    )
+                return self._run(self._amemory_get(raw_ids), timeout=timeout)
+            query = str(args.get("query") or "")
+            k = int(args.get("k") or 5)
+            max_k = int(getattr(self.config, "memory_search_max_k", 10))
+            if k > max_k:
+                return json.dumps({"error": f"memory_search k must be <= {max_k}"})
+            return self._run(self._amemory_search(query, k), timeout=timeout)
+        except Exception:
+            logger.exception("memory tool call failed: %s", tool_name)
+            return json.dumps({"error": "memory tool call failed"})
+
+    async def _amemory_get(self, ids: list) -> str:
+        """Spec 8, T8.3: server-side id validation (int, non-negative,
+        parameterized query via Store.conversations_by_ids) -- a made-up
+        or foreign-owner id comes back "not found", never another row.
+        Owner/profile scope is the SAME this instance's every other query
+        already uses (self._agent_identity, bound at initialize())."""
+        from .provider_helpers import format_span_injection
+        from .tokens import injection_token_cap
+
+        valid_ids: list[int] = []
+        results: Dict[str, str] = {}
+        for raw in ids:
+            try:
+                n = int(raw)
+                if n < 0 or isinstance(raw, bool):
+                    raise ValueError
+                valid_ids.append(n)
+            except (TypeError, ValueError):
+                results[str(raw)] = "invalid id"
+        rows = (
+            await self.store.conversations_by_ids(valid_ids, agent_identity=self._agent_identity)
+            if valid_ids and self.store else []
+        )
+        found_by_id = {int(r["id"]): r for r in rows}
+        items = []
+        for n in valid_ids:
+            row = found_by_id.get(n)
+            if row is None:
+                results[str(n)] = "not found"
+                continue
+            items.append({
+                "turn_id": str(n),
+                "content": row.get("content") or "",
+                "speaker": row.get("role") or "unknown",
+                "uptake": "unknown",
+                "created_at": str(row.get("ts") or ""),
+            })
+        block = format_span_injection(items, token_budget=injection_token_cap(self.config.max_tokens)) if items else ""
+        payload: Dict[str, Any] = {"result": block or "no matches"}
+        if results:
+            payload["not_found_or_invalid"] = results
+        return json.dumps(payload)
+
+    async def _amemory_search(self, query: str, k: int) -> str:
+        """Spec 8, T8.3: the SAME embed+vector_search call prefetch uses
+        (_aembed_and_search) -- no second, independently-written query."""
+        from .provider_helpers import format_span_injection
+        from .tokens import injection_token_cap
+
+        _emb, seeds = await self._aembed_and_search(query, k)
+        items = []
+        for s in seeds:
+            if s["similarity"] < self.config.min_similarity:
+                continue
+            if SECRET_RE.search(s.get("content") or ""):
+                continue
+            items.append({
+                "turn_id": str(s.get("id") or ""),
+                "content": s.get("content") or "",
+                "speaker": "assistant" if s.get("src") == "conversation" else "unknown",
+                "uptake": "unknown",
+                "created_at": str(s.get("ts") or ""),
+                "score": s.get("similarity"),
+            })
+        block = format_span_injection(items, token_budget=injection_token_cap(self.config.max_tokens)) if items else ""
+        return json.dumps({"result": block or "no matches"})
 
     # -- config schema (powers `hermes memory setup`) -------------------------------
 
