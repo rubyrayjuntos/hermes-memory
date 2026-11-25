@@ -1,0 +1,65 @@
+{
+  "run": "G5 re-check (post Spec-7 split + verdict-matcher fix, pre-existing corpus reused)",
+  "owner": "linkibinki",
+  "db": "hermes_memory_eval_spec7",
+  "wiped_prior_rows": {
+    "work_item": 3264,
+    "work_event": 4932,
+    "work_artifact": 0,
+    "durable_job_extract_work": 3264
+  },
+  "jobs_finished_in_drain": 3264,
+  "note_on_embeddings": "work_item.embedding is a fixed dummy vector in this run -- this pass measures extraction/segmentation/status quality only, not work-item retrieval quality.",
+  "n_sessions_enqueued": 615,
+  "n_segments_enqueued": 3264,
+  "n_work_items_produced": 3264,
+  "n_sessions_with_items": 615,
+  "max_items_in_one_session": 326,
+  "over_split_sessions_gt_20_items": {
+    "20260824_180136_c045c7": 128,
+    "20260905_224254_c42d9e": 24,
+    "20260916_151024_0a2c0e": 34,
+    "20260910_090953_030eb9": 37,
+    "20260914_055034_db8694": 58,
+    "20260826_184730_54d31d": 211,
+    "20260829_163528_7388dd": 72,
+    "20260903_183731_fc3ad6": 64,
+    "20260901_113954_648834": 51,
+    "20260902_094854_3c01ca": 32,
+    "20260825_180728_b782b5": 52,
+    "local-bd3819f9d0006daea58f46bb5cf10227615eb77ea4abec9909cc67c6fe06124b": 62,
+    "20260908_221929_0ad94e": 24,
+    "20260908_094515_054fee": 43,
+    "local-b605bfac516b843635d08e4d0bcb4fdf90e00322ac55095871d19d085b45f453": 31,
+    "20260825_212345_0f508b4c": 29,
+    "20260902_163527_9c57ec": 109,
+    "20260907_134026_06e9eb": 32,
+    "local-38267410810baf0c4faa0aab266b422e001d87b21da06bccb161a72a9b30f046": 110,
+    "20260910_133135_76a234": 50,
+    "20260823_103510_63b6aa": 130,
+    "20260821_111451_3618eb": 39,
+    "20260821_114557_79ebb385": 149,
+    "20260821_140816_750dc2": 32,
+    "20260904_111235_3ac288": 78,
+    "20260821_114557_f0fed5f7": 326,
+    "20260822_031525_b5938b": 38,
+    "20261020_150754_7d5a86": 164,
+    "20260909_125258_3b9d2c": 92,
+    "20260831_071842_87c4d1": 33
+  },
+  "over_split_item_share": 0.7151,
+  "status_distribution": {
+    "unknown": 3258,
+    "done": 4,
+    "failed": 2
+  },
+  "metric_b_status": {
+    "confirmed": 6,
+    "confirmed_rate": 0.0018,
+    "unknown": 3258,
+    "unknown_rate": 0.9982
+  },
+  "durable_job_extract_work_final_status": {
+    "done": 3264
+  }
+}
