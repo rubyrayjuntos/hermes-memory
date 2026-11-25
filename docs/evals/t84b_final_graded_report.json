@@ -1,0 +1,144 @@
+{
+  "model": "anthropic/claude-sonnet-5",
+  "temperature": 0.0,
+  "seed": 42424242,
+  "spend_cap_usd": 10.0,
+  "actual_spend_usd": 0.432582,
+  "database": "hermes_memory_eval_spec7 (DB-guard-asserted)",
+  "accuracy": {
+    "off": {
+      "n": 10,
+      "mean_score": 0.45
+    },
+    "on": {
+      "n": 9,
+      "mean_score": 0.611,
+      "note": "1 of 10 excluded as a harness artifact (per-turn tool-budget exhaustion forced a retry message, not a real answer)"
+    },
+    "delta_on_minus_off": 0.161
+  },
+  "pointer_follow_rate_on_run": {
+    "followed": 7,
+    "total": 10,
+    "rate": 0.7
+  },
+  "avg_tokens_per_api_call": {
+    "off": 2823,
+    "on": 4081
+  },
+  "per_question_grades": {
+    "off": [
+      {
+        "sid": 0,
+        "question": "What does the credential pool's failover reason mapping look like, AND where does the embed URL environment variable default to?",
+        "score": 1.0
+      },
+      {
+        "sid": 2,
+        "question": "What did the narrative consistency audit find across my portfolio/LinkedIn/GitHub, AND what pushback did you give on my Shopify product ranking?",
+        "score": 0.0
+      },
+      {
+        "sid": 3,
+        "question": "What two issues were found with my Render/DNS setup, AND how many GitHub repos do I actually have?",
+        "score": 0.0
+      },
+      {
+        "sid": 4,
+        "question": "Tell me about both the Postgres port confusion AND the root cause of the gateway writing to the wrong database -- what are the two separate things going on?",
+        "score": 0.0
+      },
+      {
+        "sid": 5,
+        "question": "What happened with the Telegram bot token, AND what's my rule about who opens and merges pull requests?",
+        "score": 0.5
+      },
+      {
+        "sid": 6,
+        "question": "What's the recommended database architecture plan for Hermes Agent, AND what was in the deployment summary for the database stack?",
+        "score": 0.0
+      },
+      {
+        "sid": 8,
+        "question": "How many jobs/applications does my Jobberworkee database actually have, AND what did I want to add to it as a ZIP file?",
+        "score": 0.5
+      },
+      {
+        "sid": 9,
+        "question": "What did the --legacy-tcid backfill fix, AND what were the production event backfill audit's two real problems?",
+        "score": 1.0
+      },
+      {
+        "sid": 11,
+        "question": "What are my saved image generation defaults, AND what tiny vision model did we try for my hardware, and why?",
+        "score": 1.0
+      },
+      {
+        "sid": 19,
+        "question": "What are my three librarian cron jobs, AND what's the overall strategy for my AI/ML System Architect job search?",
+        "score": 0.5
+      }
+    ],
+    "on": [
+      {
+        "sid": 1,
+        "question": "What did the --legacy-tcid backfill fix, AND what were the production event backfill audit's two real problems?",
+        "score": 1.0
+      },
+      {
+        "sid": 7,
+        "question": "What happened with the Telegram bot token, AND what's my rule about who opens and merges pull requests?",
+        "score": 0.5
+      },
+      {
+        "sid": 10,
+        "question": "How many jobs/applications does my Jobberworkee database actually have, AND what did I want to add to it as a ZIP file?",
+        "score": 0.5
+      },
+      {
+        "sid": 12,
+        "question": "Tell me about both the Postgres port confusion AND the root cause of the gateway writing to the wrong database -- what are the two separate things going on?",
+        "score": 0.0
+      },
+      {
+        "sid": 13,
+        "question": "What are my three librarian cron jobs, AND what's the overall strategy for my AI/ML System Architect job search?",
+        "score": 1.0
+      },
+      {
+        "sid": 14,
+        "question": "What did the narrative consistency audit find across my portfolio/LinkedIn/GitHub, AND what pushback did you give on my Shopify product ranking?",
+        "score": 0.5
+      },
+      {
+        "sid": 15,
+        "question": "What two issues were found with my Render/DNS setup, AND how many GitHub repos do I actually have?",
+        "score": 0.0
+      },
+      {
+        "sid": 16,
+        "question": "What are my saved image generation defaults, AND what tiny vision model did we try for my hardware, and why?",
+        "score": 1.0
+      },
+      {
+        "sid": 18,
+        "question": "What does the credential pool's failover reason mapping look like, AND where does the embed URL environment variable default to?",
+        "score": 1.0
+      }
+    ]
+  },
+  "excluded_harness_artifact": [
+    {
+      "sid": 17,
+      "cond": "on",
+      "question": "What's the recommended database architecture plan for Hermes Agent, AND what was in the deployment summary for the database stack?"
+    }
+  ],
+  "methodology": "Scoring: 0/0.5/1.0 per question (fraction of the 2 named facts covered). Blind-graded: condition labels stripped before grading, reattached only after every verdict assigned (t84b_shuffle_key_SEALED.json). Rubric frozen before results: docs/evals/t84b_grading_rubric_addendum.md.",
+  "source_files": {
+    "raw_transcripts": "/home/rswan/.hermes/profiles/linkibinki/cache/scratch/t84b_eval_report.json",
+    "blind_grading_input": "/home/rswan/.hermes/profiles/linkibinki/cache/scratch/t84b_grading_input_BLIND.json",
+    "frozen_questions": "docs/evals/t84b_10_multispan_questions_frozen.json",
+    "frozen_rubric_addendum": "docs/evals/t84b_grading_rubric_addendum.md"
+  }
+}
