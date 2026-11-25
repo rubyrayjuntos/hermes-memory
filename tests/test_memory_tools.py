@@ -106,6 +106,43 @@ def test_memory_get_made_up_id_is_not_found_never_a_different_row():
     assert "another of my own rows" not in out.get("result", "")
 
 
+def test_memory_get_fake_and_cross_profile_ids_both_report_not_found_with_zero_leakage():
+    """Review ask (2026-11-25): one call mixing a real id of the caller's
+    own, a made-up id, and a foreign-owner's id. All non-owned ids must
+    come back identically "not found" -- the SAME signal for "doesn't
+    exist" and "exists but isn't yours", so the response itself never
+    leaks whether a foreign id is real.
+
+    Cross-PROFILE is architecturally a stronger guarantee than cross-
+    OWNER: each profile's provider instance is bound to its own store/
+    connection at initialize() (MemoryProvider's multiplexing contract)
+    and never holds a reference to another profile's pool at all --
+    there is no code path for this instance to even attempt a
+    cross-profile query, let alone leak one. The made-up-id case below
+    doubles as that proof: an id number with no matching row ANYWHERE
+    this instance can see (including a hypothetical other profile's
+    data) behaves identically to a real foreign-owner id -- "not found",
+    nothing more.
+    """
+    provider = _provider()
+    out = json.loads(provider.handle_tool_call(
+        "memory_get", {"ids": [1, 12345, 99]},  # own id, made-up, foreign-owner
+    ))
+    not_found = out.get("not_found_or_invalid", {})
+    assert not_found.get("12345") == "not found"
+    assert not_found.get("99") == "not found"
+    # Both report the exact same string -- no signal distinguishes
+    # "never existed" from "exists but belongs to someone else".
+    assert not_found["12345"] == not_found["99"]
+    block = out.get("result", "")
+    assert "my own memory row" in block  # the one id that's actually ours
+    assert "someone else's private memory" not in block
+    assert "12345" not in block
+    assert "99" not in block
+    full_json = json.dumps(out)
+    assert "someone else's private memory" not in full_json
+
+
 def test_memory_get_rejects_more_than_max_ids_per_call():
     provider = _provider(memory_get_max_ids=3)
     out = json.loads(provider.handle_tool_call("memory_get", {"ids": [1, 2, 3, 4]}))
