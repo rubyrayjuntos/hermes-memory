@@ -78,6 +78,17 @@ class HybridAgeConfig:
     shadow_sample_rate: float = 0.2
     decay_half_life_days: float = 30.0
     hnsw_ef_search: int = 100
+    # Spec 8 (progressive disclosure, 2026-11-25): tiered injection and the
+    # memory_get/memory_search fetch tools. Off by default -- enabling this
+    # changes the injected block's shape and exposes two new agent-facing
+    # tools; Gate G8 governs the default flip, not this commit.
+    tiered_injection: bool = False
+    full_span_cap: int = 4
+    pointer_cap: int = 15
+    pointer_token_budget: int = 300
+    memory_get_max_ids: int = 10
+    memory_search_max_k: int = 10
+    memory_tool_calls_per_turn: int = 5
     # "shared": every chat session of this profile reads and writes one memory (MVP
     # default). "session": each chat session is isolated (the earlier behavior, where a
     # new session could not recall facts from an older one).
@@ -317,7 +328,10 @@ def load_config(config_path: Optional[str] = None) -> HybridAgeConfig:
 
     for key in ("vector_k", "min_similarity", "max_tokens", "embed_dim",
                 "queue_maxsize", "prefetch_timeout_s", "decay_half_life_days",
-                "hnsw_ef_search", "extract_timeout_s"):
+                "hnsw_ef_search", "extract_timeout_s",
+                "tiered_injection", "full_span_cap", "pointer_cap",
+                "pointer_token_budget", "memory_get_max_ids",
+                "memory_search_max_k", "memory_tool_calls_per_turn"):
         if raw.get(key) is not None:
             try:
                 setattr(cfg, key, type(getattr(cfg, key))(raw[key]))
@@ -507,6 +521,74 @@ CONFIG_SCHEMA_FIELDS = [
         "minimum": 1,
         "maximum": 365,
         "env_var": "HYBRID_AGE_DECAY_HALF_LIFE_DAYS",
+    },
+    {
+        "key": "tiered_injection",
+        "description": "Spec 8: full/pointer/closing-count tiers plus memory_get/memory_search tools. Off until Gate G8.",
+        "secret": False,
+        "required": False,
+        "default": False,
+        "type": "boolean",
+    },
+    {
+        "key": "full_span_cap",
+        "description": "Max full <span> elements rendered before overflow goes to pointers (Spec 8)",
+        "secret": False,
+        "required": False,
+        "default": 4,
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 50,
+    },
+    {
+        "key": "pointer_cap",
+        "description": "Max one-line <pointer> elements rendered after the full-span tier (Spec 8)",
+        "secret": False,
+        "required": False,
+        "default": 15,
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+    },
+    {
+        "key": "pointer_token_budget",
+        "description": "Token ceiling for the pointer tier, carved OUT of max_tokens, never additive (Spec 8)",
+        "secret": False,
+        "required": False,
+        "default": 300,
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1200,
+    },
+    {
+        "key": "memory_get_max_ids",
+        "description": "Max ids memory_get may request in a single call (Spec 8)",
+        "secret": False,
+        "required": False,
+        "default": 10,
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+    },
+    {
+        "key": "memory_search_max_k",
+        "description": "Max k memory_search may request in a single call (Spec 8)",
+        "secret": False,
+        "required": False,
+        "default": 10,
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+    },
+    {
+        "key": "memory_tool_calls_per_turn",
+        "description": "Max combined memory_get/memory_search calls allowed per turn (Spec 8)",
+        "secret": False,
+        "required": False,
+        "default": 5,
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
     },
 ]
 

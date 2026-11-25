@@ -1446,9 +1446,23 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 logger.exception("hybrid prefetch failed")
                 return ""
         else:
-            block = format_span_injection(
-                selected, token_budget=injection_token_cap(self.config.max_tokens)
-            )
+            if bool(getattr(self.config, "tiered_injection", False)):
+                # Spec 8: tiered injection, explicit opt-in via config.
+                block = format_span_injection(
+                    selected, token_budget=injection_token_cap(self.config.max_tokens),
+                    full_span_cap=int(getattr(self.config, "full_span_cap", 4)),
+                    pointer_cap=int(getattr(self.config, "pointer_cap", 15)),
+                    pointer_token_budget=int(getattr(self.config, "pointer_token_budget", 300)),
+                )
+            else:
+                # Off (default): explicit "no cap" values reproduce the
+                # exact pre-Spec-8 behavior -- format_span_injection's own
+                # defaults are now tiered, so the gate must be enforced
+                # HERE, not left to the function's defaults.
+                block = format_span_injection(
+                    selected, token_budget=injection_token_cap(self.config.max_tokens),
+                    full_span_cap=10**9, pointer_cap=0, pointer_token_budget=0,
+                )
         if not (block or "").strip():
             logger.info("prefetch empty recall")
         graph_n = sum(len(s.get("paths") or []) for s in selected)
