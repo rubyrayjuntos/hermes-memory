@@ -1,0 +1,312 @@
+[
+  {
+    "q": "What's in my overall Hermes status check, AND what did we find about my HGNN protein-research model?",
+    "gt_span_ids": [
+      4,
+      39
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "How do I set up GITHUB_TOKEN, AND which of my tools were found fixable versus not worth fixing?",
+    "gt_span_ids": [
+      106,
+      122
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What's my finalized v2 positioning statement, AND does memory_char_limit cap storage or just per-turn injection?",
+    "gt_span_ids": [
+      136,
+      215
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What was fixed about the librarian-watchdog cron job, AND how does graph-extractor differ from vector embedding in the pipeline?",
+    "gt_span_ids": [
+      318,
+      320
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "Where does Hermes's bundled Meta AI/Llama plugin live, AND what did you configure my xAI key for?",
+    "gt_span_ids": [
+      456,
+      481
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What model is actually running this Hermes Agent session, AND what bugs did the Kanban 'done' claim actually ship?",
+    "gt_span_ids": [
+      1184,
+      1681
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What's the real structure of the two writers feeding the AGE graph, AND what happened when I first welcomed into muse-spark?",
+    "gt_span_ids": [
+      2196,
+      2893
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "How did HF SDXL image generation end up working via TokyoEye, AND what closed the 4 code-review issues?",
+    "gt_span_ids": [
+      2925,
+      2971
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "Do I have a LinkedIn tool available, AND what phase of the product build just completed at 43KB?",
+    "gt_span_ids": [
+      3350,
+      3589
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What's the cycle-0 plan for the Shopify EAA Scanner, AND what blocker got flagged after Step 4's 604 tests passed?",
+    "gt_span_ids": [
+      6056,
+      6990
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "How many tasks are in the vet-recall plan, AND what's the current live site for Eidetix Bio?",
+    "gt_span_ids": [
+      7099,
+      8091
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What did I ask you to adapt jobberworkee into, AND is 800 rows enough to test the contract or to lock production thresholds?",
+    "gt_span_ids": [
+      8395,
+      8557
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What did the gateway-back consolidated report find, AND why did you say not to run the backfill against 5452 yet?",
+    "gt_span_ids": [
+      9140,
+      9141
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What was the verdict-matcher fix in work_status.py, AND what does the Apache AGE research brief say about version 1.7.0?",
+    "gt_span_ids": [
+      9208,
+      9825
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What was the reddit mega thread about, AND what's the goal behind the PR #94 merge and shadow replay eval?",
+    "gt_span_ids": [
+      10492,
+      11722
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What does the hybrid-fixes branch keep as its retrieval_mode default, AND what's on origin/main now after the hybrid-fixes merge?",
+    "gt_span_ids": [
+      11746,
+      11764
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What's the dry-run read-only transaction setting for, AND which Llama model turned out to be the better choice, and why?",
+    "gt_span_ids": [
+      11837,
+      11978
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What's in my overall Hermes status check, AND what model is actually running this Hermes Agent session?",
+    "gt_span_ids": [
+      4,
+      1184
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What did we find about my HGNN protein-research model, AND what bugs did the Kanban 'done' claim actually ship?",
+    "gt_span_ids": [
+      39,
+      1681
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "How do I set up GITHUB_TOKEN, AND what closed the 4 code-review issues?",
+    "gt_span_ids": [
+      106,
+      2971
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What tools were found fixable versus not worth fixing, AND is 800 rows enough for the contract or for production?",
+    "gt_span_ids": [
+      122,
+      8557
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What's my finalized v2 positioning statement, AND what's the current live site for Eidetix Bio?",
+    "gt_span_ids": [
+      136,
+      8091
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "Does memory_char_limit cap storage or just injection, AND what's the dry-run read-only transaction setting for?",
+    "gt_span_ids": [
+      215,
+      11837
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What was fixed about librarian-watchdog, AND what's the goal behind the PR #94 merge and shadow replay eval?",
+    "gt_span_ids": [
+      318,
+      11722
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "How does graph-extractor differ from vector embedding, AND what's the real structure of the two AGE graph writers?",
+    "gt_span_ids": [
+      320,
+      2196
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "Where does Hermes's bundled Meta AI/Llama plugin live, AND which Llama model turned out to be the better choice?",
+    "gt_span_ids": [
+      456,
+      11978
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What did you configure my xAI key for, AND what did the reddit mega thread ask about?",
+    "gt_span_ids": [
+      481,
+      10492
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "How did HF SDXL end up working via TokyoEye, AND what's on origin/main now after the hybrid-fixes merge?",
+    "gt_span_ids": [
+      2925,
+      11764
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "Do I have a LinkedIn tool available, AND what's the verdict-matcher fix in work_status.py?",
+    "gt_span_ids": [
+      3350,
+      9208
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What phase of the product build just completed at 43KB, AND what blocker got flagged after Step 4's tests passed?",
+    "gt_span_ids": [
+      3589,
+      6990
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What did the gateway-back consolidated report find?",
+    "gt_span_ids": [
+      9140
+    ],
+    "negative_control": false,
+    "multi_span": false
+  },
+  {
+    "q": "What did I ask you to adapt jobberworkee into?",
+    "gt_span_ids": [
+      8395
+    ],
+    "negative_control": false,
+    "multi_span": false
+  },
+  {
+    "q": "What does the Apache AGE research brief say about version 1.7.0?",
+    "gt_span_ids": [
+      9825
+    ],
+    "negative_control": false,
+    "multi_span": false
+  },
+  {
+    "q": "How many tasks are in the vet-recall plan?",
+    "gt_span_ids": [
+      7099
+    ],
+    "negative_control": false,
+    "multi_span": false
+  },
+  {
+    "q": "What's the cycle-0 plan for the Shopify EAA Scanner?",
+    "gt_span_ids": [
+      6056
+    ],
+    "negative_control": false,
+    "multi_span": false
+  }
+]

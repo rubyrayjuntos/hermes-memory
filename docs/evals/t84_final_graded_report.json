@@ -1,0 +1,667 @@
+{
+  "model": "anthropic/claude-sonnet-5",
+  "temperature": 0.0,
+  "seed": 42424242,
+  "system_prompt": "You are Hermes, Ray's personal assistant. You have persistent memory of past conversations. Some of it is shown to you directly below; some of it is only pointed at (an id, a similarity score, and a one-line summary) -- use the memory_get tool to fetch the full content of a pointer before answering if you need it, or memory_search to look for something not shown at all. If you don't actually have a record of something, say so plainly -- never invent a specific fact (a name, a number, a date) you don't have.",
+  "max_tool_rounds": 4,
+  "spend_cap_usd": 10.0,
+  "actual_spend_usd": 0.93833,
+  "database": "hermes_memory_eval_spec7 (confirmed via DB guard, never hermes_memory_installed)",
+  "installed_db_row_counts": {
+    "before": {
+      "work_item": 12,
+      "work_event": 19301,
+      "conversations": 413
+    },
+    "after": {
+      "work_item": 12,
+      "work_event": 19338,
+      "conversations": 423
+    },
+    "note": "counts changed (+37 work_event, +10 conversations) but NOT from this eval's own traffic -- the harness only ever held a connection to hermes_memory_eval_spec7, asserted at startup. The drift is attributable to normal ongoing Hermes gateway activity (this very chat session being captured) during the run's several-minute wall-clock duration. No 'episode' table exists in the installed schema; work_item/work_event/conversations are the closest real tables and are what's reported here."
+  },
+  "per_question_grades": {
+    "off": [
+      {
+        "sid": 0,
+        "question": "What vision model options were available in my local Ollama, and what's the catch?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 3,
+        "question": "Where did the librarian visibility plan get saved, and how many tasks?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 4,
+        "question": "What's the recommended database architecture plan for Hermes Agent?",
+        "verdict": "partial",
+        "negative_control": false,
+        "score": 0.5
+      },
+      {
+        "sid": 5,
+        "question": "What tiny vision model did we try for my hardware, and why?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 6,
+        "question": "Does the Kanban skill have direct database access, and what are the limits?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 7,
+        "question": "What's my mother's maiden name?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 8,
+        "question": "What is the campaign desk, and where do I access it?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 9,
+        "question": "Which database port is production, and which one is off-limits?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 10,
+        "question": "What was the --legacy-tcid setting for, and which value did we pick?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 11,
+        "question": "What's the primary community hub for Nous Research?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 13,
+        "question": "Why couldn't I SSH into the Raspberry Pi on my LAN?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 16,
+        "question": "What two issues were found with my Render/DNS setup?",
+        "verdict": "partial",
+        "negative_control": false,
+        "score": 0.5
+      },
+      {
+        "sid": 18,
+        "question": "Can I package my memory setup as a plugin for Hermes?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 19,
+        "question": "What are my saved image generation defaults?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 21,
+        "question": "How many jobs and applications does my Jobberworkee database actually have?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 32,
+        "question": "What did I want to add to Jobberworkee as a ZIP file?",
+        "verdict": "hallucinated",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 35,
+        "question": "What's the status of the Clearpath Shopify app review?",
+        "verdict": "correct",
+        "negative_control": null,
+        "score": 1.0
+      },
+      {
+        "sid": 36,
+        "question": "What was in the deployment summary for the database stack?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 39,
+        "question": "What did I have for Christmas dinner?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 40,
+        "question": "Can Hermes post to LinkedIn directly via API?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 41,
+        "question": "Why did the gateway send every profile's writes to the wrong database?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 43,
+        "question": "What did the production event backfill audit find?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 44,
+        "question": "What did I eat for breakfast last Tuesday?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 45,
+        "question": "Where does the embed URL environment variable default to?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 46,
+        "question": "What does the credential pool's failover reason mapping look like?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 50,
+        "question": "What's my rule about who opens and merges pull requests?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 51,
+        "question": "What happened with the Telegram bot token?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 52,
+        "question": "What GPU did we prove the LoRA training pipeline works on?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 53,
+        "question": "What format are the HPC S2S tailored documents in?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 54,
+        "question": "How many GitHub repos do I actually have, and how many are really mine?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 58,
+        "question": "What did we decide about using my Nous login token?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 63,
+        "question": "What are my three librarian cron jobs?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 65,
+        "question": "What's my sister's phone number?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 66,
+        "question": "What's the overall strategy for my AI/ML System Architect job search?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 67,
+        "question": "What did the narrative consistency audit find across my portfolio, LinkedIn, and GitHub?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 68,
+        "question": "What task was completed for the recalls reminder endpoint?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 74,
+        "question": "What stale artifacts did the audit find layered on top of each other?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 79,
+        "question": "What pushback did you give on my Shopify product analysis ranking?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      }
+    ],
+    "on": [
+      {
+        "sid": 1,
+        "question": "How many GitHub repos do I actually have, and how many are really mine?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 12,
+        "question": "What pushback did you give on my Shopify product analysis ranking?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 14,
+        "question": "What's the primary community hub for Nous Research?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 15,
+        "question": "What's my rule about who opens and merges pull requests?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 17,
+        "question": "What's the recommended database architecture plan for Hermes Agent?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 20,
+        "question": "What is the campaign desk, and where do I access it?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 22,
+        "question": "Where did the librarian visibility plan get saved, and how many tasks?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 23,
+        "question": "Can Hermes post to LinkedIn directly via API?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 25,
+        "question": "What's the status of the Clearpath Shopify app review?",
+        "verdict": "correct",
+        "negative_control": null,
+        "score": 1.0
+      },
+      {
+        "sid": 26,
+        "question": "What did I have for Christmas dinner?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 27,
+        "question": "What two issues were found with my Render/DNS setup?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 28,
+        "question": "What did I want to add to Jobberworkee as a ZIP file?",
+        "verdict": "hallucinated",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 29,
+        "question": "What did the production event backfill audit find?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 30,
+        "question": "What did I eat for breakfast last Tuesday?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 31,
+        "question": "What vision model options were available in my local Ollama, and what's the catch?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 33,
+        "question": "Does the Kanban skill have direct database access, and what are the limits?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 34,
+        "question": "What stale artifacts did the audit find layered on top of each other?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 37,
+        "question": "What did the narrative consistency audit find across my portfolio, LinkedIn, and GitHub?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 38,
+        "question": "Why couldn't I SSH into the Raspberry Pi on my LAN?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 42,
+        "question": "How many jobs and applications does my Jobberworkee database actually have?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 47,
+        "question": "What are my saved image generation defaults?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 48,
+        "question": "What tiny vision model did we try for my hardware, and why?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 49,
+        "question": "What did we decide about using my Nous login token?",
+        "verdict": "hallucinated",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 55,
+        "question": "Where does the embed URL environment variable default to?",
+        "verdict": "partial",
+        "negative_control": false,
+        "score": 0.5
+      },
+      {
+        "sid": 56,
+        "question": "Which database port is production, and which one is off-limits?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 57,
+        "question": "What are my three librarian cron jobs?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 59,
+        "question": "What format are the HPC S2S tailored documents in?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 60,
+        "question": "What does the credential pool's failover reason mapping look like?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 61,
+        "question": "What task was completed for the recalls reminder endpoint?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 62,
+        "question": "What's the overall strategy for my AI/ML System Architect job search?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 64,
+        "question": "Why did the gateway send every profile's writes to the wrong database?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 69,
+        "question": "What's my sister's phone number?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 70,
+        "question": "What GPU did we prove the LoRA training pipeline works on?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 72,
+        "question": "Can I package my memory setup as a plugin for Hermes?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 73,
+        "question": "What was the --legacy-tcid setting for, and which value did we pick?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      },
+      {
+        "sid": 75,
+        "question": "What was in the deployment summary for the database stack?",
+        "verdict": "wrong",
+        "negative_control": false,
+        "score": 0.0
+      },
+      {
+        "sid": 77,
+        "question": "What's my mother's maiden name?",
+        "verdict": "correct",
+        "negative_control": true,
+        "score": 1.0
+      },
+      {
+        "sid": 78,
+        "question": "What happened with the Telegram bot token?",
+        "verdict": "correct",
+        "negative_control": false,
+        "score": 1.0
+      }
+    ]
+  },
+  "accuracy": {
+    "off": {
+      "n": 38,
+      "mean_score": 0.816
+    },
+    "on": {
+      "n": 38,
+      "mean_score": 0.803
+    },
+    "delta_on_minus_off": -0.013,
+    "note": "2 of 40 questions excluded per condition (4 total) as frozen-set ground-truth defects, see gt_mismatches"
+  },
+  "gt_mismatches_excluded_from_scoring": [
+    {
+      "sid": 2,
+      "cond": "off",
+      "question": "How did I set up Gmail access for linkibinki?",
+      "gt_span_id": 8237
+    },
+    {
+      "sid": 24,
+      "cond": "on",
+      "question": "Which Llama model did I download, and why that one?",
+      "gt_span_id": 5763
+    },
+    {
+      "sid": 71,
+      "cond": "off",
+      "question": "Which Llama model did I download, and why that one?",
+      "gt_span_id": 5763
+    },
+    {
+      "sid": 76,
+      "cond": "on",
+      "question": "How did I set up Gmail access for linkibinki?",
+      "gt_span_id": 8237
+    }
+  ],
+  "negative_control_results": {
+    "off": [
+      [
+        "What's my mother's maiden name?",
+        "correct"
+      ],
+      [
+        "What did I have for Christmas dinner?",
+        "correct"
+      ],
+      [
+        "What did I eat for breakfast last Tuesday?",
+        "correct"
+      ],
+      [
+        "What's my sister's phone number?",
+        "correct"
+      ]
+    ],
+    "on": [
+      [
+        "What did I have for Christmas dinner?",
+        "correct"
+      ],
+      [
+        "What did I eat for breakfast last Tuesday?",
+        "correct"
+      ],
+      [
+        "What's my sister's phone number?",
+        "correct"
+      ],
+      [
+        "What's my mother's maiden name?",
+        "correct"
+      ]
+    ]
+  },
+  "hard_failures_hallucinated_on_negative": [],
+  "pointer_follow_rate_on_run": {
+    "followed": 12,
+    "total": 40,
+    "rate": 0.3
+  },
+  "avg_tokens_per_api_call": {
+    "off": 2620,
+    "on": 2939
+  },
+  "tool_rounds_distribution": {
+    "off": {
+      "2": 16,
+      "1": 22,
+      "3": 2
+    },
+    "on": {
+      "2": 18,
+      "1": 21,
+      "3": 1
+    }
+  },
+  "security_flag": "sid=76 answer (condition 'on') stated a real Gmail password ('[REDACTED-PASSWORD]') in plaintext -- confirmed present unredacted in 6 rows of the real corpus (not a hallucination), sent to OpenRouter/Anthropic as part of this eval's API traffic. Recommend rotating that Gmail account's password. Separately, sid=69 (negative-control answer) surfaced a different real contact's phone number unprompted while correctly declining to answer about the sister -- not incorrect per the rubric, but an over-disclosure pattern worth noting.",
+  "source_files": {
+    "raw_model_transcripts": "/home/rswan/.hermes/profiles/linkibinki/cache/scratch/t84_eval_report.json",
+    "blind_grading_input": "/home/rswan/.hermes/profiles/linkibinki/cache/scratch/t84_grading_input_BLIND.json",
+    "sealed_condition_key": "/home/rswan/.hermes/profiles/linkibinki/cache/scratch/t84_shuffle_key_SEALED.json",
+    "frozen_questions": "/home/rswan/Documents/Codex/hermes-memory/docs/evals/t84_40_questions_frozen.json",
+    "frozen_rubric": "/home/rswan/Documents/Codex/hermes-memory/docs/evals/t84_grading_rubric.md"
+  }
+}

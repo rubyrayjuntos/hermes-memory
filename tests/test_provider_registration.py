@@ -19,7 +19,21 @@ def test_dev_dependencies_include_offline_wheel_build_requirements() -> None:
     assert "wheel" in dev
 
 
-def test_built_wheel_entry_point_registers_one_provider(tmp_path: Path) -> None:
+def test_built_wheel_entry_point_registers_one_provider(tmp_path: Path, monkeypatch) -> None:
+    # Loading the entry point calls hermes_memory.register(), which calls
+    # load_config() with no explicit path -- that reads $HERMES_HOME/config.yaml
+    # (defaulting to ~/.hermes) from the REAL ambient environment, since this
+    # happens in-process rather than through a sandboxed subprocess (unlike
+    # scripts/release_gate.py's own smoke step, which spawns an isolated
+    # HOME/HERMES_HOME). On a dev machine with a real ~/.hermes/config.yaml
+    # that names a profile-scoped dsn_env (e.g. HYBRID_AGE_DSN_LINKIBINKI),
+    # this test would fail on missing that var instead of testing what it's
+    # meant to test: that the entry point resolves to one provider instance.
+    # Point HERMES_HOME at an empty directory and supply a non-listening
+    # placeholder DSN so registration succeeds without touching any real
+    # config or network target.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "isolated_hermes_home"))
+    monkeypatch.setenv("HYBRID_AGE_DSN", "postgresql://127.0.0.1:1/hermes_provider_registration_smoke")
     repo = Path(__file__).resolve().parents[1]
     source = tmp_path / "source"
     source.mkdir()

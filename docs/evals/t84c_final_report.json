@@ -1,0 +1,75 @@
+{
+  "run": "T8.4c",
+  "model": "anthropic/claude-sonnet-5",
+  "temperature": 0,
+  "spend_usd": 1.4452420000000001,
+  "n_questions": 35,
+  "n_multi_span": 30,
+  "n_single_fact_control": 5,
+  "grader1_primary": {
+    "off_mean": 0.457,
+    "on_mean": 0.6,
+    "delta": 0.143,
+    "multi_span_off": 0.4,
+    "multi_span_on": 0.567,
+    "single_fact_off": 0.8,
+    "single_fact_on": 0.8,
+    "multi_span_paired_delta": 0.167,
+    "multi_span_delta_95ci": [
+      0.069,
+      0.264
+    ],
+    "win_loss_ties_multi_span": {
+      "on_wins": 11,
+      "off_wins": 1,
+      "ties": 18
+    }
+  },
+  "grader2_independent_subagent": {
+    "off_mean": 0.457,
+    "on_mean": 0.643,
+    "delta": 0.186,
+    "multi_span_off": 0.4,
+    "multi_span_on": 0.617,
+    "single_fact_off": 0.8,
+    "single_fact_on": 0.8,
+    "multi_span_paired_delta": 0.217,
+    "multi_span_delta_95ci": [
+      0.126,
+      0.307
+    ],
+    "win_loss_ties_multi_span": {
+      "on_wins": 13,
+      "off_wins": 0,
+      "ties": 17
+    }
+  },
+  "grader_agreement": {
+    "agree": 62,
+    "total": 70,
+    "pct": 0.886
+  },
+  "tokens_per_call": {
+    "off": 2799,
+    "on": 4101,
+    "pct_increase": 46.5
+  },
+  "tokens_per_correct_point": {
+    "grader1": {
+      "off": 6125,
+      "on": 6836
+    },
+    "grader2": {
+      "off": 6125,
+      "on": 6378
+    }
+  },
+  "decision_criteria_check": {
+    "1_both_graders_positive_delta": true,
+    "2_win_loss_favors_on": true,
+    "3_tokens_per_point_not_meaningfully_worse": "borderline-pass: +11.6% (grader1) / +4.1% (grader2), far smaller than T8.4b's +45% raw token increase since accuracy also rose substantially",
+    "4_single_fact_controls_no_regression": true
+  },
+  "all_4_criteria_pass": true,
+  "note": "Per explicit user instruction, meeting all 4 pre-committed criteria does NOT authorize the agent to flip tiered_injection's default unilaterally -- reported for Ray's decision."
+}

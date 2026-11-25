@@ -1,0 +1,92 @@
+[
+  {
+    "q": "Tell me about both the Postgres port confusion AND the root cause of the gateway writing to the wrong database -- what are the two separate things going on?",
+    "gt_span_ids": [
+      12807,
+      9311
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What did the --legacy-tcid backfill fix, AND what were the production event backfill audit's two real problems?",
+    "gt_span_ids": [
+      9166,
+      9181
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What are my three librarian cron jobs, AND what's the overall strategy for my AI/ML System Architect job search?",
+    "gt_span_ids": [
+      316,
+      494
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "How many jobs/applications does my Jobberworkee database actually have, AND what did I want to add to it as a ZIP file?",
+    "gt_span_ids": [
+      6925,
+      8757
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What happened with the Telegram bot token, AND what's my rule about who opens and merges pull requests?",
+    "gt_span_ids": [
+      15,
+      9289
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What are my saved image generation defaults, AND what tiny vision model did we try for my hardware, and why?",
+    "gt_span_ids": [
+      2931,
+      188
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What two issues were found with my Render/DNS setup, AND how many GitHub repos do I actually have?",
+    "gt_span_ids": [
+      73,
+      50
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What's the recommended database architecture plan for Hermes Agent, AND what was in the deployment summary for the database stack?",
+    "gt_span_ids": [
+      1267,
+      1292
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What does the credential pool's failover reason mapping look like, AND where does the embed URL environment variable default to?",
+    "gt_span_ids": [
+      3482,
+      322
+    ],
+    "negative_control": false,
+    "multi_span": true
+  },
+  {
+    "q": "What did the narrative consistency audit find across my portfolio/LinkedIn/GitHub, AND what pushback did you give on my Shopify product ranking?",
+    "gt_span_ids": [
+      48,
+      5716
+    ],
+    "negative_control": false,
+    "multi_span": true
+  }
+]

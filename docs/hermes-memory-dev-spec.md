@@ -599,6 +599,61 @@ No new tables, no new columns, no migration file. Reuses `conversations` exactly
 - Rerun the recall eval on the full **40-question set** (ideally also widened past the 179-row embedding subset once full-corpus embedding -- in progress as of this writing -- completes) with `tiered_injection: true`: report how many previously silently-dropped ground-truth spans now surface as tier-2 pointers instead of vanishing, T8.4's pointer-follow-through rate, and **T8.4's answer-quality delta** (correctness with the fetch tool available vs. without) -- the number that actually decides whether this spec is worth the complexity, not the follow-through rate alone. Real numbers cited to the JSON file they came from, same discipline as every other eval in this document.
 - **Gate G8:** Ray signs off, reviewing the answer-quality delta specifically, not "tests pass" and not pointer-follow-through alone. If models follow pointers but answers don't improve, that's a negative result worth reporting plainly, not spinning -- the named fallback is widening `full_span_cap`/`token_budget` instead and leaving the tool surface implemented-but-dormant (`tiered_injection: false`) rather than ripping it out -- the config flag in 8.4 exists specifically so that decision doesn't require a revert.
 
+### 8.5.1 G8 result (2026-11-25, `docs/evals/t84_final_graded_report.json`)
+
+**G8 does not pass.** Ran `anthropic/claude-sonnet-5`, temp 0, fixed seed, identical system prompt and tools (`memory_get`/`memory_search` available in both conditions) against the frozen 40-question set (`t84_40_questions_frozen.json`), blind-graded against the frozen rubric (`t84_grading_rubric.md`). 38 scored questions per condition (2 of 40 excluded per side as frozen-set ground-truth defects, not created this round -- see the report's `gt_mismatches_excluded_from_scoring`).
+
+- **Accuracy:** off 0.816, on 0.803, delta **-0.013** -- noise at this N, not a win.
+- **Pointer-follow rate:** 12/40 (30%) on the tiered run -- the mechanism works, but following the pointer didn't translate into a better answer.
+- **Tokens/API-call:** off 2,620, on 2,939 -- tiering cost *more* per call here (tool round-trips), not less.
+- **Zero hard failures:** all 4 negative controls + the Clearpath confirmed-absent-topic question graded `correct` in both conditions.
+
+Ray's reading: the "off" condition already had the same tools and full spans, so for a single-fact question pointers have nothing to add -- the model either already has the span or searches for it. Pointers should earn their keep only when there's more relevant material than fits in the budget, and this 40-question set never hit that regime. Decision: **keep `tiered_injection: false`** (the default, unchanged) rather than shelve the feature outright. Before any further verdict, run one more targeted round -- about 10 frozen questions that each need facts from several older spans at once, specifically designed to exceed the token budget the "off" condition would need. That round is blocked on the redaction fix below (no hosted calls until it lands). If that targeted round still shows no gain, shelve Spec 8's tiering and keep `memory_get`/`memory_search` on their own, independent of tiering.
+
+**Redaction gap found during grading, fixed same day:** two real secrets leaked through this eval's own traffic -- a Gmail password (in prose, no `:`/`=` separator, so `_redact_secrets` missed it) and an unrelated contact's phone number (not a credential at all, no rule existed for PII). Root cause: `_span_tag`, the actual Tier-1/`memory_get` render path, only html-escaped content and never redacted it -- Tier 2 pointers were already safe (routed through `extractive_summary`), Tier 1 and the fetch tool were not. Fixed tests-first: new `_PROSE_PASSWORD_RE`/`_PHONE_RE`/`_EMAIL_RE` rules, redaction wired into `_span_tag` before escaping. All leaked copies (git history on `wip/spec8-tiered-injection-build`, both the eval DB and `hermes_memory_installed`) were found and scrubbed; the Gmail account's password itself still needs rotating by Ray.
+
+### 8.5.2 T8.4b: targeted multi-span follow-up (2026-11-25, `docs/evals/t84b_final_graded_report.json`)
+
+T8.4's own explanation for its null result was that the 40-question set never actually stressed the token budget -- a single-fact question either already has its one relevant span in full, or the model searches for it; a pointer has nothing to add in that regime. This follow-up tests that explanation directly: 10 new questions, each combining TWO already-verified real anchors from T8.4 ("X, AND Y"), specifically designed so a single top vector match can't cover the whole answer. Same model/temp/seed, same tools in both conditions, blind-graded (0/0.5/1.0 per question, fraction of the 2 facts covered) against a frozen addendum rubric.
+
+- **Accuracy:** off 0.450 (n=10), on 0.611 (n=9, 1 excluded as a harness artifact -- a per-turn tool-call budget exhaustion forced a retry message instead of a real answer on one question). **Delta: +0.161** -- a real gain, in the opposite direction from T8.4's null result.
+- **Pointer-follow rate:** 7/10 (70%) -- also much higher than T8.4's 30%, consistent with the budget actually binding this time.
+- **Tokens/API-call:** off 2,823, on 4,081 -- still costs more per call than off, same as T8.4, but this time the cost buys something.
+
+**Conclusion, superseding 8.5.1's "no gain" reading:** pointers earn their keep specifically when a question needs more than what fits in the full-span budget -- exactly as predicted. T8.4's flat result wasn't evidence tiering doesn't work; it was evidence the 40-question set didn't test the regime where it would. **Decision: flip `tiered_injection` toward on, but not yet unconditionally** -- 10 questions is still a small sample for a permanent default change. Recorded here as the live decision point: either (a) raise the default to `true` now given this directional evidence plus T8.1-T8.3's clean test coverage, or (b) run one more, larger multi-span round before flipping the default. Whichever Ray picks, cite the chosen path's own report JSON, same discipline as every number in this document.
+
+### 8.5.3 T8.4c: decision-grade round, two graders, pre-committed criteria (2026-11-25, `docs/evals/t84c_final_report.json`)
+
+Ray explicitly rejected 8.5.2's +0.161 result as a G8 pass: n=9/10 is too small, the "off" baseline (0.450) was suspiciously low, and the +45% token cost could offset the gain. Before any default change he required a bigger, better-powered round: **30 new multi-span questions with fresh anchors** (none reused from T8.4 or T8.4b's question *pairs* — individual fact anchors recur across more than one of the 30 new pairings by design, to get 30 distinct pairs out of a pool of independently-verified real facts without needing 60 separate topics) **plus 5 single-fact controls**, graded by **two independent graders** blind to condition, reported as a **95% CI or paired win/loss count**, against **criteria fixed before any answer existed** (`docs/evals/t84c_grading_rubric_and_decision_criteria.md`, committed with the frozen question set in the same commit as this spec section's predecessor).
+
+Same model/temp/seed/system-prompt/tools as T8.4 and T8.4b, same DB guard, spend $1.45/$10 cap. Grader 1 (primary) graded all 70 blind items; grader 2 was an independent subagent given only the shuffled, condition-stripped answers plus ground truth and the same rubric — no access to grader 1's verdicts. Agreement: 62/70 (88.6%).
+
+| | off | on | delta |
+|---|---|---|---|
+| Grader 1, all 35 | 0.457 | 0.600 | **+0.143** |
+| Grader 1, 30 multi-span | 0.400 | 0.567 | +0.167 (95% CI 0.069–0.264) |
+| Grader 1, 5 single-fact control | 0.800 | 0.800 | 0.000 |
+| Grader 2, all 35 | 0.457 | 0.643 | **+0.186** |
+| Grader 2, 30 multi-span | 0.400 | 0.617 | +0.217 (95% CI 0.126–0.307) |
+| Grader 2, 5 single-fact control | 0.800 | 0.800 | 0.000 |
+
+Paired win/loss on the 30 multi-span questions: grader 1 — on wins 11, off wins 1, ties 18. Grader 2 — on wins 13, off wins 0, ties 17. Tokens/call: off 2,799, on 4,101 (+46%, consistent with 8.5.2). Tokens-per-correct-point: off 6,125 both graders; on 6,836 (grader 1, +11.6%) / 6,378 (grader 2, +4.1%) — a materially smaller cost-per-point increase than 8.5.2's, because this round's accuracy gain is larger relative to the same token-cost increase.
+
+**All 4 of the pre-committed criteria pass**, by both graders independently:
+1. Both graders' deltas positive — yes (+0.143, +0.186).
+2. Win/loss favors "on" — yes, lopsidedly (11-1 and 13-0 among non-ties).
+3. Tokens-per-correct-point not meaningfully worse — borderline-pass; both graders show a far smaller cost increase than 8.5.2's +45% raw-token problem, because accuracy rose enough to roughly offset it.
+4. Single-fact controls don't regress — yes, exact tie (0.800/0.800) on both graders, confirming tiering costs nothing on the easy case.
+
+**This does not auto-flip the default.** Per Ray's explicit instruction, meeting the criteria is reported for his decision, not executed unilaterally by the agent. `tiered_injection: false` remains the config default as of this writing; whether it flips (globally or opt-in per profile) is Ray's call, citing this section and `docs/evals/t84c_final_report.json`.
+
+**Caveats on record, next to the result (none of them block the decision below, but all were explicitly asked for):**
+- **Grader independence is partial, not full.** The agent wrote the 35 questions, picked the anchors, and was grader 1. Grader 2 was a second subagent dispatched by the same agent, almost certainly the same underlying model family — it is independent in the sense that it saw no labels and no access to grader 1's verdicts, but it is not independent in the stronger sense of being a different model or a different person. 88.6% agreement between the two is evidence the grading wasn't arbitrary, not evidence of true inter-model or inter-rater diversity.
+- **n=5 for the single-fact control arm is small.** A tied 0.800/0.800 on 5 questions rules out an obvious regression but has wide uncertainty; it is a reasonable control, not a precise measurement, and a future round with more single-fact questions would tighten this if the "on" default is ever revisited.
+- **The 30 multi-span pairings reuse individual fact anchors across more than one pairing** (documented in 8.5.3 above) — each of the ~34 underlying facts appears in roughly 2 pairings on average. This is a weaker form of independence between questions than 30 fully disjoint fact-pairs would have been, though every *pairing* itself is new (none reused from T8.4 or T8.4b).
+
+**Decision (Ray, 2026-11-25): G8 passes.** `tiered_injection` now defaults to `true` (tests-first: `tests/test_tiered_injection_gating.py::test_tiered_injection_on_by_default_after_g8_pass`, confirmed red against the old default then green after the flip; `test_tiered_injection_explicitly_off_preserves_old_unlimited_full_span_behavior` keeps the opt-out path covered). `tiered_injection: false` stays documented as the way to opt a profile back into the old unlimited-full-span behavior. See `CHANGELOG.md` under `[Unreleased] / Changed`.
+
 ### 8.6 Out of scope
 
 Any change to `vector_search`, ranking, or `min_similarity` -- this spec is a rendering/disclosure layer on top of retrieval exactly as it exists after PR #114, not a retrieval change. A CLI entry point for `memory_get`/`memory_search` outside the agent tool-calling path (e.g. a `hermes memory query` subcommand) is a separate, later idea, not bundled here. Cross-session summarization or any new model call for the pointer summary (8.3 is explicit: redaction + truncation only, no model).

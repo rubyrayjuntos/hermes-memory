@@ -1220,23 +1220,32 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.exception("prefetch failed")
             return ""
 
+    async def _aembed_and_search(self, query: str, k: int) -> tuple[Optional[list], List[dict]]:
+        """Shared embed+vector_search call. Spec 8 (T8.3, test 6/7): both
+        prefetch() and memory_search() call this SAME helper, so the two
+        paths can never independently drift -- one query, one place.
+        Returns (embedding, seeds) -- callers needing just the seeds can
+        ignore the first element."""
+        from .tokens import QUERY_TOKEN_CAP, truncate_tokens
+
+        enriched = self._enrich_query(query)
+        emb = await self.embedder.embed_text(
+            truncate_tokens(enriched, QUERY_TOKEN_CAP), as_query=True
+        ) if self.embedder else None
+        if not (emb and self.store):
+            return emb, []
+        seeds = await self.store.vector_search(
+            vec_to_literal(emb), k, agent_identity=self._agent_identity,
+        )
+        return emb, seeds
+
     async def _aprefetch(self, query: str) -> str:
         t0 = time.perf_counter()
         deadline = asyncio.get_running_loop().time() + self.config.prefetch_timeout_s
         try:
             async with asyncio.timeout_at(deadline):
-                enriched = self._enrich_query(query)
-                from .tokens import QUERY_TOKEN_CAP, truncate_tokens
-
-                emb = await self.embedder.embed_text(
-                    truncate_tokens(enriched, QUERY_TOKEN_CAP), as_query=True
-                ) if self.embedder else None
                 t_embed = time.perf_counter()
-                seeds = await self.store.vector_search(
-                    vec_to_literal(emb), self.config.vector_k,
-                    agent_identity=self._agent_identity,
-                ) \
-                    if (emb and self.store) else []
+                emb, seeds = await self._aembed_and_search(query, self.config.vector_k)
                 t_vec = time.perf_counter()
                 logger.info(
                     "prefetch k=%s hnsw.ef_search=%s seeds=%s",
@@ -1260,7 +1269,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("prefetch timeout query=%r", query[:80])
             return ""
 
-        from .provider_helpers import format_span_injection
+        from .provider_helpers import format_span_injection, span_ref
 
         seed_turn_ids: set[int] = set()
         for s in kept_seeds:
@@ -1339,6 +1348,9 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 "score": s["similarity"],
                 "src": s.get("src"),
                 "id": s.get("id"),
+                # PR #117 review: source-qualified id for rendering, so a
+                # memory_entry/doc_chunk pointer is fetchable by memory_get.
+                "ref": span_ref(s.get("src"), s.get("id")),
                 "content": (s.get("content") or "").strip(),
                 "paths": attached[:3],
                 "session_id": s.get("session_id"),
@@ -1394,32 +1406,13 @@ class HybridAgeMemoryProvider(MemoryProvider):
         # Uptake + claim overlays for contract binning. Same graceful
         # degradation as neighbors: pre-migration stores simply lack the
         # method and every hit packs as uptake-unknown.
-        overlay_fetcher: Callable[[list], Awaitable[dict]] | None = getattr(
-            self.store, "span_overlays", None
-        )
-        if selected and callable(overlay_fetcher):
+        if selected:
             try:
                 async with asyncio.timeout_at(deadline):
-                    overlay_ids = [s["turn_id"] for s in selected if s.get("turn_id")]
-                    overlays = await overlay_fetcher(overlay_ids)
-            except Exception as exc:
-                if isinstance(exc, TimeoutError):
-                    logger.warning("prefetch timeout query=%r", query[:80])
-                    return ""
-                # 42P01 undefined_table = pre-migration store: quiet skip.
-                # Anything else is a real failure and stays loud.
-                if getattr(exc, "sqlstate", "") == "42P01":
-                    logger.debug("span overlay tables absent (pre-migration)")
-                else:
-                    logger.exception("overlay fetch failed")
-                overlays = {}
-            for s in selected:
-                ov = overlays.get(s.get("turn_id")) or {}
-                if ov.get("uptake"):
-                    s["uptake"] = ov["uptake"]
-                s["live_claims"] = ov.get("live_claims", 0)
-                if ov.get("retracted"):
-                    s["retracted"] = ov["retracted"]
+                    await self._aspan_overlays(selected)
+            except TimeoutError:
+                logger.warning("prefetch timeout query=%r", query[:80])
+                return ""
         from .tokens import injection_token_cap
 
         if getattr(self.config, "retrieval_mode", "vector") == "hybrid":
@@ -1446,9 +1439,23 @@ class HybridAgeMemoryProvider(MemoryProvider):
                 logger.exception("hybrid prefetch failed")
                 return ""
         else:
-            block = format_span_injection(
-                selected, token_budget=injection_token_cap(self.config.max_tokens)
-            )
+            if bool(getattr(self.config, "tiered_injection", False)):
+                # Spec 8: tiered injection, explicit opt-in via config.
+                block = format_span_injection(
+                    selected, token_budget=injection_token_cap(self.config.max_tokens),
+                    full_span_cap=int(getattr(self.config, "full_span_cap", 4)),
+                    pointer_cap=int(getattr(self.config, "pointer_cap", 15)),
+                    pointer_token_budget=int(getattr(self.config, "pointer_token_budget", 300)),
+                )
+            else:
+                # Off (default): explicit "no cap" values reproduce the
+                # exact pre-Spec-8 behavior -- format_span_injection's own
+                # defaults are now tiered, so the gate must be enforced
+                # HERE, not left to the function's defaults.
+                block = format_span_injection(
+                    selected, token_budget=injection_token_cap(self.config.max_tokens),
+                    full_span_cap=10**9, pointer_cap=0, pointer_token_budget=0,
+                )
         if not (block or "").strip():
             logger.info("prefetch empty recall")
         graph_n = sum(len(s.get("paths") or []) for s in selected)
@@ -1741,10 +1748,286 @@ class HybridAgeMemoryProvider(MemoryProvider):
             logger.warning("extract_work enqueue failed", exc_info=True)
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return []  # pure context mode — no tools
+        if not bool(getattr(self.config, "tiered_injection", False)):
+            return []  # pure context mode — no tools (default, Gate G8)
+        max_ids = int(getattr(self.config, "memory_get_max_ids", 10))
+        max_k = int(getattr(self.config, "memory_search_max_k", 10))
+        return [
+            {
+                "name": "memory_get",
+                "description": (
+                    "Fetch full content for memory ids shown as <pointer> "
+                    "or <span> elements in your context. Pass each id exactly "
+                    "as shown (e.g. \"123\", \"mem:45\", \"doc:ab12\"). Ids that "
+                    "don't exist, or that aren't yours, come back as 'not "
+                    "found' -- never another row. A body cut by the output "
+                    "budget is listed under 'truncated' with a next_offset; "
+                    "call again with that id and offset to continue."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": max_ids,
+                            "description": f"Up to {max_ids} memory ids per call, as shown in context.",
+                        },
+                        "offset": {
+                            "type": "integer", "minimum": 0,
+                            "description": (
+                                "Character offset to resume a truncated memory "
+                                "(use next_offset from a previous call)."
+                            ),
+                        },
+                    },
+                    "required": ["ids"],
+                },
+            },
+            {
+                "name": "memory_search",
+                "description": "Search your own memory beyond what's already shown in context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "k": {
+                            "type": "integer", "maximum": max_k,
+                            "description": f"Number of results, up to {max_k}.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        ]
+
+    def on_turn_start(self, turn_number: int, message: str, **kwargs: Any) -> None:
+        """Spec 8: reset the per-turn memory_get/memory_search call budget
+        at the start of every turn -- a model cannot bank unused calls
+        across turns, and a new turn always starts with a fresh budget."""
+        self._memory_tool_calls_this_turn = 0
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> Any:
-        return {"error": "pure context mode — no tools"}
+        if not bool(getattr(self.config, "tiered_injection", False)):
+            return json.dumps({"error": "pure context mode — no tools"})
+        if tool_name not in ("memory_get", "memory_search"):
+            return json.dumps({"error": f"unknown tool {tool_name!r}"})
+        cap = int(getattr(self.config, "memory_tool_calls_per_turn", 5))
+        used = getattr(self, "_memory_tool_calls_this_turn", 0)
+        if used >= cap:
+            return json.dumps(
+                {"error": f"memory tool call budget ({cap} per turn) exceeded"}
+            )
+        self._memory_tool_calls_this_turn = used + 1
+        timeout = float(getattr(self.config, "prefetch_timeout_s", 2.0)) + 1.0
+        try:
+            if tool_name == "memory_get":
+                raw_ids = args.get("ids") or []
+                max_ids = int(getattr(self.config, "memory_get_max_ids", 10))
+                if len(raw_ids) > max_ids:
+                    return json.dumps(
+                        {"error": f"memory_get accepts at most {max_ids} ids per call"}
+                    )
+                try:
+                    offset = max(0, int(args.get("offset") or 0))
+                except (TypeError, ValueError):
+                    return json.dumps({"error": "memory_get offset must be a non-negative integer"})
+                return self._run(self._amemory_get(raw_ids, offset), timeout=timeout)
+            query = str(args.get("query") or "")
+            k = int(args.get("k") or 5)
+            max_k = int(getattr(self.config, "memory_search_max_k", 10))
+            if k > max_k:
+                return json.dumps({"error": f"memory_search k must be <= {max_k}"})
+            return self._run(self._amemory_search(query, k), timeout=timeout)
+        except Exception:
+            logger.exception("memory tool call failed: %s", tool_name)
+            return json.dumps({"error": "memory tool call failed"})
+
+    async def _aspan_overlays(self, items: list) -> None:
+        """Uptake + claim overlays for contract binning, applied in place to
+        conversation items (``turn_id`` set). Shared by prefetch,
+        memory_search and memory_get so the same stored evidence renders
+        with the same provenance on every path. Pre-migration stores
+        (42P01) degrade quietly to uptake-unknown; TimeoutError propagates
+        so a caller's deadline still wins."""
+        from collections.abc import Awaitable
+
+        overlay_fetcher: Callable[[list], Awaitable[dict]] | None = getattr(
+            self.store, "span_overlays", None
+        )
+        ids = [s["turn_id"] for s in items if s.get("turn_id") is not None]
+        if not ids or not callable(overlay_fetcher):
+            return
+        try:
+            overlays = await overlay_fetcher(ids)
+        except TimeoutError:
+            raise
+        except Exception as exc:
+            # 42P01 undefined_table = pre-migration store: quiet skip.
+            # Anything else is a real failure and stays loud.
+            if getattr(exc, "sqlstate", "") == "42P01":
+                logger.debug("span overlay tables absent (pre-migration)")
+            else:
+                logger.exception("overlay fetch failed")
+            overlays = {}
+        for s in items:
+            if s.get("turn_id") is None:
+                continue
+            ov = overlays.get(s.get("turn_id")) or {}
+            if ov.get("uptake"):
+                s["uptake"] = ov["uptake"]
+            s["live_claims"] = ov.get("live_claims", 0)
+            if ov.get("retracted"):
+                s["retracted"] = ov["retracted"]
+
+    async def _amemory_get(self, ids: list, offset: int = 0) -> str:
+        """Spec 8, T8.3: server-side id validation, owner-scoped fetch.
+
+        PR #117 review: ids are source-qualified (bare number =
+        conversation, ``mem:<n>`` = memory_entry, ``doc:<id>`` = doc_chunk,
+        exactly as rendered by prefetch/search) and each is fetched from
+        its own table with the SAME scope vector_search used to surface it
+        -- a made-up or foreign-owner id comes back "not found", never
+        another row and never a same-numbered row from another source.
+        Bodies render through format_fetched_spans (full content, explicit
+        truncation + offset pagination), not through another disclosure
+        tier. Owner/profile scope is this instance's self._agent_identity,
+        bound at initialize()."""
+        from .provider_helpers import format_fetched_spans, parse_span_ref, span_ref
+        from .tokens import injection_token_cap
+
+        results: Dict[str, str] = {}
+        wanted: list[tuple[str, str, Any]] = []  # (key shown to caller, src, id)
+        for raw in ids:
+            parsed = parse_span_ref(raw)
+            if parsed is None:
+                results[str(raw)] = "invalid id"
+                continue
+            src, key = parsed
+            wanted.append((str(raw).strip() if isinstance(raw, str) else str(raw), src, key))
+
+        def _ids(src: str) -> list:
+            return list(dict.fromkeys(k for _, s, k in wanted if s == src))
+
+        found: Dict[tuple[str, str], dict] = {}
+        if self.store is not None:
+            conv_ids = _ids("conversation")
+            if conv_ids:
+                for r in await self.store.conversations_by_ids(
+                    conv_ids, agent_identity=self._agent_identity
+                ):
+                    found[("conversation", str(int(r["id"])))] = {
+                        "turn_id": int(r["id"]),
+                        "speaker": r.get("role") or "unknown",
+                        "created_at": str(r.get("ts") or ""),
+                        "content": r.get("content") or "",
+                    }
+            mem_ids = _ids("memory_entry")
+            mem_fetch = getattr(self.store, "memory_entries_by_ids", None)
+            if mem_ids and callable(mem_fetch):
+                for r in await mem_fetch(mem_ids, agent_identity=self._agent_identity):
+                    found[("memory_entry", str(int(r["id"])))] = {
+                        "speaker": "doc",
+                        "created_at": str(r.get("created_at") or ""),
+                        "content": r.get("content") or "",
+                    }
+            doc_ids = _ids("doc_chunk")
+            doc_fetch = getattr(self.store, "doc_chunks_by_ids", None)
+            if doc_ids and callable(doc_fetch):
+                for r in await doc_fetch(doc_ids):
+                    found[("doc_chunk", str(r["id"]))] = {
+                        "speaker": "doc",
+                        "created_at": str(r.get("created_at") or ""),
+                        "content": r.get("content") or "",
+                    }
+        items = []
+        seen: set[tuple[str, str]] = set()
+        for shown, src, key in wanted:
+            row = found.get((src, str(key)))
+            if row is None:
+                results[shown] = "not found"
+                continue
+            if (src, str(key)) in seen:
+                continue
+            seen.add((src, str(key)))
+            item = dict(row)
+            item["ref"] = span_ref(src, key)
+            item.setdefault("uptake", "unknown")
+            items.append(item)
+        await self._aspan_overlays(items)
+        block, truncated, omitted = (
+            format_fetched_spans(
+                items,
+                token_budget=injection_token_cap(self.config.max_tokens),
+                offset=offset,
+            )
+            if items else ("", {}, [])
+        )
+        payload: Dict[str, Any] = {"result": block or "no matches"}
+        if truncated:
+            payload["truncated"] = truncated
+        if omitted:
+            payload["omitted"] = omitted
+            payload["omitted_note"] = "output budget reached -- fetch these ids in another call"
+        if results:
+            payload["not_found_or_invalid"] = results
+        return json.dumps(payload)
+
+    async def _amemory_search(self, query: str, k: int) -> str:
+        """Spec 8, T8.3: the SAME embed+vector_search call prefetch uses
+        (_aembed_and_search) -- no second, independently-written query.
+
+        PR #117 review: hits carry the same provenance prefetch gives them
+        -- real conversation role (owner-scoped lookup), uptake/claim
+        overlays (so a repaired assistant attempt still renders as a
+        superseded note), ``doc`` speaker for memory_entry/doc_chunk -- and
+        source-qualified ids that memory_get can follow."""
+        from .provider_helpers import format_span_injection, span_ref
+        from .tokens import injection_token_cap
+
+        _emb, seeds = await self._aembed_and_search(query, k)
+        items: list[dict] = []
+        for s in seeds:
+            if s["similarity"] < self.config.min_similarity:
+                continue
+            if SECRET_RE.search(s.get("content") or ""):
+                continue
+            src = s.get("src")
+            turn_id = None
+            raw_id = str(s.get("id") or "").removeprefix("conv_")
+            if src == "conversation" and raw_id.isdigit():
+                turn_id = int(raw_id)
+            items.append({
+                "ref": span_ref(src, s.get("id")),
+                "turn_id": turn_id,
+                "src": src,
+                "content": s.get("content") or "",
+                "speaker": "doc" if src in ("doc_chunk", "memory_entry") else "unknown",
+                "uptake": "unknown",
+                "created_at": str(s.get("ts") or ""),
+                "score": s.get("similarity"),
+            })
+        conv_ids = [i["turn_id"] for i in items if i["turn_id"] is not None]
+        role_fetch = getattr(self.store, "conversations_by_ids", None)
+        if conv_ids and callable(role_fetch):
+            try:
+                rows = await role_fetch(conv_ids, agent_identity=self._agent_identity)
+                roles = {int(r["id"]): r.get("role") for r in rows}
+            except Exception:
+                logger.exception("memory_search role lookup failed")
+                roles = {}
+            for i in items:
+                if i["turn_id"] is not None and roles.get(i["turn_id"]):
+                    i["speaker"] = roles[i["turn_id"]]
+        await self._aspan_overlays(items)
+        block = format_span_injection(
+            items,
+            token_budget=injection_token_cap(self.config.max_tokens),
+            full_span_cap=int(getattr(self.config, "full_span_cap", 4)),
+            pointer_cap=int(getattr(self.config, "pointer_cap", 15)),
+            pointer_token_budget=int(getattr(self.config, "pointer_token_budget", 300)),
+        ) if items else ""
+        return json.dumps({"result": block or "no matches"})
 
     # -- config schema (powers `hermes memory setup`) -------------------------------
 
