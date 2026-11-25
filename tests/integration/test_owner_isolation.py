@@ -50,3 +50,36 @@ async def test_conversations_by_ids_filters_by_owner(store, clean_hermes_test_db
     rows = await store.conversations_by_ids([a1, b1], agent_identity="alice")
     assert [int(r["id"]) for r in rows] == [a1]
     assert len(await store.conversations_by_ids([a1, b1])) == 2  # operator view
+
+
+@pytest.mark.asyncio
+async def test_memory_entries_by_ids_filters_by_owner(store, clean_hermes_test_db) -> None:
+    """PR #117 review: memory_get dispatches mem:<id> pointers here, so the
+    lookup must be owner-scoped exactly like vector_search's memory_entries
+    branch (and skip file-backed rows, which search never surfaces)."""
+    async with store.pool.acquire() as conn:
+        a = await conn.fetchval(
+            "INSERT INTO memory_entries (agent_identity, target, content) "
+            "VALUES ('alice', 'memory', 'alice note') RETURNING id"
+        )
+        b = await conn.fetchval(
+            "INSERT INTO memory_entries (agent_identity, target, content) "
+            "VALUES ('bob', 'memory', 'bob note') RETURNING id"
+        )
+        f = await conn.fetchval(
+            "INSERT INTO memory_entries (agent_identity, target, content, metadata) "
+            "VALUES ('alice', 'memory', 'alice file row', '{\"file_path\": \"/x\"}') RETURNING id"
+        )
+    rows = await store.memory_entries_by_ids([a, b, f], agent_identity="alice")
+    assert [r["content"] for r in rows] == ["alice note"]
+
+
+@pytest.mark.asyncio
+async def test_doc_chunks_by_ids_returns_only_requested_chunks(store, clean_hermes_test_db) -> None:
+    async with store.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO doc_chunks (id, doc_hash, source, content) VALUES "
+            "('c1', 'h', 's', 'chunk one'), ('c2', 'h', 's2', 'chunk two')"
+        )
+    rows = await store.doc_chunks_by_ids(["c1", "missing"])
+    assert [(r["id"], r["content"]) for r in rows] == [("c1", "chunk one")]

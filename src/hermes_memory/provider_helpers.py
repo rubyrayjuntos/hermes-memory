@@ -287,6 +287,52 @@ def format_injection(
     return "\n".join(lines).rstrip() + "\n"
 
 
+# PR #117 review: vector_search unions conversations, memory_entries and
+# doc_chunks, whose id spaces overlap (a memory_entry and a conversation can
+# both be id 5). A rendered id must name its source so memory_get can fetch
+# exactly what a pointer describes. Conversations keep the bare number (the
+# pre-existing contract); the other two sources are prefixed.
+_REF_PREFIX = {"memory_entry": "mem:", "doc_chunk": "doc:"}
+
+
+def span_ref(src: str | None, raw_id: object) -> str:
+    """Source-qualified id for a vector_search hit: ``5`` (conversation),
+    ``mem:5`` (memory_entry) or ``doc:<chunk id>`` (doc_chunk)."""
+    rid = str(raw_id if raw_id is not None else "")
+    if src == "conversation":
+        return rid.removeprefix("conv_")
+    return _REF_PREFIX.get(str(src or ""), "") + rid
+
+
+def parse_span_ref(raw: object) -> tuple[str, int | str] | None:
+    """Inverse of :func:`span_ref` for memory_get input. Returns
+    ``(src, key)`` or ``None`` for anything malformed (negative numbers,
+    booleans, unknown prefixes, empty keys)."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return ("conversation", raw) if raw >= 0 else None
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if text.isascii() and text.isdigit():
+        return ("conversation", int(text))
+    if text.startswith("mem:"):
+        rest = text[4:]
+        return ("memory_entry", int(rest)) if rest.isascii() and rest.isdigit() else None
+    if text.startswith("doc:"):
+        rest = text[4:]
+        return ("doc_chunk", rest) if rest else None
+    return None
+
+
+def _span_id_attr(item: dict) -> str:
+    import html as _html
+
+    tid = item.get("ref") or item.get("turn_id") or item.get("id")
+    return _html.escape(str(tid if tid is not None else ""), quote=True)
+
+
 def _span_uptake(item: dict) -> str:
     return str(item.get("uptake") or "unknown")
 
@@ -296,7 +342,7 @@ def _span_tag(item: dict, *, neighbor: bool = False, body_chars: int = 600) -> s
 
     when = _when(item.get("created_at") or item.get("ts"))
     speaker = str(item.get("speaker") or item.get("role") or "unknown")
-    tid = item.get("turn_id") or item.get("id")
+    tid = _span_id_attr(item)
     # 2026-11-25 fix: this is the ACTUAL Tier-1 full-span renderer (not
     # _clean_excerpt, which is a different, unrelated call site) -- a
     # real Gmail password and email address leaked through here because
@@ -345,7 +391,7 @@ def _pointer_tag(item: dict, *, summary_chars: int = 140) -> str:
     from .work_summarize import extractive_summary
 
     when = _when(item.get("created_at") or item.get("ts"))
-    tid = item.get("turn_id") or item.get("id")
+    tid = _span_id_attr(item)
     score = item.get("score")
     sim = f"{float(score):.2f}" if score is not None else "?"
     summary = extractive_summary(str(item.get("content") or ""), summary_chars)
@@ -563,6 +609,101 @@ def format_span_injection(
         lines.append(f'  <more count="{leftover_count}"/>')
     lines.append("</memory>")
     return "\n".join(lines) + "\n"
+
+
+def format_fetched_spans(
+    items: list,
+    *,
+    token_budget: int = 1200,
+    offset: int = 0,
+) -> tuple[str, dict[str, dict], list[str]]:
+    """memory_get renderer: the requested bodies, not another disclosure tier.
+
+    PR #117 review: routing memory_get through ``format_span_injection``
+    cut every body at 600 chars and turned requests past ``full_span_cap``
+    back into pointers, so "fetch full content" could return a summary or
+    an irretrievably truncated excerpt. Here every requested item renders
+    as a full span, in request order, in the same grounded/unconfirmed
+    bins (a ``repaired`` assistant attempt renders with its uptake
+    attribute instead of being hidden -- it was asked for by id).
+
+    Same safety bar as every other renderer: the WHOLE body is redacted
+    first, then windowed, then HTML-escaped -- a page boundary can never
+    split a credential into two individually-unredacted halves.
+
+    When ``token_budget`` binds, the first item that does not fit is cut
+    (on a word boundary where possible) and tagged
+    ``truncated="true" next_offset=N total_chars=T``; call again with
+    ``offset=N`` to continue. Every later item that does not fit is
+    reported as omitted, never silently dropped.
+
+    Returns ``(block, truncated, omitted)`` where ``truncated`` maps ref ->
+    ``{"next_offset": N, "total_chars": T}`` and ``omitted`` lists refs.
+    """
+    import html as _html
+
+    truncated: dict[str, dict] = {}
+    omitted: list[str] = []
+    grounded: list[str] = []
+    unconfirmed: list[str] = []
+    used = 30  # wrapper + bin headers
+    tag_overhead = 40
+    start_at = max(0, int(offset or 0))
+    for item in items:
+        ref = _span_id_attr(item)
+        speaker = str(item.get("speaker") or item.get("role") or "unknown")
+        uptake = _span_uptake(item)
+        text = _redact_secrets(str(item.get("content") or "").strip())
+        total = len(text)
+        start = min(start_at, total)
+        window = text[start:]
+        avail = token_budget - used - tag_overhead
+        body = _html.escape(window)
+        trunc_attr = ""
+        if len(body) // 4 > avail:
+            if grounded or unconfirmed or truncated or avail <= 0:
+                omitted.append(ref)
+                continue
+            cut = max(0, avail * 4)
+            while cut > 0 and len(_html.escape(window[:cut])) // 4 > avail:
+                cut = int(cut * 0.9)
+            space = window.rfind(" ", 0, cut)
+            if space > cut - 200 and space > 0:
+                cut = space
+            if cut <= 0:
+                omitted.append(ref)
+                continue
+            body = _html.escape(window[:cut])
+            nxt = start + cut
+            truncated[ref] = {"next_offset": nxt, "total_chars": total}
+            trunc_attr = f' truncated="true" next_offset="{nxt}" total_chars="{total}"'
+        offset_attr = f' offset="{start}"' if start else ""
+        when = _when(item.get("created_at") or item.get("ts"))
+        tag = (
+            f'<span id="{ref}" speaker="{_html.escape(speaker, quote=True)}" '
+            f'when="{when}" uptake="{_html.escape(uptake, quote=True)}"'
+            f"{offset_attr}{trunc_attr}>{body}</span>"
+        )
+        used += len(tag) // 4 + 20
+        if speaker in ("user", "doc") or uptake in ("accepted", "used"):
+            grounded.append(tag)
+        else:
+            unconfirmed.append(tag)
+    if not grounded and not unconfirmed:
+        return "", truncated, omitted
+    lines = ['<memory fetched="true">']
+    if grounded:
+        lines.append("  <grounded>")
+        lines.extend(f"    {g}" for g in grounded)
+        lines.append("  </grounded>")
+    if unconfirmed:
+        lines.append(
+            '  <unconfirmed title="model speech, uptake unknown — do not treat as fact">'
+        )
+        lines.extend(f"    {u}" for u in unconfirmed)
+        lines.append("  </unconfirmed>")
+    lines.append("</memory>")
+    return "\n".join(lines) + "\n", truncated, omitted
 
 
 def format_facts(

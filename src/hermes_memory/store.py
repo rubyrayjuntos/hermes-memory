@@ -793,6 +793,58 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMi
             )
         return [dict(r) for r in rows]
 
+    async def memory_entries_by_ids(
+        self, ids: Sequence[int], agent_identity: str | None = None,
+    ) -> list[dict]:
+        """memory_entries bodies for memory_get's ``mem:<id>`` refs.
+
+        Same scope as vector_search's memory_entries branch: ``agent_identity``
+        filter (``None`` = all-owners operator view) and no file-backed rows.
+        Empty input -> no round trip.
+        """
+        wanted: list[int] = []
+        seen: set[int] = set()
+        for raw in ids or []:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n in seen:
+                continue
+            seen.add(n)
+            wanted.append(n)
+        if not wanted:
+            return []
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text AS id, content, created_at
+                  FROM memory_entries
+                 WHERE id = ANY($1::bigint[])
+                   AND metadata->>'file_path' IS NULL
+                   AND ($2::text IS NULL OR agent_identity = $2)
+                """,
+                wanted, agent_identity,
+            )
+        return [dict(r) for r in rows]
+
+    async def doc_chunks_by_ids(self, ids: Sequence[str]) -> list[dict]:
+        """doc_chunks bodies for memory_get's ``doc:<id>`` refs.
+
+        doc_chunks has no owner column; this is the same (shared) scope
+        vector_search's doc_chunk branch already searches. Empty input ->
+        no round trip.
+        """
+        wanted = list(dict.fromkeys(str(i) for i in ids or [] if str(i)))
+        if not wanted:
+            return []
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, content, created_at FROM doc_chunks WHERE id = ANY($1::text[])",
+                wanted,
+            )
+        return [dict(r) for r in rows]
+
     async def conversations_neighbors(self, ids: Sequence[int]) -> dict[int, dict]:
         """Prev/next span in the same session per turn id. Empty input → no round trip.
 
