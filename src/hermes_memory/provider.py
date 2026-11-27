@@ -44,7 +44,7 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
     should_purge_concept,
 )
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config, resolve_agent_identity
-from .embed import Embedder, vec_to_literal
+from .embed import Embedder, get_shared_embedder, vec_to_literal
 from .extract_model_client import OpenAIChatModelExtractor
 from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
@@ -190,7 +190,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             self._drain_task = None
             self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
             self._thread.start()
-            self.embedder = Embedder(
+            self.embedder = get_shared_embedder(
                 url=self.config.embed_url,
                 model=self.config.embed_model,
                 dim=self.config.embed_dim,
@@ -1093,14 +1093,20 @@ class HybridAgeMemoryProvider(MemoryProvider):
             pairs: list[tuple[int, int]] = []
             src_vecs: dict[int, list[float]] = {}
             confs: dict[tuple[int, int], float] = {}
+            # Batched (not one embed_text() call per mention -- found via
+            # the LongMemEval ingest-timing profile: this loop was ~67%
+            # of total ingest wall time, ~4.6 embed calls per landed
+            # turn-item, see docs/evals/longmemeval/ingest_timing_profile.json).
+            labels = [mentions[i].label for i in range(len(noun_ids) - 1)]
+            try:
+                batch_vecs = await embedder.embed_texts(labels)
+            except Exception:
+                batch_vecs = [None] * len(labels)
             for i in range(len(noun_ids) - 1):
                 src_id, tgt_id = noun_ids[i], noun_ids[i + 1]
                 pairs.append((src_id, tgt_id))
                 confs[(src_id, tgt_id)] = float(mentions[i].conf)
-                try:
-                    src_vec = await embedder.embed_text(mentions[i].label)
-                except Exception:
-                    src_vec = None
+                src_vec = batch_vecs[i] if i < len(batch_vecs) else None
                 if src_vec:
                     src_vecs[src_id] = src_vec
             if pairs:
