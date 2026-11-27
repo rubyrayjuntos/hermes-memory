@@ -13,6 +13,10 @@ pytestmark = [pytest.mark.store, pytest.mark.integration]
 TWO_IDS = (
     "RateLimiter talks to nomic-embed-text after we continue working on the drain path."
 )
+FIVE_MENTIONS = (
+    "RateLimiter, ConnectionPool, DatabasePool, CacheManager, and ThreadPool "
+    "all coordinate through EventBus during the drain cycle."
+)
 EMPTY_EXTRACT = (
     "yes also just only very much more most some any each every both either "
     "neither for from with without into onto about after before during since "
@@ -28,8 +32,10 @@ def _assert_hermes_test_dsn(dsn: str) -> None:
 class FakeEmbedder:
     def __init__(self, fail: set[str] | None = None) -> None:
         self.fail = set(fail or ())
+        self.embed_text_calls: list[str] = []
+        self.embed_texts_calls: list[list[str]] = []
 
-    async def embed_text(self, text: str, *, as_query: bool = False):
+    def _vec_for(self, text: str):
         if text == "__fail__" or text in self.fail:
             return None
         h = hashlib.sha256(text.encode("utf-8")).digest()
@@ -40,6 +46,14 @@ class FakeEmbedder:
         vec[2] = ((h[2] % 97) / 97.0) or 0.03
         vec[3] = 0.04
         return vec
+
+    async def embed_text(self, text: str, *, as_query: bool = False):
+        self.embed_text_calls.append(text)
+        return self._vec_for(text)
+
+    async def embed_texts(self, texts, *, as_query: bool = False):
+        self.embed_texts_calls.append(list(texts))
+        return [self._vec_for(t) for t in texts]
 
 
 def _parse_vec(raw) -> list[float]:
@@ -509,3 +523,85 @@ async def test_drain_never_raises_on_insert_fail(store, monkeypatch):
         "content": TWO_IDS,
         "previous_conversation_id": None,
     })
+
+
+@pytest.mark.asyncio
+async def test_mentions_embedded_in_one_batched_call_not_per_mention(
+    db_pool, store, clean_hermes_test_db, hermes_test_dsn,
+):
+    """A turn with several mentions must embed them with ONE embed_texts()
+    call, not one embed_text() call per mention -- found during the
+    LongMemEval ingest-timing profile: ~4.6 separate embed calls per
+    landed turn-item, almost all from this exact loop
+    (_awrite_turn's mentions-chain embedding, provider.py ~line 1101),
+    averaging 62-76% of total ingest wall time across 3 profiled
+    questions (docs/evals/longmemeval/ingest_timing_profile.json).
+    """
+    _assert_hermes_test_dsn(hermes_test_dsn)
+    embedder = FakeEmbedder()
+    provider = _make_provider(store, embedder)
+    sid = "sess-batch-embed"
+    await write_turn_item(provider, {
+        "type": "turn",
+        "session_id": sid,
+        "role": "user",
+        "content": FIVE_MENTIONS,
+        "previous_conversation_id": None,
+    })
+
+    # Sanity: this content really does produce several mentions -- if it
+    # stops doing so (extract_nouns heuristics change), this test would
+    # otherwise pass trivially for the wrong reason.
+    assert len(embedder.embed_texts_calls) >= 1, (
+        "expected at least one batched embed_texts() call for the "
+        "mentions chain -- got zero; either extract_nouns stopped "
+        "finding mentions in FIVE_MENTIONS, or the mentions loop never "
+        "ran. Check len(noun_ids) via a debugger before trusting a "
+        "green result here."
+    )
+    mention_batch_calls = [c for c in embedder.embed_texts_calls if len(c) > 1]
+    assert len(mention_batch_calls) == 1, (
+        f"expected exactly ONE batched embed_texts() call covering all "
+        f"mention labels, got {len(mention_batch_calls)} multi-item "
+        f"batch calls (embed_texts_calls={embedder.embed_texts_calls!r})"
+    )
+    assert len(mention_batch_calls[0]) >= 4, (
+        "expected the batch to cover at least 4 mention labels (5 "
+        f"mentions -> 4 adjacent pairs), got {mention_batch_calls[0]!r}"
+    )
+    # The old per-mention-call path must be GONE for this step: no
+    # embed_text() calls beyond the one for the turn's own whole-content
+    # embedding (_awrite_turn line ~938, unrelated to the mentions loop).
+    assert len(embedder.embed_text_calls) <= 1, (
+        f"expected at most one embed_text() call (the turn's own "
+        f"content embedding), got {len(embedder.embed_text_calls)}: "
+        f"{embedder.embed_text_calls!r} -- the mentions loop is still "
+        f"calling embed_text() per mention instead of batching"
+    )
+
+
+@pytest.mark.asyncio
+async def test_batched_mention_vectors_match_individual_calls_real_embedder():
+    """The batched embed_texts() call must return the SAME vectors (within
+    float tolerance) as embedding each mention individually -- batching
+    the API call must not quietly change what gets stored/retrieved.
+    Uses the REAL in-process fastembed Embedder (no DB needed), isolated
+    from the provider/store entirely.
+    """
+    from hermes_memory.embed import Embedder
+
+    embedder = Embedder(url="", model="nomic-embed-text")
+    labels = ["RateLimiter", "ConnectionPool", "DatabasePool", "CacheManager"]
+
+    batch_vecs = await embedder.embed_texts(labels)
+    individual_vecs = [await embedder.embed_text(label) for label in labels]
+
+    assert len(batch_vecs) == len(individual_vecs) == len(labels)
+    for i, (bv, iv) in enumerate(zip(batch_vecs, individual_vecs)):
+        assert bv is not None and iv is not None, f"embedding failed for {labels[i]!r}"
+        assert len(bv) == len(iv) == 768
+        max_diff = max(abs(a - b) for a, b in zip(bv, iv))
+        assert max_diff < 1e-4, (
+            f"batched vs individual embedding diverged for {labels[i]!r}: "
+            f"max abs diff {max_diff} >= 1e-4 tolerance"
+        )
