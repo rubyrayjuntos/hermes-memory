@@ -32,6 +32,12 @@ def _assert_hermes_test_dsn(dsn: str) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    reason="age_str() dollar-sign escape bug, issue #118 -- not fixed yet. "
+    "strict=True: if this starts passing, the bug was fixed and this "
+    "marker must be removed (XPASS fails the suite on purpose).",
+    strict=True,
+)
 async def test_merge_vertex_with_dollar_sign_in_name_does_not_silently_fail(
     db_pool, store: Store, clean_hermes_test_db, hermes_test_dsn,
 ):
