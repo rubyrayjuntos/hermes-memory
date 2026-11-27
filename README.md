@@ -5,14 +5,49 @@
 **Persistent memory & context injection for [Hermes Agent](https://github.com/nousresearch/hermes-agent)** —
 combining PostgreSQL + pgvector for semantic recall and Apache AGE for knowledge graph entity expansion, all in a single database.
 
-This is an **unofficial community plugin** (provider name `hybrid-age`). Status: **Alpha**. Tested against Hermes Agent v0.20.x. All database and API bindings are **loopback only** (`127.0.0.1`).
+This is an **unofficial community plugin** (provider name `hybrid-age`).
+**Status: v1.0.0, stable** for a single local operator. Tested against Hermes Agent v0.20.x.
+All database and API bindings are **loopback only** (`127.0.0.1`).
 
-Beta has not been declared. Its entry bar and remaining blockers are tracked in
-[`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
+- **Stable:** vector recall, tiered memory injection with the `memory_get` / `memory_search`
+  tools, rule-based claim extraction, the installer and lifecycle CLIs, and the Graph Explorer
+  (read-only).
+- **Opt-in, off by default:** model claim extraction (`extract_mode: rules_then_model`),
+  claims from assistant replies (`extract_assistant_replies`), and hybrid claim retrieval
+  (`retrieval_mode: hybrid`).
+- **EXPERIMENTAL: work capture** (`work_capture`, default `false`). This covers
+  `work_item` / `work_event` capture of what was done, decided, tried or failed, plus
+  session-level task splitting. It is off by default, and its gate (G5) has not passed. Turn it
+  on only if you want to try it and are happy to inspect the rows yourself.
+
+Production-scale criteria (fleet deploys, auth on non-loopback ports, a human-judged golden set
+in CI) are tracked separately in [`RELEASE_CRITERIA.md`](RELEASE_CRITERIA.md).
 
 > *A librarian doesn't just store books — she knows where everything is, retrieves the right volume at the right moment, and quietly discards what's stale.*
 
 Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
+
+### What it does
+
+Hermes forgets everything once a chat ends. The Librarian gives it long-term memory on your own
+machine:
+
+1. **It remembers your conversations.** Every turn is stored in a local Postgres database,
+   along with an embedding (a numeric fingerprint of its meaning) computed on your machine.
+   Nothing is sent to an outside embedding service.
+2. **It brings back what's relevant.** Before Hermes answers, the Librarian finds the past turns
+   closest to what you just said. It adds a few of them in full, plus short pointers to others,
+   in a fenced `<memory>` block.
+3. **The agent can dig deeper when it needs to.** If a pointer looks useful, Hermes can call
+   `memory_get` to read the full text, or `memory_search` to look for something else. This
+   helps most on questions that need several older facts at once (see Evaluation).
+4. **It learns facts, not just text.** A background worker pulls out simple claims ("I live in
+   Austin", "I work for Acme") and keeps their history. A correction replaces the old value
+   instead of contradicting it. These claims and entities live in a graph (Apache AGE) in the
+   same database, and you can browse them in the Graph Explorer.
+5. **It stays local and scoped.** Memory belongs to a Hermes profile, so profiles don't read
+   each other's memories. Ports bind to `127.0.0.1` only. Secrets such as passwords, tokens,
+   phone numbers and emails are redacted before stored text is shown to the model.
 
 ---
 
@@ -42,7 +77,7 @@ Package: `hermes-memory` · Product: **The Hermes Librarian** · License: MIT
 ## 🚀 Plugin User Guide
 
 You do **not** need to clone this repository to use the plugin. Source builds
-bundle the installation and migration assets into the wheel. The Alpha install
+bundle the installation and migration assets into the wheel. The install
 path is Git-based; the CD workflow creates GitHub Releases for tagged commits
 but does not publish a wheel to a package index.
 
@@ -104,16 +139,14 @@ as candidates and inspect them before relying on them for high-stakes decisions.
 
 ### Installation
 
-Install from an immutable Git revision rather than the moving `main` branch.
-This command uses the current reviewed snapshot; use a maintainer-announced
-release tag or full commit SHA when one is available:
+Install from the `v1.0.0` release tag with one command:
 
 ```bash
-pip install "git+https://github.com/rubyrayjuntos/hermes-memory@f2a02a527103907bc8e704288476bb6393e66e33" && hermes-memory-install --yes
+pip install "git+https://github.com/rubyrayjuntos/hermes-memory@v1.0.0" && hermes-memory-install --yes
 ```
 
-`v0.9.0` is an earlier pre-release for install testing, not the current Alpha
-snapshot or a public release.
+This installs from Git. The wheel is built from the tag and bundles the install and migration
+assets, so you don't need to clone the repo. No package is published to PyPI.
 
 The installer automatically:
 - Probes Docker and confirms the daemon is healthy.
@@ -235,11 +268,6 @@ python scripts/release_gate.py
 
 `hermes-memory-install` writes default settings to `~/.hermes/config.yaml`. Knobs under `hybrid_age:` include:
 
-> **Phase 3 retrieval options are unreleased.** They are implemented after the
-> `f2a02a5` baseline and are not included in the pinned install command above
-> until this work is merged and the pin is updated. `vector` remains the served
-> default; keep `hybrid` opt-in until the §9 evaluation gates pass.
-
 | Key | Default | Description |
 | :--- | :--- | :--- |
 | `dsn_env` | `HYBRID_AGE_DSN` | Environment variable containing the Postgres DSN |
@@ -255,6 +283,112 @@ python scripts/release_gate.py
 | `vector_k` | `12` | Top-$k$ nearest neighbors for vector recall |
 | `min_similarity` | `0.58` | Cosine similarity cutoff floor |
 | `max_tokens` | `1200` | Token budget for prompt injection block |
+| `tiered_injection` | `true` | Inject a few full spans plus pointer summaries, and give the agent `memory_get` / `memory_search`. Set `false` for the old unlimited-full-span behavior. |
+| `full_span_cap` | `4` | Maximum number of full spans in the memory block |
+| `pointer_cap` | `15` | Maximum number of pointer summaries |
+| `pointer_token_budget` | `300` | Token budget for pointer summaries |
+| `memory_tool_calls_per_turn` | `5` | Cap on `memory_get` / `memory_search` calls per turn |
+| `memory_scope` | `shared` | `shared`: one memory per profile across chats. `session`: each chat is isolated. |
+| `extract_assistant_replies` | `false` | Let assistant replies add claims. These are always `unconfirmed`. |
+| `work_capture` | `false` | **EXPERIMENTAL.** Capture work items and events from tool calls. |
+
+### Evaluation
+
+There were three rounds of live-model evals before tiered injection became the default. The
+first round was null, and it's included here because it shaped the next two. Every round used
+`anthropic/claude-sonnet-5` at temperature 0 with a fixed seed. Both conditions had the same
+tools, and grading was blind against a rubric frozen before any answers existed. "Off" means
+`tiered_injection: false` (unlimited full spans). "On" means tiered injection.
+
+**T8.4: 40 single-fact questions. Null result.**
+Source: [`docs/evals/t84_final_graded_report.json`](docs/evals/t84_final_graded_report.json)
+
+| | off | on |
+|---|---|---|
+| Mean score (n=38 per condition; 2 excluded per side for ground-truth defects) | 0.816 | 0.803 |
+| Delta (on − off) | | −0.013 |
+| Avg tokens per API call | 2,620 | 2,939 |
+| Pointer-follow rate ("on" run) | | 12/40 (0.30) |
+| Negative controls answered correctly | 4/4 | 4/4 |
+
+Tiering did not help here. These questions each need one fact. That fact either already fits
+in the full-span budget or the model searches for it, so pointers have nothing to add. We kept
+the default off and tested that explanation directly. The grading for this round also turned
+up a redaction gap, which was fixed before any further hosted calls (see the v1.0.0 changelog,
+Security).
+
+**T8.4b: 10 two-fact questions. Positive, but too small to trust.**
+Source: [`docs/evals/t84b_final_graded_report.json`](docs/evals/t84b_final_graded_report.json)
+
+| | off | on |
+|---|---|---|
+| Mean score | 0.450 (n=10) | 0.611 (n=9; 1 excluded as a harness artifact) |
+| Delta (on − off) | | +0.161 |
+| Avg tokens per API call | 2,823 | 4,081 |
+| Pointer-follow rate ("on" run) | | 7/10 (0.70) |
+
+This was the regime we expected pointers to help in, and they did. We still did not treat it
+as a pass. With n=9/10 the sample was small, the "off" baseline looked unusually low, and the
+token cost per call rose by about 45%. The "+45%" figure is as summarized in
+`docs/evals/t84c_final_report.json` → `decision_criteria_check`. Rationale:
+`docs/hermes-memory-dev-spec.md` §8.5.3.
+
+**T8.4c: 30 fresh multi-span questions + 5 single-fact controls, two blind graders, criteria
+fixed in advance. Pass.**
+Source: [`docs/evals/t84c_final_report.json`](docs/evals/t84c_final_report.json)
+
+| | Grader 1 | Grader 2 |
+|---|---|---|
+| All 35: off → on | 0.457 → 0.600 (+0.143) | 0.457 → 0.643 (+0.186) |
+| 30 multi-span: off → on | 0.400 → 0.567 | 0.400 → 0.617 |
+| Multi-span paired delta (95% CI) | +0.167 (0.069–0.264) | +0.217 (0.126–0.307) |
+| Multi-span win / loss / tie (on vs off) | 11 / 1 / 18 | 13 / 0 / 17 |
+| 5 single-fact controls: off → on | 0.800 → 0.800 | 0.800 → 0.800 |
+| Tokens per correct point: off → on | 6,125 → 6,836 | 6,125 → 6,378 |
+
+- Grader agreement: 62/70 (0.886).
+- Tokens per call: off 2,799, on 4,101 (+46.5%).
+- All 4 pre-committed criteria pass (`all_4_criteria_pass: true`). The tokens-per-point
+  criterion is recorded as a "borderline-pass".
+- Spend for this round: $1.45 (`spend_usd`).
+
+Caveats, also recorded in `docs/hermes-memory-dev-spec.md` §8.5.3:
+- The second grader was an independent subagent, but probably from the same model family. It
+  was not a different model or a human.
+- n=5 is a small control arm.
+- Individual fact anchors repeat across some of the 30 question pairs.
+
+**Result:** `tiered_injection` defaults to `true` from v1.0.0 onward. The cost is about 46% more
+tokens per call, in exchange for better answers on questions that need several facts. Set
+`tiered_injection: false` to opt out.
+
+### LongMemEval: in progress, results coming
+
+A full LongMemEval run (500 questions) is in progress and is not part of v1.0.0.
+
+A 20-question dry run exists (`docs/evals/longmemeval/dryrun_20q_final_report.json`). With 3–4
+questions per category, it is **too small to read as an accuracy result**, so we aren't quoting
+its scores. It was useful as a shakedown, and it surfaced:
+- the known issues below (#118, #119, #123);
+- 10 of 381 answer-evidence turns being dropped by the noise filter (`ingest_timing.evidence_turns_dropped_to_noise_filter`
+  in the same file).
+
+Full results, with methodology and those caveats, will land in a later release.
+
+### Known issues
+
+- [#118](https://github.com/rubyrayjuntos/hermes-memory/issues/118): text containing a `$`
+  (prices, shell variables) doesn't get a graph vertex. The failure is logged and the
+  conversation is still stored and retrievable, but the graph is missing those entities.
+- [#119](https://github.com/rubyrayjuntos/hermes-memory/issues/119): under very heavy write bursts,
+  a memory write can be dropped with only a WARNING log line, when both the queue and its
+  durable outbox fallback are saturated.
+- [#123](https://github.com/rubyrayjuntos/hermes-memory/issues/123): every stored turn reads the
+  whole noun table, so writing gets slower as the database grows. This mostly affects bulk
+  imports and very large memories.
+- [#125](https://github.com/rubyrayjuntos/hermes-memory/issues/125): a passport-isolation
+  property test fails on a clean `main` checkout (pre-existing, not a v1.0.0 regression). No
+  known user-facing impact; tracked for root-causing the test's over-strict assertion.
 
 ---
 
