@@ -1,0 +1,55 @@
+{
+  "purpose": "Before/after comparison for PR #122 (batch per-mention embeddings + share embedder) -- same 3 questions, same eval DB, re-profiled after the fix",
+  "per_question": [
+    {
+      "question_id": "75499fd8",
+      "before_total_s": 395.7,
+      "after_total_s": 328.06,
+      "speedup_total": 1.21,
+      "before_embed_s": 301.69,
+      "after_embed_s": 164.03,
+      "speedup_embed": 1.84,
+      "before_embed_calls": 2184,
+      "after_embed_calls": 472,
+      "call_reduction_x": 4.63,
+      "before_other_s": 86.85,
+      "after_other_s": 157.17
+    },
+    {
+      "question_id": "42ec0761",
+      "before_total_s": 328.45,
+      "after_total_s": 337.65,
+      "speedup_total": 0.97,
+      "before_embed_s": 203.85,
+      "after_embed_s": 157.3,
+      "speedup_embed": 1.3,
+      "before_embed_calls": 2359,
+      "after_embed_calls": 514,
+      "call_reduction_x": 4.59,
+      "before_other_s": 117.67,
+      "after_other_s": 172.79
+    },
+    {
+      "question_id": "18dcd5a5",
+      "before_total_s": 220.34,
+      "after_total_s": 331.33,
+      "speedup_total": 0.67,
+      "before_embed_s": 139.03,
+      "after_embed_s": 159.46,
+      "speedup_embed": 0.87,
+      "before_embed_calls": 2225,
+      "after_embed_calls": 481,
+      "call_reduction_x": 4.63,
+      "before_other_s": 76.5,
+      "after_other_s": 164.53
+    }
+  ],
+  "averages": {
+    "avg_total_speedup": 0.95,
+    "avg_embed_stage_speedup": 1.34,
+    "avg_embed_call_reduction": 4.62
+  },
+  "honest_finding": "The fix's embedding-specific win is real and proven directly: embed_calls dropped ~4.6x (one batched embed_texts() call instead of ~4.6 individual embed_text() calls per turn) and embed_seconds dropped 1.3-1.8x across all 3 questions. BUT the average TOTAL wall-clock speedup was ~0.95x (no net win, and q3 was 33% SLOWER overall) because the 'other' stage (extraction/bookkeeping, not embedding or graph merges) roughly doubled between the before and after runs.",
+  "root_cause_of_other_stage_inflation": "NOT a regression from this fix. Store.fetch_noun_labels() (store.py:919) runs 'SELECT label FROM noun' with no WHERE clause, no LIMIT -- a full-table scan, called once per turn write (provider.py:1049), scaling with the database's TOTAL cumulative noun count, not anything scoped to the current turn/session/owner. The eval DB grew ~1,400+ rows between the before and after profiling passes (my own repeated runs), making every subsequent turn's fetch_noun_labels() call slower -- unrelated to the embedding batching fix. Filed as github.com/rubyrayjuntos/hermes-memory#123. This means a 3-question sample profiled early in a run (as both rounds here were) cannot predict the true cost of later questions in a 500-question run, where the noun table grows continuously across ~250,000 turns -- the full run is likely considerably slower than naive extrapolation suggests, independent of this fix.",
+  "recommendation": "PR #122 (batch embeddings + share embedder) is a real, proven, worthwhile fix on its own terms (4.6x fewer embed calls, less memory pressure) and should merge regardless. But do NOT use these total-wall-clock numbers to project the full 500-question run's duration -- issue #123's full-table-scan bug is likely the bigger lever at that scale and should be assessed/fixed first, or the full run's timing will be a surprise."
+}
