@@ -46,15 +46,12 @@ async def test_merge_vertex_with_dollar_sign_in_name_does_not_silently_fail(
     results = await store.merge_vertices_batched(
         [("Concept", {"name": "price is $5", "weight": 1.0})]
     )
-    assert results == [None], (
-        "sanity check failed -- expected this to currently reproduce the "
-        "bug (None = silent merge failure); if this now fails, the bug "
-        "may already be fixed and this assertion should flip"
-    )
 
-    # The actual requirement once fixed: a real vertex id, not None.
-    # Left as an explicit xfail-style assertion so CI goes red until the
-    # age_str() fix lands, per the GitHub issue.
+    # The real requirement, RED until age_str() is fixed: a real vertex
+    # id, not None. (Reviewer finding, PR #120: a prior version of this
+    # test also asserted `results == [None]` as a "sanity check" -- that
+    # self-contradicted the real assertion below and could never pass
+    # under either the buggy OR the fixed implementation. Removed.)
     assert results[0] is not None, (
         "BUG: merge_vertices_batched silently dropped a vertex whose name "
         "contained a plain '$' character (InvalidEscapeSequenceError from "
