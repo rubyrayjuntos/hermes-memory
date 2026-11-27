@@ -194,6 +194,53 @@ def warm_local_embedder(model: str = STAMP_MODEL, dim: int = 768) -> None:
         raise RuntimeError("in-process embedder warm-up produced no vector")
 
 
+_shared_embedder_cache: dict[tuple[str, str, int], "Embedder"] = {}
+
+
+def get_shared_embedder(url: Optional[str], model: str, dim: int = 768) -> "Embedder":
+    """Process-wide Embedder cache, shared ONLY for local (in-process
+    fastembed/ONNX) configs -- HTTP-backed configs always get a fresh
+    instance (see below for why).
+
+    Every HybridAgeMemoryProvider.initialize() previously constructed
+    its own Embedder(), each lazily loading a full separate copy of the
+    fastembed ONNX model (nomic-embed-text-v1.5). Any process creating
+    more than one provider -- several Hermes profiles sharing a process,
+    a bulk-ingest benchmark -- paid that memory cost once per provider.
+    Confirmed as the dominant real-world leak during the LongMemEval
+    dry run: explicitly closing the asyncpg connection pool did NOT stop
+    memory growth; only sharing the embedder did (see issue #119's
+    addendum comment for the full trace, including a systemd-cgroup OOM
+    kill with "4G memory peak" after ~16-20 short-lived providers).
+
+    Local embedders are safe to share: ONNX Runtime sessions are
+    documented as safe for concurrent Run() calls from multiple threads,
+    and fastembed's TextEmbedding wraps exactly that. HTTP-backed
+    embedders are deliberately NOT cached here -- each one carries its
+    own AsyncOpenAI client, which binds to whichever asyncio loop
+    constructed it; sharing one across providers running on different
+    event loops/threads (which is exactly how HybridAgeMemoryProvider
+    is structured -- one dedicated loop thread per provider) would be a
+    real cross-loop hazard, not a safe optimization.
+    """
+    if not is_local_embed_url(url):
+        return Embedder(url=url, model=model, dim=dim)
+    key = (resolve_local_model_id(model), "", dim)
+    cached = _shared_embedder_cache.get(key)
+    if cached is None:
+        cached = Embedder(url=url, model=model, dim=dim)
+        _shared_embedder_cache[key] = cached
+    return cached
+
+
+def _clear_shared_embedder_cache() -> None:
+    """Test-only: reset the process-wide cache between test cases."""
+    _shared_embedder_cache.clear()
+
+
+get_shared_embedder.cache_clear = _clear_shared_embedder_cache  # type: ignore[attr-defined]
+
+
 def vec_to_literal(vec: List[float]) -> str:
     """Convert a float list to a pgvector literal ``'[0.1,0.2,...]'``."""
     return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"

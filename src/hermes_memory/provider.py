@@ -44,7 +44,7 @@ from .about_concepts import (  # noqa: F401 — re-export for existing tests
     should_purge_concept,
 )
 from .config import CONFIG_SCHEMA_FIELDS, HybridAgeConfig, load_config, resolve_agent_identity
-from .embed import Embedder, vec_to_literal
+from .embed import Embedder, get_shared_embedder, vec_to_literal
 from .extract_model_client import OpenAIChatModelExtractor
 from .reception import ReceptionStore
 from .schema_guard import apply_pending_migrations
@@ -190,7 +190,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
             self._drain_task = None
             self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
             self._thread.start()
-            self.embedder = Embedder(
+            self.embedder = get_shared_embedder(
                 url=self.config.embed_url,
                 model=self.config.embed_model,
                 dim=self.config.embed_dim,
