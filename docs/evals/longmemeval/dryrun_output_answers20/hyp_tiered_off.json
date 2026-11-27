@@ -1,0 +1,542 @@
+[
+  {
+    "question_id": "118b2229",
+    "hypothesis": "Your daily commute is 45 minutes each way.",
+    "usage": {
+      "prompt_tokens": 1595,
+      "completion_tokens": 18,
+      "total_tokens": 1613,
+      "cost": 0.00337,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00337,
+        "upstream_inference_prompt_cost": 0.00319,
+        "upstream_inference_completions_cost": 0.00018
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "6ade9755",
+    "hypothesis": "You take yoga classes at **Serenity Yoga** \u2014 you go there for your in-studio practice (favoring vinyasa flow classes), and you supplement with home practice using the **Down Dog** app on days you can't make it to the studio. You've also started a Sunday morning yoga and brunch routine with your friend Sarah.",
+    "usage": {
+      "prompt_tokens": 2048,
+      "completion_tokens": 106,
+      "total_tokens": 2154,
+      "cost": 0.005156,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.005156,
+        "upstream_inference_prompt_cost": 0.004096,
+        "upstream_inference_completions_cost": 0.00106
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "75499fd8",
+    "hypothesis": "Your dog Max is a Golden Retriever.",
+    "usage": {
+      "prompt_tokens": 2127,
+      "completion_tokens": 18,
+      "total_tokens": 2145,
+      "cost": 0.004434,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.004434,
+        "upstream_inference_prompt_cost": 0.004254,
+        "upstream_inference_completions_cost": 0.00018
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "faba32e5",
+    "hypothesis": "Alex marinated the BBQ ribs in his special sauce for 24 hours before grilling them.",
+    "usage": {
+      "prompt_tokens": 2148,
+      "completion_tokens": 34,
+      "total_tokens": 2182,
+      "cost": 0.004636,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.004636,
+        "upstream_inference_prompt_cost": 0.004296,
+        "upstream_inference_completions_cost": 0.00034
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "6cb6f249",
+    "hypothesis": "Based on what you've told me, you mentioned two separate breaks:\n\n1. A **week-long break** in mid-January (~7 days)\n2. A **10-day break** in mid-February\n\nThat totals **17 days** of social media breaks, based on what's in our conversation. If there were other breaks you mentioned elsewhere that aren't showing up here, let me know and I can dig further.",
+    "usage": {
+      "prompt_tokens": 2198,
+      "completion_tokens": 121,
+      "total_tokens": 2319,
+      "cost": 0.005606,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.005606,
+        "upstream_inference_prompt_cost": 0.004396,
+        "upstream_inference_completions_cost": 0.00121
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "75832dbd",
+    "hypothesis": "It looks like I can't run additional searches right now, so I'll answer based on what's directly visible.\n\nBased on the conversation history available to me, I don't have a record of specific publications or conferences actually being recommended to you. What I can confirm is that you asked a question requesting recommendations on deep learning topics in medical image analysis\u2014specifically around multi-modal image fusion, transfer learning, and domain adaptation\u2014but I don't have the corresponding response content showing actual paper titles, authors, or named conferences.\n\nIf you'd like, you can tell me more about what specific area you're most interested in (e.g., multi-modal fusion, transfer learning, or domain adaptation in medical imaging), and I can suggest some well-known papers, researchers, or conferences (like MICCAI, IEEE TMI, or Medical Image Analysis journal) from general knowledge rather than from our prior conversation.",
+    "usage": {
+      "prompt_tokens": 2387,
+      "completion_tokens": 287,
+      "total_tokens": 2674,
+      "cost": 0.007644,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.007644,
+        "upstream_inference_prompt_cost": 0.004774,
+        "upstream_inference_completions_cost": 0.00287
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "0edc2aef",
+    "hypothesis": "I don't have any record of a Miami trip in our conversation. The history I have shows you planning a romantic getaway to **Seattle**, where you settled on **The Edgewater Hotel** and its **Space Needle Romance Package** (room with a balcony hot tub facing the Space Needle, couples' breakfast, and a $100 massage credit).\n\nI don't have any details about a Miami trip \u2014 no dates, preferences, budget, or hotel discussion for that destination. If you'd like a Miami hotel suggestion, let me know things like your travel dates, budget, preferred area (South Beach, Brickell, Downtown, etc.), and what features matter to you (ocean view, pool, nightlife proximity, family-friendly, etc.), and I can help from there.",
+    "usage": {
+      "prompt_tokens": 2131,
+      "completion_tokens": 248,
+      "total_tokens": 2379,
+      "cost": 0.006742,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.006742,
+        "upstream_inference_prompt_cost": 0.004262,
+        "upstream_inference_completions_cost": 0.00248
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "38146c39",
+    "hypothesis": "I don't actually have any record in our conversation history of discussing chocolate chip cookies. The conversations I have access to cover cherry clafoutis (with brown sugar, almond flour, and sliced almonds) and carrot cake with cream cheese frosting (discussing muscovado, demerara, and turbinado sugars for a caramel flavor).\n\nIf you'd like advice on chocolate chip cookies, I'm happy to help fresh \u2014 could you tell me a bit about what you're looking to improve (texture, flavor depth, chewiness, etc.)?",
+    "usage": {
+      "prompt_tokens": 2014,
+      "completion_tokens": 181,
+      "total_tokens": 2195,
+      "cost": 0.005838,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.005838,
+        "upstream_inference_prompt_cost": 0.004028,
+        "upstream_inference_completions_cost": 0.00181
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "e6041065",
+    "hypothesis": "You said you packed 5 pairs of shoes on your last trip but only wore 2 (your sneakers and sandals) \u2014 that works out to **40%** of the shoes you packed actually being worn.",
+    "usage": {
+      "prompt_tokens": 2151,
+      "completion_tokens": 63,
+      "total_tokens": 2214,
+      "cost": 0.004932,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.004932,
+        "upstream_inference_prompt_cost": 0.004302,
+        "upstream_inference_completions_cost": 0.00063
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "51c32626",
+    "hypothesis": "I don't have a record of the specific date you submitted that research paper. You mentioned (in the context of your master's thesis background) that you had \"worked on a research paper on sentiment analysis, which I submitted to ACL,\" but no submission date was given for that paper itself. The only specific date mentioned was **February 1st**, which you referenced as **ACL's submission deadline** in the context of you reviewing for the conference \u2014 not necessarily the date you submitted your own paper.\n\nIf you can recall or clarify the actual date, I'm happy to help further with whatever you're working on.",
+    "usage": {
+      "prompt_tokens": 2074,
+      "completion_tokens": 180,
+      "total_tokens": 2254,
+      "cost": 0.005948,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.005948,
+        "upstream_inference_prompt_cost": 0.004148,
+        "upstream_inference_completions_cost": 0.0018
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_59149c77",
+    "hypothesis": "I don't have a record of you mentioning a visit to the Museum of Modern Art (MoMA) specifically. What I have on file is a visit to the \"Ancient Civilizations\" exhibit at the Metropolitan Museum of Art, and a separate mention of visiting \"an art museum\" where you saw a modern art exhibit featuring an installation made of recycled materials \u2014 but that museum wasn't named as MoMA, and both of these messages are timestamped the same day (2026-11-26).\n\nSo based on what's in the conversation history, I can't confirm a MoMA visit at all, and therefore can't calculate a day gap. If you did visit MoMA, could you clarify when that was?",
+    "usage": {
+      "prompt_tokens": 2184,
+      "completion_tokens": 220,
+      "total_tokens": 2404,
+      "cost": 0.006568,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.006568,
+        "upstream_inference_prompt_cost": 0.004368,
+        "upstream_inference_completions_cost": 0.0022
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_7f6b06db",
+    "hypothesis": "It looks like I don't actually have tool access available right now to search further, so I'll answer based solely on what's visible to me.\n\nFrom what's shown, I can identify only these trip-related mentions:\n\n1. **Muir Woods National Monument** \u2013 a day hike taken with family (mentioned as having just happened, \"today\")\n2. **Eastern Sierra** \u2013 a trip still being *planned* (looking at backpacks for an \"upcoming trip\"), not yet taken\n3. **Dubai** \u2013 an itinerary dated April 22, 2023, which may be a planned or past trip\n\nI don't have enough reliable information to confidently order \"three trips taken in the past three months,\" because:\n- The Eastern Sierra trip is explicitly upcoming, not completed\n- I don't have dates for the Muir Woods hike beyond \"today\" (undated relative reference)\n- The Dubai itinerary's status (planned vs. taken) isn't clear from what I have\n\nI don't actually have a confirmed record that identifies three completed trips with clear dates to order them. Could you clarify which three trips you mean, or let me know if there's additional context I should look for?",
+    "usage": {
+      "prompt_tokens": 2885,
+      "completion_tokens": 359,
+      "total_tokens": 3244,
+      "cost": 0.00936,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00936,
+        "upstream_inference_prompt_cost": 0.00577,
+        "upstream_inference_completions_cost": 0.00359
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_4fc4f797",
+    "hypothesis": "Searching isn't available right now, so I can only go by what's already shown to me.\n\nBased on that, I don't have enough information to answer precisely. Your messages reference:\n\n- Getting feedback from judges that the suspension was too soft in fast corners (no specific date given)\n- An open track day \"tomorrow\" at VIR\n- Another track day \"next month\" at VIR\n- A \"Track Day Frenzy\" event on May 15th\n\nNone of these snippets include an explicit date for when the judges' feedback was given, so I can't calculate the number of days between that feedback and your suspension test. If you can tell me the date you received the feedback, I can work out the gap for you.",
+    "usage": {
+      "prompt_tokens": 2445,
+      "completion_tokens": 209,
+      "total_tokens": 2654,
+      "cost": 0.00698,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00698,
+        "upstream_inference_prompt_cost": 0.00489,
+        "upstream_inference_completions_cost": 0.00209
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_e061b84g",
+    "hypothesis": "The event you mentioned was your **company's annual charity soccer tournament**, which you said you were participating in on the day you brought it up.",
+    "usage": {
+      "prompt_tokens": 2065,
+      "completion_tokens": 43,
+      "total_tokens": 2108,
+      "cost": 0.00456,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00456,
+        "upstream_inference_prompt_cost": 0.00413,
+        "upstream_inference_completions_cost": 0.00043
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "18bc8abd",
+    "hypothesis": "Based on your messages, you mentioned being \"currently obsessed with Kansas City Masterpiece BBQ sauce\" on your ribs. You've also mentioned loving Sweet Baby Ray's as a favorite you wanted to stock up on, but the specific word \"obsessed\" was tied to Kansas City Masterpiece.",
+    "usage": {
+      "prompt_tokens": 2336,
+      "completion_tokens": 110,
+      "total_tokens": 2446,
+      "cost": 0.005772,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.005772,
+        "upstream_inference_prompt_cost": 0.004672,
+        "upstream_inference_completions_cost": 0.0011
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "f685340e",
+    "hypothesis": "Based on what you've told me, you play tennis with your friends at the local park **every other week** (biweekly) \u2014 that's been consistent across what you've shared. I don't have any record indicating that frequency has changed, so there's no distinct \"previously vs. now\" difference noted in our conversation. If you've recently changed how often you play, I don't have that update \u2014 let me know and I can keep track going forward.",
+    "usage": {
+      "prompt_tokens": 2162,
+      "completion_tokens": 123,
+      "total_tokens": 2285,
+      "cost": 0.005554,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.005554,
+        "upstream_inference_prompt_cost": 0.004324,
+        "upstream_inference_completions_cost": 0.00123
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "42ec0761",
+    "hypothesis": "Yes \u2014 you mentioned that you have a spare screwdriver, which you picked up a while back when you were organizing your computer desk. So you're set for opening up your laptop to clean the fans.",
+    "usage": {
+      "prompt_tokens": 2154,
+      "completion_tokens": 62,
+      "total_tokens": 2216,
+      "cost": 0.004928,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.004928,
+        "upstream_inference_prompt_cost": 0.004308,
+        "upstream_inference_completions_cost": 0.00062
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "18dcd5a5",
+    "hypothesis": "I don't have access to the full text of that one-shot\u2014only short snippets from the beginning of the setup (the hook about Zoltar and the collector hiring the party). There's no visible content in what I have that lists enemy stat blocks or specifies a number of mummies encountered in the temple.\n\nSo I can't confirm how many mummies the party faces\u2014that detail isn't present in the portion of the conversation I have access to. If you have the full text saved elsewhere, I'd be happy to help analyze it, but I can't reliably state a number based on what's available to me here.",
+    "usage": {
+      "prompt_tokens": 2195,
+      "completion_tokens": 176,
+      "total_tokens": 2371,
+      "cost": 0.00615,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00615,
+        "upstream_inference_prompt_cost": 0.00439,
+        "upstream_inference_completions_cost": 0.00176
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "1568498a",
+    "hypothesis": "After 27...Bd5+, the move I made was **28. Kg3**, after which you played 28...Be6.",
+    "usage": {
+      "prompt_tokens": 3222,
+      "completion_tokens": 37,
+      "total_tokens": 3259,
+      "cost": 0.006814,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.006814,
+        "upstream_inference_prompt_cost": 0.006444,
+        "upstream_inference_completions_cost": 0.00037
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "7a8d0b71",
+    "hypothesis": "Based on everything available to me, I can't find any specific budget figure or percentage allocation for influencer marketing in the DHL Wellness Retreats campaign plan. The influencer marketing plan I have a record of outlines objectives and target audience, but it doesn't include a budget breakdown.\n\nIf a specific dollar amount or percentage was discussed, it isn't captured in what I'm able to retrieve. You may want to check your own notes or the original chat log directly to confirm that detail.",
+    "usage": {
+      "prompt_tokens": 2528,
+      "completion_tokens": 157,
+      "total_tokens": 2685,
+      "cost": 0.006626,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.006626,
+        "upstream_inference_prompt_cost": 0.005056,
+        "upstream_inference_completions_cost": 0.00157
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  }
+]

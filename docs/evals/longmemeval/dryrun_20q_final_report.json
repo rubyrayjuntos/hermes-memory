@@ -1,0 +1,89 @@
+{
+  "run": "LongMemEval dry run (20 questions, stratified, seed 20261126)",
+  "dataset": "LongMemEval_S (longmemeval_s_cleaned.json), HF revision 98d7416c24c778c2fee6e6f3006e7a073259d48f",
+  "hermes_memory_commit": "e55ac82 (v0.10.0)",
+  "model": "anthropic/claude-sonnet-5",
+  "temperature": 0.0,
+  "seed": 42424242,
+  "judge_model": "gpt-4o-2024-08-06 (routed via OpenRouter, OPENAI_BASE_URL -- verified exact snapshot served, no alias drift)",
+  "accuracy": {
+    "no_memory_baseline": 0.0,
+    "tiered_off": 0.55,
+    "tiered_on": 0.55
+  },
+  "accuracy_by_type": {
+    "tiered_off": {
+      "multi-session": [
+        1.0,
+        3
+      ],
+      "temporal-reasoning": [
+        0.25,
+        4
+      ],
+      "single-session-assistant": [
+        0.3333,
+        3
+      ],
+      "knowledge-update": [
+        0.6667,
+        3
+      ],
+      "single-session-preference": [
+        0.0,
+        3
+      ],
+      "single-session-user": [
+        1.0,
+        4
+      ]
+    },
+    "tiered_on": {
+      "multi-session": [
+        0.6667,
+        3
+      ],
+      "temporal-reasoning": [
+        0.25,
+        4
+      ],
+      "single-session-assistant": [
+        0.6667,
+        3
+      ],
+      "knowledge-update": [
+        0.6667,
+        3
+      ],
+      "single-session-preference": [
+        0.0,
+        3
+      ],
+      "single-session-user": [
+        1.0,
+        4
+      ]
+    }
+  },
+  "sample_size_caveat": "n=20 (3-4 per question type). NOT a reliable accuracy signal -- the on/off tie at 0.55 overall masks opposite per-category swings (multi-session -0.33, single-session-assistant +0.33) that are pure noise at n=3 per category. Decision-grade comparison (T8.4c-style, 30+ paired, two graders, 95% CI) would be needed before drawing any on/off conclusion for LongMemEval specifically.",
+  "cost": {
+    "answer_generation_usd": 0.3823,
+    "judge_grading_usd_estimated": 0.05,
+    "total_usd_estimated": 0.43,
+    "projected_full_500_usd": 10.75
+  },
+  "ingest_timing": {
+    "total_raw_turns_20q": 9833,
+    "total_landed": 9552,
+    "total_noise_skipped": 278,
+    "evidence_turns_dropped_to_noise_filter": "10/381",
+    "sum_per_question_seconds": 3994.9,
+    "avg_seconds_per_question_under_x4_contention_first16": 194.1,
+    "avg_seconds_per_question_serial_remaining4": 222.3,
+    "projected_full_500_hours_at_avg": 27.7
+  },
+  "known_issues_hit_during_run": [
+    "github.com/rubyrayjuntos/hermes-memory#118 (age_str dollar-sign escape breaks vertex MERGE) -- caught/logged, non-fatal, degrades gracefully (conversation rows still land, just missing graph vertices for affected claims)",
+    "github.com/rubyrayjuntos/hermes-memory#119 (silent QueueFull drop + related pool-leak under incomplete drain) -- the pool-leak variant OOM-killed two runs of this harness at the systemd cgroup level before being worked around at the harness level (explicit pool-close + shared embedder across short-lived providers)"
+  ]
+}

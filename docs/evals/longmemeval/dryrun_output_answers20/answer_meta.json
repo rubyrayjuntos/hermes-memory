@@ -1,0 +1,6 @@
+{
+  "spend_usd": 0.38232999999999995,
+  "model": "anthropic/claude-sonnet-5",
+  "temperature": 0.0,
+  "seed": 42424242
+}

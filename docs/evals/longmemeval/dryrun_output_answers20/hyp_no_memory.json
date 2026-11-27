@@ -1,0 +1,542 @@
+[
+  {
+    "question_id": "118b2229",
+    "hypothesis": "I don't have any information about you, your location, your workplace, or your commute\u2014since I have no memory of past conversations and nothing about this was included in your message. I have no way to know how long your daily commute is.\n\nIf you'd like an answer, you could tell me:\n- The distance between your home and work, or the starting/ending addresses or neighborhoods\n- Your mode of transportation (driving, walking, biking, public transit, etc.)\n- Typical traffic or transit conditions at the time you travel\n\nWith that information, I could give you an estimate, or you could simply let me know the actual time if you already track it yourself.",
+    "usage": {
+      "prompt_tokens": 73,
+      "completion_tokens": 189,
+      "total_tokens": 262,
+      "cost": 0.002036,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.002036,
+        "upstream_inference_prompt_cost": 0.000146,
+        "upstream_inference_completions_cost": 0.00189
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "6ade9755",
+    "hypothesis": "I don't have any information about your location, preferences, or personal circumstances, so I can't tell you where to take yoga classes. I also don't have memory of any past conversations with you, so there's nothing I can refer back to.\n\nIf you'd like a helpful answer, it would be useful to know things like:\n\n- Your city or neighborhood (so I could suggest the *type* of places to look, even if I can't give real-time local listings)\n- Whether you prefer in-person or online classes\n- Your experience level (beginner, intermediate, advanced)\n- Any style preferences (Hatha, Vinyasa, Ashtanga, Yin, etc.)\n- Budget considerations\n\nIn general, common places people find yoga classes include:\n- Local yoga studios\n- Gyms or fitness centers\n- Community centers or YMCAs\n- Online platforms (YouTube, apps like Glo, Alo Moves, Down Dog)\n- Parks (seasonal outdoor classes)\n- Searching Google Maps or Yelp for \"yoga studios near me\"\n\nLet me know more details and I can give more tailored suggestions!",
+    "usage": {
+      "prompt_tokens": 73,
+      "completion_tokens": 356,
+      "total_tokens": 429,
+      "cost": 0.003706,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.003706,
+        "upstream_inference_prompt_cost": 0.000146,
+        "upstream_inference_completions_cost": 0.00356
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "75499fd8",
+    "hypothesis": "I don't have any information about you or your dog from previous conversations\u2014I have no memory of past interactions, and nothing about your dog's breed was included in this message. If you'd like help figuring it out, you could tell me details like:\n\n- Size (small, medium, large)\n- Coat type and color (short, long, curly, color patterns)\n- Ear shape (floppy, pointed, erect)\n- Tail shape and length\n- General build (stocky, lean, etc.)\n- Any known background (shelter info, papers, breeder info)\n- A photo description\n\nWith that info, I can try to help narrow down likely breeds or mixes.",
+    "usage": {
+      "prompt_tokens": 70,
+      "completion_tokens": 196,
+      "total_tokens": 266,
+      "cost": 0.0021,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.0021,
+        "upstream_inference_prompt_cost": 0.00014,
+        "upstream_inference_completions_cost": 0.00196
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "faba32e5",
+    "hypothesis": "I don't have any information about \"Alex\" or BBQ ribs being marinated in a special sauce. This question seems to reference a specific conversation, story, recipe, or context that hasn't been shared with me, and I have no memory of past conversations.\n\nIf you can provide more details\u2014such as a recipe, article, or story this is from\u2014I'd be happy to help answer based on that information.",
+    "usage": {
+      "prompt_tokens": 85,
+      "completion_tokens": 117,
+      "total_tokens": 202,
+      "cost": 0.00134,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00134,
+        "upstream_inference_prompt_cost": 0.00017,
+        "upstream_inference_completions_cost": 0.00117
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "6cb6f249",
+    "hypothesis": "I don't have any information about your social media usage or breaks\u2014this is the start of our conversation, and I have no memory of past interactions or access to any personal data, logs, or tracking information about you.\n\nIf you're trying to figure out how many days you took breaks from social media, you'd need to check whatever record you have\u2014like a journal, an app that tracks screen time, notes, or a habit tracker you may have used.\n\nIf you can share the relevant dates or details here, I'd be happy to help you add them up!",
+    "usage": {
+      "prompt_tokens": 76,
+      "completion_tokens": 152,
+      "total_tokens": 228,
+      "cost": 0.001672,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001672,
+        "upstream_inference_prompt_cost": 0.000152,
+        "upstream_inference_completions_cost": 0.00152
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "75832dbd",
+    "hypothesis": "I don't actually have memory of past conversations, and this is a fresh conversation with no prior context about you. I also don't have real-time access to browse the internet or pull up current publication dates, conference schedules, or news\u2014my knowledge has a training cutoff and I can't verify what's \"recent\" as of today.\n\nTo give you a genuinely useful recommendation, it would help to know:\n\n1. **Your field or topic of interest** (e.g., machine learning, biology, economics, literature, etc.)\n2. **What kind of content you're looking for** \u2014 academic papers, industry reports, popular books, conference talks?\n3. **Your purpose** \u2014 are you researching something specific, looking for professional development, trying to stay current in a field, or just curious?\n4. **Format preference** \u2014 do you want big flagship conferences, niche/specialized ones, virtual options, etc.?\n\nIf you give me those details, I can suggest well-known, reputable conferences and types of publications relevant to that area based on what I know up to my training cutoff \u2014 though I'd recommend double-checking current dates, locations, and the latest editions since things change year to year and I can't confirm what's happening right now.",
+    "usage": {
+      "prompt_tokens": 85,
+      "completion_tokens": 362,
+      "total_tokens": 447,
+      "cost": 0.00379,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00379,
+        "upstream_inference_prompt_cost": 0.00017,
+        "upstream_inference_completions_cost": 0.00362
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "0edc2aef",
+    "hypothesis": "I don't have memory of past conversations, and I also don't have access to real-time data, personal booking tools, or browsing capability, so I can't look up current hotel availability, prices, or recent reviews for Miami.\n\nTo actually help you, I'd need a bit more info:\n\n- **What's your budget?** (budget, mid-range, luxury)\n- **Which area of Miami?** (South Beach, Downtown, Brickell, Coconut Grove, Key Biscayne, near the airport, etc.)\n- **What's the trip for?** (business, family vacation, romantic getaway, nightlife-focused, relaxation)\n- **Any must-haves?** (pool, beach access, pet-friendly, walkable to restaurants, quiet, family amenities)\n\nIn the meantime, here's a general sense of popular areas/types based on common knowledge (though specifics like current prices or exact hotel names may be outdated):\n\n- **South Beach** \u2013 iconic Art Deco hotels, nightlife, beach access (e.g., areas around Ocean Drive and Collins Ave)\n- **Brickell** \u2013 more business-oriented, high-rise hotels, good for nightlife and dining too\n- **Coconut Grove** \u2013 quieter, more laid-back, good for families\n- **Key Biscayne** \u2013 resort-style, beachy, quieter than South Beach\n- **Downtown Miami** \u2013 central, good for exploring museums, Bayside Marketplace, etc.\n\nFor the most accurate and current recommendations, I'd suggest checking sites like Google Maps reviews, Tripadvisor, Booking.com, or Expedia with filters for your dates, budget, and preferred area \u2014 they'll have real-time pricing and up-to-date guest reviews.\n\nIf you tell me more about your preferences, I can at least help you narrow down *which type of area or hotel category* might suit your trip best.",
+    "usage": {
+      "prompt_tokens": 85,
+      "completion_tokens": 602,
+      "total_tokens": 687,
+      "cost": 0.00619,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00619,
+        "upstream_inference_prompt_cost": 0.00017,
+        "upstream_inference_completions_cost": 0.00602
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "38146c39",
+    "hypothesis": "Here are some ways to level up chocolate chip cookies:\n\n**Flavor boosters**\n- Add a pinch more salt than usual, or flaky sea salt on top before baking \u2014 enhances sweetness and chocolate flavor\n- Brown the butter first \u2014 adds a nutty, caramel depth\n- Add a splash more vanilla extract than the recipe calls for\n- A tiny pinch of espresso powder intensifies the chocolate without tasting like coffee\n- Swap some or all white sugar for brown sugar for more chewiness and caramel notes\n\n**Texture tweaks**\n- Chill the dough for 24\u201348 hours before baking \u2014 deepens flavor and improves texture\n- Use a mix of chocolate \u2014 chopped chocolate bars/chunks instead of (or with) chips melt better and create pools of chocolate\n- Slightly underbake them, then let them finish setting on the hot pan\n- Try bread flour instead of all-purpose for a chewier bite\n\n**Mix-ins/toppings**\n- Toasted nuts (pecans, walnuts) for crunch\n- A mix of chocolate types \u2014 dark, milk, and chopped chunks together\n- Orange or lemon zest for brightness\n- A dash of cinnamon or nutmeg in the dry ingredients\n\n**Technique**\n- Don't overmix once flour is added \u2014 keeps cookies tender\n- Slightly underweigh your flour (measure by weight, not cups, if possible) to avoid dry, cakey cookies\n\nIf you tell me what specific result you're after \u2014 chewier, more chocolatey, crispier edges, etc. \u2014 I can give more targeted suggestions.",
+    "usage": {
+      "prompt_tokens": 89,
+      "completion_tokens": 534,
+      "total_tokens": 623,
+      "cost": 0.005518,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.005518,
+        "upstream_inference_prompt_cost": 0.000178,
+        "upstream_inference_completions_cost": 0.00534
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "e6041065",
+    "hypothesis": "I don't have any information about your packed shoes or your last trip\u2014I have no memory of past conversations and nothing about this was shared in your message. If you can tell me how many shoes you packed and how many you actually wore, I can calculate the percentage for you.",
+    "usage": {
+      "prompt_tokens": 82,
+      "completion_tokens": 79,
+      "total_tokens": 161,
+      "cost": 0.000954,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000954,
+        "upstream_inference_prompt_cost": 0.000164,
+        "upstream_inference_completions_cost": 0.00079
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "51c32626",
+    "hypothesis": "I don't have any record of a past conversation or memory of previous interactions\u2014each conversation I have starts fresh with no access to prior sessions. Since this is the first message you've sent me in this conversation, I have no information about a research paper on sentiment analysis or any submission date associated with it.\n\nIf you let me know the date, or any details you have on hand, I'm happy to help you keep track of it or assist with related questions going forward.",
+    "usage": {
+      "prompt_tokens": 80,
+      "completion_tokens": 132,
+      "total_tokens": 212,
+      "cost": 0.00148,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00148,
+        "upstream_inference_prompt_cost": 0.00016,
+        "upstream_inference_completions_cost": 0.00132
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_59149c77",
+    "hypothesis": "I don't have any record of a previous conversation or information about your visits to the Museum of Modern Art or the Metropolitan Museum of Art's 'Ancient Civilizations' exhibit. Since I have no memory of past conversations and this is the start of our discussion, I don't have access to the dates you're referring to.\n\nIf you can provide me with the specific dates of each visit, I'd be happy to calculate the number of days between them for you.",
+    "usage": {
+      "prompt_tokens": 121,
+      "completion_tokens": 139,
+      "total_tokens": 260,
+      "cost": 0.001632,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001632,
+        "upstream_inference_prompt_cost": 0.000242,
+        "upstream_inference_completions_cost": 0.00139
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_7f6b06db",
+    "hypothesis": "I don't have any information about your trips. This is the start of our conversation, and I have no memory of past conversations or access to any personal records, calendars, or travel history you might have.\n\nIf you'd like help figuring out the order of your trips, you could share the details with me now (such as dates or any identifying information about each trip), and I'd be happy to help you sort them out.",
+    "usage": {
+      "prompt_tokens": 87,
+      "completion_tokens": 111,
+      "total_tokens": 198,
+      "cost": 0.001284,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001284,
+        "upstream_inference_prompt_cost": 0.000174,
+        "upstream_inference_completions_cost": 0.00111
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_4fc4f797",
+    "hypothesis": "I don't have any information about this from our conversation\u2014I have no memory of past conversations or any prior messages where you mentioned receiving feedback about your car's suspension or testing a new setup. Since this is a new conversation with no context provided, I don't have the dates or details needed to calculate how many days passed.\n\nIf you can share the specific dates (or the context/details) of both events, I'd be happy to help you calculate the number of days between them.",
+    "usage": {
+      "prompt_tokens": 96,
+      "completion_tokens": 135,
+      "total_tokens": 231,
+      "cost": 0.001542,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001542,
+        "upstream_inference_prompt_cost": 0.000192,
+        "upstream_inference_completions_cost": 0.00135
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "gpt4_e061b84g",
+    "hypothesis": "I don't have any memory of past conversations\u2014each conversation I have starts fresh with no information carried over from previous sessions. Since this message doesn't include details about the sports event you mentioned, I have no way of knowing what it was.\n\nIf you let me know the details now, I'm happy to discuss it with you!",
+    "usage": {
+      "prompt_tokens": 86,
+      "completion_tokens": 95,
+      "total_tokens": 181,
+      "cost": 0.001122,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001122,
+        "upstream_inference_prompt_cost": 0.000172,
+        "upstream_inference_completions_cost": 0.00095
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "18bc8abd",
+    "hypothesis": "I have no way to know this \u2014 I don't have access to any past conversations or personal information about you, since each conversation starts fresh with no memory carried over. If you let me know which brand you're obsessed with (or what qualities you love in a BBQ sauce), I'm happy to chat about it!",
+    "usage": {
+      "prompt_tokens": 83,
+      "completion_tokens": 90,
+      "total_tokens": 173,
+      "cost": 0.001066,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001066,
+        "upstream_inference_prompt_cost": 0.000166,
+        "upstream_inference_completions_cost": 0.0009
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "f685340e",
+    "hypothesis": "I don't have access to any previous conversations or personal information about you, since I have no memory of past interactions and this is the start of our conversation. I don't know how often you used to play tennis with your friends at the local park or how often you play now.\n\nIf you'd like to tell me these details, I'm happy to discuss them with you in this conversation!",
+    "usage": {
+      "prompt_tokens": 88,
+      "completion_tokens": 102,
+      "total_tokens": 190,
+      "cost": 0.001196,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001196,
+        "upstream_inference_prompt_cost": 0.000176,
+        "upstream_inference_completions_cost": 0.00102
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "42ec0761",
+    "hypothesis": "I don't have any memory of past conversations or access to information about your belongings, home, or tools. Since this is a fresh conversation with no prior context, I have no way of knowing what you own or where your things are.\n\nTo find out if you have a spare screwdriver for opening your laptop, you'll need to check yourself\u2014typically you'd look for:\n\n- A small precision/jeweler's screwdriver set (laptops often use tiny Phillips #00 or Torx screws, like T5 or T6)\n- Toolboxes, junk drawers, or electronics repair kits you may have\n- Any kit that came with furniture or electronics assembly (sometimes include small screwdrivers)\n\nIf you don't have one, they're inexpensive and widely available at hardware stores, electronics shops, or online. If you let me know what laptop model you have, I can tell you what size/type of screwdriver you'd specifically need.",
+    "usage": {
+      "prompt_tokens": 83,
+      "completion_tokens": 284,
+      "total_tokens": 367,
+      "cost": 0.003006,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.003006,
+        "upstream_inference_prompt_cost": 0.000166,
+        "upstream_inference_completions_cost": 0.00284
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "18dcd5a5",
+    "hypothesis": "I don't have any record of a previous chat with you \u2014 each conversation I have starts fresh with no memory of earlier sessions. So I don't have details about a \"Lost Temple of the Djinn\" one-shot you may have discussed before, including how many mummies the party would face.\n\nIf you can share the details of the adventure (or paste the relevant section), I'd be happy to help you work out encounter numbers, balance the mummy fight, or recreate that content with you now.",
+    "usage": {
+      "prompt_tokens": 112,
+      "completion_tokens": 144,
+      "total_tokens": 256,
+      "cost": 0.001664,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001664,
+        "upstream_inference_prompt_cost": 0.000224,
+        "upstream_inference_completions_cost": 0.00144
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "1568498a",
+    "hypothesis": "I don't have any memory of past conversations or sessions \u2014 each conversation I have starts fresh with no access to previous interactions, including any chess games we may have played. So I have no record of a game between us, the moves leading up to move 27, or anything played after 27. Kg2 Bd5+.\n\nIf you'd like, you can paste the game notation (PGN) or describe the position here, and I can help analyze what a good follow-up move would be after 27. Kg2 Bd5+ (for instance, discussing typical responses like 28. f3, 28. e4, or king moves, depending on the full board position).",
+    "usage": {
+      "prompt_tokens": 103,
+      "completion_tokens": 188,
+      "total_tokens": 291,
+      "cost": 0.002086,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.002086,
+        "upstream_inference_prompt_cost": 0.000206,
+        "upstream_inference_completions_cost": 0.00188
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  },
+  {
+    "question_id": "7a8d0b71",
+    "hypothesis": "I don't have access to any previous conversations\u2014each conversation I have starts with no memory of past chats, and I have no record of a prior discussion about a \"DHL Wellness Retreats campaign\" or any budget allocation details for influencer marketing within it.\n\nIf you'd like help with this now, you could share the relevant details or campaign plan with me in this conversation, and I'd be happy to help you review, calculate, or discuss the influencer marketing allocation from there.",
+    "usage": {
+      "prompt_tokens": 118,
+      "completion_tokens": 146,
+      "total_tokens": 264,
+      "cost": 0.001696,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.001696,
+        "upstream_inference_prompt_cost": 0.000236,
+        "upstream_inference_completions_cost": 0.00146
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    }
+  }
+]

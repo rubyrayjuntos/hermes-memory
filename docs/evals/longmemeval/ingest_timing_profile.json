@@ -1,0 +1,55 @@
+{
+  "purpose": "Profile where per-question LongMemEval ingest time goes, to decide the batching lever before committing to the full 500-question run",
+  "method": "Monkeypatched Embedder.embed_text and StoreMergeMixin.merge_vertices_batched to accumulate wall-clock time, ran 3 representative questions (491/521/503 haystack turns) through the real sync_turn -> drain pipeline, extract_mode=rules_only (the production default)",
+  "per_question": [
+    {
+      "question_id": "75499fd8",
+      "n_turns_enqueued": 249,
+      "t_total_s": 395.7,
+      "embed_seconds": 301.69,
+      "embed_calls": 2184,
+      "merge_seconds": 7.16,
+      "merge_calls": 1347,
+      "merge_items": 1347,
+      "other_seconds": 86.85,
+      "pct_embed": 76.2,
+      "pct_merge": 1.8,
+      "pct_other": 21.9
+    },
+    {
+      "question_id": "42ec0761",
+      "n_turns_enqueued": 265,
+      "t_total_s": 328.45,
+      "embed_seconds": 203.85,
+      "embed_calls": 2359,
+      "merge_seconds": 6.93,
+      "merge_calls": 1465,
+      "merge_items": 1465,
+      "other_seconds": 117.67,
+      "pct_embed": 62.1,
+      "pct_merge": 2.1,
+      "pct_other": 35.8
+    },
+    {
+      "question_id": "18dcd5a5",
+      "n_turns_enqueued": 255,
+      "t_total_s": 220.34,
+      "embed_seconds": 139.03,
+      "embed_calls": 2225,
+      "merge_seconds": 4.81,
+      "merge_calls": 1383,
+      "merge_items": 1383,
+      "other_seconds": 76.5,
+      "pct_embed": 63.1,
+      "pct_merge": 2.2,
+      "pct_other": 34.7
+    }
+  ],
+  "averages": {
+    "pct_embed": 67.1,
+    "pct_merge": 2.0,
+    "pct_other": 30.8,
+    "avg_embed_calls_per_sync_turn": 8.8
+  },
+  "finding": "Embedding dominates (62-76% of wall time, avg 67%), NOT graph writes (consistently ~2%). The real inefficiency: ~8.8 separate embed_text() calls per sync_turn -- one call per extracted entity/mention/concept, not batched. Graph merges are already cheap and fast. Recommendation: batch embedding calls (collect a turn's texts, call embed_texts() once) before committing to the full 500-question run -- this is the real lever to shrink the ~28h projection, not parallelizing providers (already shown to not help, issue #119) and not optimizing graph writes (already fast)."
+}
