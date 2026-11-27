@@ -8,6 +8,12 @@ versioning follows [SemVer](https://semver.org/).
 
 `main` and branch work since tag `v0.9.0`.
 
+### Known Issues
+- `test_two_sessions_share_nouns_without_passport_bleed` (property test, hypothesis-driven) fails on a clean `main` checkout -- confirmed pre-existing, not a regression from any merged PR. The `observed_boosts == {0.0, 1.0}` assertion is too strict for some small hypothesis-shrunk examples (few labels/turns can legitimately produce zero 2-hop provenance-boosted edges). Marked `xfail` (not `strict`, since hypothesis-driven generation could legitimately XPASS by chance on some runs) so it doesn't block the `v1.0.0` release-gate tag. Tracked at [#125](https://github.com/rubyrayjuntos/hermes-memory/issues/125).
+- `fetch_noun_labels()` runs an unscoped `SELECT label FROM noun` on every turn write, scaling with the database's total cumulative noun count rather than anything request-scoped. Found profiling the LongMemEval benchmark's ingest timing; does not block this release (benchmark-scale ingest only). Tracked at [#123](https://github.com/rubyrayjuntos/hermes-memory/issues/123).
+- `age_str()` escapes a plain `$` in a way AGE's Cypher grammar rejects, silently dropping the affected graph vertex (conversation row still lands; only the graph write is skipped). Reproduced with a test (`xfail(strict=True)`, PR #120). Tracked at [#118](https://github.com/rubyrayjuntos/hermes-memory/issues/118).
+- Under sustained write pressure, `sync_turn()` can silently drop a write with only a WARNING-level log line and no caller-visible signal, if the outbox durability fallback is itself starved by the same load. Reproduced with a test (`xfail(strict=True)`, PR #121). Tracked at [#119](https://github.com/rubyrayjuntos/hermes-memory/issues/119).
+
 ### Added
 - Entities with alias equations and merges; span deletion API that rebuilds what the spans supported.
 - Health and verify report claims by status, job counts, drift repair and the legacy migration check.
