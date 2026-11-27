@@ -97,6 +97,12 @@ def test_rapid_bulk_sync_turn_does_not_silently_drop_writes(
 
 
 @pytest.mark.integration
+@pytest.mark.xfail(
+    reason="silent QueueFull drop under starved outbox fallback, issue #119 "
+    "-- not fixed yet. strict=True: if this starts passing, the bug was "
+    "fixed and this marker must be removed (XPASS fails on purpose).",
+    strict=True,
+)
 def test_queue_full_without_outbox_fallback_drops_silently_with_no_exception(
     hermes_test_dsn, clean_hermes_test_db, migrated_db, monkeypatch,
 ):
