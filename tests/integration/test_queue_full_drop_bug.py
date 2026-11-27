@@ -77,7 +77,15 @@ def test_rapid_bulk_sync_turn_does_not_silently_drop_writes(
             import asyncio
             asyncio.run_coroutine_threadsafe(queue.join(), loop).result(timeout=120)
     finally:
-        pass
+        # Review finding, PR #121: initialize() starts a dedicated
+        # event-loop thread, connection pool, drain task, and periodic
+        # outbox-replay task; queue.join() does not stop any of those.
+        # An un-shut-down provider can replay deferred outbox rows
+        # AFTER clean_hermes_test_db truncates tables for the next
+        # test, contaminating it. Always shut down before teardown,
+        # even if an assertion above raised.
+        if hasattr(provider, "shutdown"):
+            provider.shutdown()
 
     assert provider._dropped_writes == 0, (
         f"BUG: {provider._dropped_writes} writes were silently, irrecoverably "
@@ -148,20 +156,28 @@ def test_queue_full_without_outbox_fallback_drops_silently_with_no_exception(
                 pass
     finally:
         logger.removeHandler(handler)
+        # Review finding, PR #121: same teardown gap as the first test --
+        # shut down before clean_hermes_test_db truncates for the next
+        # test, even if an assertion raised.
+        if hasattr(provider, "shutdown"):
+            provider.shutdown()
 
-    assert provider._dropped_writes > 0, (
-        "expected this scenario to reproduce a real drop; if 0, either "
-        "the outbox-defer path is more robust than assumed here, or "
-        "queue_maxsize=2 with 50 rapid writes isn't enough to force it -- "
-        "re-check before trusting the 'no drop' result"
-    )
+    # Accept ANY of the fix shapes the issue explicitly allows, instead
+    # of requiring the data-loss behavior to remain (review finding,
+    # PR #121): a drop still happening with no caller-visible signal is
+    # the ONLY outcome this test should reject.
+    if raised:
+        # Fix made the drop caller-visible via an exception -- the gap
+        # this test guards against ("no exception, no caller-visible
+        # signal") is closed. Nothing more to check.
+        return
+    if provider._dropped_writes == 0:
+        # Fix used blocking/backpressure to avoid the drop entirely --
+        # also closes the gap. Nothing more to check.
+        return
 
-    # The actual, desired fix contract: an irrecoverable drop (no outbox
-    # fallback available) must be loud enough to alert on -- ERROR or
-    # higher, not WARNING (which routine log-level filtering commonly
-    # suppresses in production). Today it's logged at WARNING only, so
-    # this is expected to fail until the log level (or a block/raise
-    # alternative) is fixed.
+    # A drop happened and nothing was raised to the caller -- the only
+    # remaining acceptable outcome is a loud enough log to notice it.
     drop_records = [r for r in log_records if "queue full" in r.getMessage()]
     assert drop_records, "expected at least one 'queue full' log record"
     assert any(r.levelno >= logging.ERROR for r in drop_records), (
