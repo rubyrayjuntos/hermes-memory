@@ -6,6 +6,9 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **`scripts/migrate.py` sorted migrations lexicographically, not numerically** -- "V10" sorted before "V2" as strings, so every double-digit migration ran before every single-digit one. Latent since V10 landed; didn't affect `v1.0.0` because no migration before V24 happened to depend on a table a single-digit migration created in a separate file, so either order produced the same end state. Exposed by V24 (`ALTER TABLE noun ...`), which depends on V9 (`CREATE TABLE noun ...`): CI caught it as `relation "noun" does not exist` on a fresh database. Fixed to sort by the numeric version. No hotfix needed for `v1.0.0`; already-installed databases have V1-V23 recorded and only run V24 under the corrected order.
+
 ## [1.0.0] - 2026-11-27
 
 First public release. Covers everything on `main` since tag `v0.9.0`, including what
