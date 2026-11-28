@@ -6,35 +6,158 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
-`main` and branch work since tag `v0.9.0`.
+## [1.0.0] - 2026-11-27
 
-### Known Issues
-- `test_two_sessions_share_nouns_without_passport_bleed` (property test, hypothesis-driven) fails on a clean `main` checkout -- confirmed pre-existing, not a regression from any merged PR. The `observed_boosts == {0.0, 1.0}` assertion is too strict for some small hypothesis-shrunk examples (few labels/turns can legitimately produce zero 2-hop provenance-boosted edges). Marked `xfail` (not `strict`, since hypothesis-driven generation could legitimately XPASS by chance on some runs) so it doesn't block the `v1.0.0` release-gate tag. Tracked at [#125](https://github.com/rubyrayjuntos/hermes-memory/issues/125).
-- `fetch_noun_labels()` runs an unscoped `SELECT label FROM noun` on every turn write, scaling with the database's total cumulative noun count rather than anything request-scoped. Found profiling the LongMemEval benchmark's ingest timing; does not block this release (benchmark-scale ingest only). Tracked at [#123](https://github.com/rubyrayjuntos/hermes-memory/issues/123).
-- `age_str()` escapes a plain `$` in a way AGE's Cypher grammar rejects, silently dropping the affected graph vertex (conversation row still lands; only the graph write is skipped). Reproduced with a test (`xfail(strict=True)`, PR #120). Tracked at [#118](https://github.com/rubyrayjuntos/hermes-memory/issues/118).
-- Under sustained write pressure, `sync_turn()` can silently drop a write with only a WARNING-level log line and no caller-visible signal, if the outbox durability fallback is itself starved by the same load. Reproduced with a test (`xfail(strict=True)`, PR #121). Tracked at [#119](https://github.com/rubyrayjuntos/hermes-memory/issues/119).
+First public release. Covers everything on `main` since tag `v0.9.0`, including what
+tag `v0.10.0` (`e55ac82`) pins. `v0.10.0` was a pin for the LongMemEval dry run, not a
+release, and it has no changelog section of its own.
 
 ### Added
-- Entities with alias equations and merges; span deletion API that rebuilds what the spans supported.
-- Health and verify report claims by status, job counts, drift repair and the legacy migration check.
-- Retrieval eval harness for the provider (`scripts/eval_memory.py`, PR #90).
-- Durable write outbox (V16 `write_outbox`): `sync_turn` / `on_memory_write` record each write before queuing it; a full queue defers to the outbox instead of dropping; leftover rows replay at start and every 30 s with `SKIP LOCKED` claims; shutdown releases claims; replays carry `outbox_id` into row metadata so a turn is not written twice. V16 is in the installed head check.
-- Harness metrics: entity coverage, cross-owner leakage, and a burst/shutdown/replay durability mode (`--durability N`).
+- **Tiered memory injection and agent fetch tools (Spec 8, #117).** The injected memory block
+  now holds a capped number of full spans (`full_span_cap`, default 4) plus short pointer
+  summaries (`pointer_cap` 15, `pointer_token_budget` 300). The agent gets two provider-scoped
+  tools: `memory_get` (fetch full bodies by id) and `memory_search` (search memory directly).
+  Per-turn limits: `memory_get_max_ids` 10, `memory_search_max_k` 10,
+  `memory_tool_calls_per_turn` 5.
+- **Graph layer: claims, extraction, shadow retrieval (#91).**
+  - Owner-scoped claims built from evidence rows, with event-time timelines (V18).
+  - A `durable_job` queue (V19), with rules and model extraction running on a worker off the
+    prompt path.
+  - A `retrieval_shadow` log (V20/V21) that compares RRF/MMR claim retrieval with a bounded
+    2-hop walk against the served path, without changing the prompt.
+- **Opt-in hybrid claim retrieval (#94):** `retrieval_mode: hybrid` serves grounded facts with
+  cited supporting turns. The default stays `vector`.
+- **Opt-in model claim extraction with batching and usage tracking (`f2a02a5`).**
+  `extract_mode: rules_then_model` batches eligible user turns (8 turns, 10-minute idle,
+  30 minutes from the first turn, or session close). `/api/health` reports pending jobs,
+  model calls and token usage. The default stays `rules_only`.
+- **Spec 3 model tier (#103, #105, #106):**
+  - First-person grounding.
+  - Same-session context loading.
+  - `extract_model_schema` (`json_object` | `json_schema`).
+  - Wider paraphrase cues and role normalization.
+  - Content-free turns no longer enqueue model jobs.
+- **Spec 4: assistant replies as unconfirmed claims (#108),** behind
+  `extract_assistant_replies` (default `false`). Assistant-only facts stay `unconfirmed` and
+  never become current on their own. Injected `<memory>` blocks are stripped before extraction.
+- **Spec 5: work memory, EXPERIMENTAL (#109, #110):**
+  - `work_item` / `work_artifact` / `work_event` tables (V23), behind `work_capture`
+    (default `false`).
+  - Keyed HMAC content hashes.
+  - Fixed false positives in the verdict matcher, and synthetic rows are no longer picked as
+    the "ask".
+  - Nothing populates `work_artifact` yet (T5.5b). Gate G5, which decides whether this turns
+    on by default, has not passed.
+- **Spec 7: session-level task splitting for work capture (#115).** Uses rule-based boundaries
+  with no model call. Each closed segment gets its own `extract_work` job. Marker-only
+  segments merge into a neighbor, and status lookahead is added. Gate G7 decides whether
+  production item extraction runs.
+- **Claims Graph Explorer (#93):** a live storage inspector at
+  `http://127.0.0.1:7890/api/librarian/explorer`, owner-scoped and read-only, with an optional
+  Hermes Desktop sidebar pin (`desktop-plugins/graph-explorer/`).
+- **Spec 0 golden-extraction eval harness (#95), plus Spec 1 paste segmentation with a
+  `document` speaker and Spec 2 first-person functional rules (#96):**
+  - First-person rules: `lives_in` / `based_in` / `works_for` / `role_is`.
+  - Migration V22.
+  - Golden-set precision went from 0.556 to 0.909 and recall from 0.455 to 0.909. Sources:
+    `docs/evals/2026-11-17-golden-rules-only.json` (before) and
+    `docs/evals/2026-11-17-spec1-2-merged-golden-rules-only.json` (after).
+- Entities with alias equations and merges; a span deletion API that rebuilds what the spans
+  supported.
+- Health and verify report claims by status, job counts, drift repair, and the legacy
+  migration check.
+- Retrieval eval harness for the provider (`scripts/eval_memory.py`, #90).
+- Durable write outbox (V16 `write_outbox`, V17 idempotency):
+  - `sync_turn` / `on_memory_write` record each write before queuing it.
+  - When the queue is full, the write is deferred to the outbox instead of dropped.
+  - Leftover rows replay at start and every 30 s with `SKIP LOCKED` claims.
+  - Replays carry `outbox_id`, so a turn is not written twice. (See Known issues: #119.)
+- Harness metrics: entity coverage, cross-owner leakage, and a burst/shutdown/replay
+  durability mode (`--durability N`).
+- The resolved Postgres target is logged at startup with the password stripped (`redacted_dsn()`,
+  #111).
 
 ### Changed
-- Local integration smoke tests honor pytest's explicit `--dsn` and reject targets
-  outside the isolated `hermes_test` database.
-- Extraction jobs convert captured ISO timestamps to timezone-aware datetimes before
-  binding them to PostgreSQL `timestamptz` parameters.
-- `hermes-memory-verify --dsn` now uses that DSN for the provider write path as
-  well as direct probes, preventing split-target verification.
-- Claims are owner-scoped and derived from evidence (`claim_evidence`); `status` replaces `valid`, which is now a read-only mirror. Contradictory statements resolve to the newer one instead of being held back.
-- Functional facts (lives in, works for, based in, …) keep an event-time history; corrections restore the previous value.
-- Write capture uses the new `durable_job` table; `write_outbox` is no longer written.
-- Graph expansion is owner-scoped: a path is kept only if one of its provenance turns belongs to this memory owner, and its provenance is trimmed to those turns (`Store.owned_turn_ids`).
-- Embeddings default to in-process fastembed/ONNX (`nomic-embed-text`, 768-d). Ollama is no longer a prerequisite; `hermes-memory-install` warms the local model instead of probing/pulling Ollama. Set `HYBRID_AGE_EMBED_URL` only for an optional HTTP override. Upgrading installs: remove a leftover `HYBRID_AGE_EMBED_URL=…11434…` from `.env` to switch off Ollama.
-- **`tiered_injection` now defaults to `true`** (Spec 8, Gate G8 passed on T8.4c, `docs/evals/t84c_final_report.json`): both independent graders' 95% CIs on the paired multi-span accuracy delta exclude zero, win/loss favors "on" 11-1 and 13-0, and the 5 single-fact controls show zero regression. The injected memory block now packs a capped number of full spans plus pointer summaries, and the agent gets `memory_get`/`memory_search` fetch tools, instead of unlimited full spans. Set `tiered_injection: false` in a profile's config to opt back into the old unlimited-full-span behavior.
-- `memory_get` / `memory_search` (PR #117 review): rendered ids are source-qualified (bare number = conversation, `mem:<id>` = memory entry, `doc:<id>` = doc chunk) and `memory_get` fetches each from its own owner-scoped table (`Store.memory_entries_by_ids`, `Store.doc_chunks_by_ids`). `memory_get` returns full bodies via `format_fetched_spans` (redact whole body, then window, then escape), reports `truncated` with `next_offset` (resume with `offset`) and `omitted` ids when the output budget binds, and never converts requested ids into pointers. `memory_search` applies the real conversation role and the same uptake/claim overlays as prefetch.
+- **`tiered_injection` now defaults to `true`** (Spec 8, Gate G8 passed on T8.4c,
+  `docs/evals/t84c_final_report.json`).
+  - Both independent graders' 95% CIs on the paired multi-span accuracy delta exclude zero.
+  - Win/loss favors "on" 11-1 and 13-0.
+  - The 5 single-fact controls show zero regression.
+  - The two earlier rounds are in the same file trail: T8.4 was null
+    (`docs/evals/t84_final_graded_report.json`) and T8.4b was small
+    (`docs/evals/t84b_final_graded_report.json`).
+  - To get the old unlimited-full-span behavior back, set `tiered_injection: false` in a
+    profile's config.
+- `memory_get` / `memory_search` ids are source-qualified (#117 review):
+  - A bare number is a conversation, `mem:<id>` is a memory entry, and `doc:<id>` is a doc
+    chunk. `memory_get` fetches each one from its own owner-scoped table.
+  - `memory_get` returns full bodies (redact the whole body, then window, then escape). When the
+    output budget binds, it reports `truncated` with `next_offset` and lists `omitted` ids.
+  - `memory_search` applies the real conversation role and the same uptake/claim overlays as
+    prefetch.
+- **Ingest embeds mentions in batches (#122).** A turn's mention labels go through one
+  `embed_texts()` call instead of one `embed_text()` call per mention. On the 3 profiled
+  LongMemEval questions this meant about 4.6× fewer embed calls and 1.3–1.8× less time in the
+  embedding stage (`docs/evals/longmemeval/batching_fix_before_after.json`).
+  - Total wall-clock per question did not improve in that measurement (average 0.95×). The
+    eval database grew between passes, and the unscoped noun-label scan (#123) got slower as it
+    grew.
+  - Vectors match per-call embedding within 1e-4.
+- **The local embedder is shared process-wide (#122).** In-process fastembed/ONNX embedders are
+  cached by model, so creating several providers in one process no longer loads several copies
+  of the model. HTTP-backed embedders are deliberately not shared, because they are bound to
+  the event loop that created them.
+- **Retrieval packing (#114):**
+  - Similarity is now the primary sort key within a bin.
+  - 30% of the token budget is reserved for the strongest matches across both bins.
+  - The default `min_similarity` floor went from 0.55 to 0.58.
+- Embeddings default to in-process fastembed/ONNX (`nomic-embed-text`, 768-d), and Ollama is
+  no longer a prerequisite. `hermes-memory-install` warms the local model. Set
+  `HYBRID_AGE_EMBED_URL` only if you want an HTTP override. When upgrading an install, remove
+  any leftover `HYBRID_AGE_EMBED_URL=…11434…` from `.env` to switch off Ollama.
+- Claims are owner-scoped and derived from evidence (`claim_evidence`).
+  - `status` replaces `valid`, which is now a read-only mirror.
+  - Contradictory statements resolve to the newer one.
+  - Functional facts (lives in, works for, based in, …) keep an event-time history, and
+    corrections restore the previous value.
+- Rules extraction is stricter: `RULES_VERSION` 4, proper names must be mixed-case, and Title-Case
+  `is` needs a proper-name subject. Markdown/code junk objects are rejected, and shell pastes
+  count as code (#99, #100, #101).
+- Write capture uses the `durable_job` table, and `write_outbox` is no longer written.
+- Graph expansion is owner-scoped. A path is kept only if one of its provenance turns belongs
+  to this memory owner, and its provenance is trimmed to those turns.
+- `hermes-memory-verify --dsn` uses that DSN for the provider write path too.
+- Local integration smoke tests honor pytest's explicit `--dsn` and reject targets outside the
+  isolated `hermes_test` database.
+- Extraction jobs convert captured ISO timestamps to timezone-aware datetimes before binding
+  them to `timestamptz`.
+
+### Security
+- **Redaction hardening (#117).** While grading the T8.4 eval, two real secrets were found
+  passing through the full-span render path: a password written in prose and a phone number.
+  `_span_tag` (the Tier-1 / `memory_get` path) now redacts before escaping. New rules cover
+  prose passwords, phone numbers and email addresses, and the JWT-shape and prose-password
+  patterns were tightened against false positives. The leaked copies were scrubbed. Details:
+  `docs/hermes-memory-dev-spec.md` §8.5.1.
+- Work-item summaries redact credentials before summarizing (#115).
+- The legacy injection renderer now escapes stored content, so a span containing
+  `</PAST_CONTEXT>` or a fake `<system>` block can no longer close the memory fence (#114).
+
+### Known issues
+- [#118](https://github.com/rubyrayjuntos/hermes-memory/issues/118): content containing `$`
+  fails to get a graph vertex. The failure is logged as a warning and not fatal; the
+  conversation row still lands. Reproduced with a test (`xfail(strict=True)`, PR #120).
+- [#119](https://github.com/rubyrayjuntos/hermes-memory/issues/119): under heavy write pressure,
+  when the outbox fallback also times out, `sync_turn()` can drop a write with only a WARNING
+  log line. Reproduced with a test (`xfail(strict=True)`, PR #121).
+- [#123](https://github.com/rubyrayjuntos/hermes-memory/issues/123): every turn write reads the
+  whole `noun` table, so ingest slows as the database grows.
+- [#125](https://github.com/rubyrayjuntos/hermes-memory/issues/125): `test_two_sessions_share_nouns_without_passport_bleed`
+  (property test, hypothesis-driven) fails on a clean `main` checkout -- confirmed pre-existing,
+  not a regression from any merged PR. The `observed_boosts == {0.0, 1.0}` assertion is too
+  strict for some small hypothesis-shrunk examples (few labels/turns can legitimately produce
+  zero 2-hop provenance-boosted edges). Marked `xfail` (not `strict`, since hypothesis-driven
+  generation could legitimately XPASS by chance on some runs), PR #126.
 
 ## [0.9.0] - 2026-11-14
 

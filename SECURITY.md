@@ -2,8 +2,9 @@
 
 ## Supported versions
 
-This project is **Alpha**. Only the latest commit on `main` is supported.
-Version tags are not supported unless a release announcement says otherwise.
+This project is **v1.0.0, stable for a single local operator**. The latest
+tagged release and the latest commit on `main` are supported. Earlier version
+tags are not supported unless a release announcement says otherwise.
 In particular, `v0.9.0` was an install-testing pre-release and is not a public
 supported release.
 

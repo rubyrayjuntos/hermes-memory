@@ -2,6 +2,12 @@
 
 This is a **destination**, not a status label and not a roadmap.
 
+**`v1.0.0` means "stable for a single local operator."** It is not a Production
+claim: the Production-only rows below (fleet deploys, auth on non-loopback
+ports, a human-judged golden set in CI) remain explicitly open after this tag.
+`v1.0.0` closes the MVP/Beta-shaped bar this file already describes for a
+single loopback operator; it does not change what Production requires.
+
 `pyproject.toml` `0.9.0` and README **Alpha, local trust** describe *where we are*.
 This file says what **done** means, on two independent tracks plus one
 **derived** seam (Observability & Control), at two bars.
@@ -242,3 +248,4 @@ transcript (`DEFINITION_OF_DONE.md`). Remaining release blockers:
 | 1.2 | 2026-09-05 | 2026-11-13 | Claude | Record the automated isolated lifecycle run and its defect fixes; no criteria status changes. |
 | 1.3 | 2026-09-05 | 2026-11-14 | Claude | Add current install, dependency and memory-scope evidence and list remaining release blockers; no status changes. |
 | 1.4 | 2026-09-05 | 2026-11-14 | Claude | Note V16 outbox retry under `D-MVP-1`; record tag `v0.9.0` (matches `pyproject.toml` 0.9.0) under `D-PROD-4` and in the blocker list; point the installed pin at the bundled build's version file. No status changes. |
+| 1.5 | 2026-09-05 | 2026-11-27 | Claude | Add a note that `v1.0.0` means "stable for a single local operator," not a Production claim. No criteria status changes. |
