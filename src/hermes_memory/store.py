@@ -541,16 +541,20 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMi
             return await self._upsert_noun_on_conn(conn, label, type)
 
     async def _upsert_noun_on_conn(self, conn, label: str, type: str | None = None) -> int:
+        from .extract_nouns import _slug
+
         row = await conn.fetchrow(
             """
-            INSERT INTO noun (label, type)
-            VALUES ($1, $2)
+            INSERT INTO noun (label, type, slug)
+            VALUES ($1, $2, $3)
             ON CONFLICT (label) DO UPDATE SET
-              type = COALESCE(EXCLUDED.type, noun.type)
+              type = COALESCE(EXCLUDED.type, noun.type),
+              slug = EXCLUDED.slug
             RETURNING id
             """,
             label,
             type,
+            _slug(label),
         )
         return int(row["id"])
 
@@ -919,6 +923,24 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMi
     async def fetch_noun_labels(self) -> list[str]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT label FROM noun")
+        return [r["label"] for r in rows]
+
+    async def fetch_noun_labels_for_slugs(self, slugs: Sequence[str]) -> list[str]:
+        """Issue #123: the per-turn hot path's version of fetch_noun_labels().
+
+        Filters on the generated+indexed `noun.slug` column (V24) instead of
+        reading the whole table, so lookup time stops scaling with the
+        database's total noun count. `slugs` is the output of
+        extract_nouns.candidate_label_slugs(text) -- the set of slugs this
+        turn's text could possibly resolve against -- not the raw surfaces.
+        """
+        if not slugs:
+            return []
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT label FROM noun WHERE slug = ANY($1::text[])",
+                list(dict.fromkeys(slugs)),
+            )
         return [r["label"] for r in rows]
 
     # -- Reception: aliases, uptake, claims, retraction -----------------------

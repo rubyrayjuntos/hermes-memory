@@ -925,7 +925,7 @@ class HybridAgeMemoryProvider(MemoryProvider):
 
     async def _awrite_turn(self, store: Store, embedder: Embedder, item: dict) -> None:
         """Stages A–F. Never raises. B commits even if AGE / manifold fail."""
-        from .extract_nouns import extract_nouns
+        from .extract_nouns import candidate_label_slugs, extract_nouns
 
         session_id = item.get("session_id") or ""
         content = item.get("content") or ""
@@ -1046,9 +1046,11 @@ class HybridAgeMemoryProvider(MemoryProvider):
         try:
             existing = []
             try:
-                existing = await store.fetch_noun_labels()
+                candidate_slugs = candidate_label_slugs(content)
+                if candidate_slugs:
+                    existing = await store.fetch_noun_labels_for_slugs(candidate_slugs)
             except Exception:
-                logger.warning("fetch_noun_labels failed", exc_info=True)
+                logger.warning("fetch_noun_labels_for_slugs failed", exc_info=True)
             mentions = extract_nouns(
                 content,
                 existing_labels=existing,

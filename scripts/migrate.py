@@ -85,7 +85,10 @@ def list_migrations(migrations_dir: Path):
         content = p.read_bytes()
         checksum = hashlib.sha256(content).hexdigest()
         files.append((version, p.name, p, checksum, content.decode("utf-8", errors="replace")))
-    return sorted(files, key=lambda x: x[0])
+    # Numeric order, not lexicographic: "V2" must sort before "V10" so a
+    # migration like V24 (ALTER TABLE noun ...) never runs before the V9
+    # that CREATEs the table it depends on.
+    return sorted(files, key=lambda x: int(x[0][1:]))
 
 
 def main(argv: list[str] | None = None) -> int:
