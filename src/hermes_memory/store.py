@@ -541,16 +541,20 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMi
             return await self._upsert_noun_on_conn(conn, label, type)
 
     async def _upsert_noun_on_conn(self, conn, label: str, type: str | None = None) -> int:
+        from .extract_nouns import _slug
+
         row = await conn.fetchrow(
             """
-            INSERT INTO noun (label, type)
-            VALUES ($1, $2)
+            INSERT INTO noun (label, type, slug)
+            VALUES ($1, $2, $3)
             ON CONFLICT (label) DO UPDATE SET
-              type = COALESCE(EXCLUDED.type, noun.type)
+              type = COALESCE(EXCLUDED.type, noun.type),
+              slug = EXCLUDED.slug
             RETURNING id
             """,
             label,
             type,
+            _slug(label),
         )
         return int(row["id"])
 
