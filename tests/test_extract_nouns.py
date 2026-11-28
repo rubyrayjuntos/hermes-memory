@@ -126,7 +126,7 @@ def test_scoped_existing_labels_give_identical_results_to_full_table():
     """The whole point of #123: filtering existing_labels down to only the
     rows whose slug is in candidate_label_slugs(text) must never change what
     extract_nouns() returns, compared to passing every label in the table."""
-    from hermes_memory.extract_nouns import candidate_label_slugs, _slug
+    from hermes_memory.extract_nouns import _slug, candidate_label_slugs
 
     # A simulated "whole table" -- including labels with a different surface
     # but same canonical slug as a candidate (this is exactly the case the
