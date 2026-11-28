@@ -3,7 +3,7 @@
 Package layout per docs/plans/v0.1.md §2.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 
 def register(ctx):

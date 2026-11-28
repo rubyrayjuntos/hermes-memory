@@ -3,7 +3,7 @@
 # gateway. Keep this list identical to [project].dependencies in pyproject.toml
 # (tests/test_bundled_install.py enforces it).
 name: hybrid-age
-version: 1.0.0
+version: 1.0.1
 description: Postgres + pgvector + Apache AGE memory provider for Hermes
 pip_dependencies:
   - "psycopg[binary]>=3.0"
