@@ -6,7 +6,25 @@ versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-28
+
 ### Fixed
+- **#123 — the per-turn noun label lookup scanned the entire `noun` table.**
+  `fetch_noun_labels()` ran an unscoped `SELECT label FROM noun` on every
+  turn, so cost grew with total nouns stored, not with the current turn.
+  Replaced with `candidate_label_slugs()` (computes the current turn's
+  candidate slugs with no DB access) + `Store.fetch_noun_labels_for_slugs()`
+  (`WHERE slug = ANY($1)`, backed by a new `idx_noun_slug` index). A
+  20-question growth check after the fix, ingested into one continuously
+  growing database (14,576 noun rows by the end), showed a flat
+  seconds-per-turn curve (mean 301.6ms, stdev 14.6ms, weak r=0.45 vs.
+  cumulative rows) — the fix holds as the table grows.
+  - `noun.slug` (migration `V24__noun_label_slug_index.sql`) is a plain
+    column, not SQL-`GENERATED`: Python's `_slug()` and Postgres's `lower()`
+    diverge on some non-ASCII input (Turkish dotted capital `İ` lowercases
+    to two codepoints in Python, one in Postgres), so the authoritative
+    value is written once in Python on every `upsert_noun()` call, with a
+    best-effort SQL backfill for rows that predate the migration.
 - **`scripts/migrate.py` sorted migrations lexicographically, not numerically** -- "V10" sorted before "V2" as strings, so every double-digit migration ran before every single-digit one. Latent since V10 landed; didn't affect `v1.0.0` because no migration before V24 happened to depend on a table a single-digit migration created in a separate file, so either order produced the same end state. Exposed by V24 (`ALTER TABLE noun ...`), which depends on V9 (`CREATE TABLE noun ...`): CI caught it as `relation "noun" does not exist` on a fresh database. Fixed to sort by the numeric version. No hotfix needed for `v1.0.0`; already-installed databases have V1-V23 recorded and only run V24 under the corrected order.
 
 ## [1.0.0] - 2026-11-27
