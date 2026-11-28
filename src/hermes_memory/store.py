@@ -921,6 +921,24 @@ class Store(StoreExpandMixin, StoreMergeMixin, StoreConceptsMixin, StoreClaimsMi
             rows = await conn.fetch("SELECT label FROM noun")
         return [r["label"] for r in rows]
 
+    async def fetch_noun_labels_for_slugs(self, slugs: Sequence[str]) -> list[str]:
+        """Issue #123: the per-turn hot path's version of fetch_noun_labels().
+
+        Filters on the generated+indexed `noun.slug` column (V24) instead of
+        reading the whole table, so lookup time stops scaling with the
+        database's total noun count. `slugs` is the output of
+        extract_nouns.candidate_label_slugs(text) -- the set of slugs this
+        turn's text could possibly resolve against -- not the raw surfaces.
+        """
+        if not slugs:
+            return []
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT label FROM noun WHERE slug = ANY($1::text[])",
+                list(dict.fromkeys(slugs)),
+            )
+        return [r["label"] for r in rows]
+
     # -- Reception: aliases, uptake, claims, retraction -----------------------
     # Write path for the provenance-first contract. conversations rows are the
     # spans; these methods only add overlay rows. All no-op safe pre-migration

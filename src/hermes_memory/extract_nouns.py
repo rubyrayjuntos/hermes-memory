@@ -316,6 +316,53 @@ def _conf_for(kind: str, is_alias: bool) -> float:
     }.get(kind, CONF_MULTIWORD)
 
 
+def _passes_candidate_filters(surface: str, kind: str, text: str) -> bool:
+    """Shared gate between candidate_label_slugs() and extract_nouns()'s main
+    loop (issue #123) -- a surface must pass this before either function
+    looks at its slug, so the two can never disagree about which slugs a
+    turn's text could possibly resolve against."""
+    if len(surface) > 45:
+        return False
+    if len(surface.split()) > 4:
+        return False
+    if _denylisted(surface):
+        return False
+    if is_junk_fragment_label(surface):
+        return False
+    words = surface.split()
+    if len(words) == 1:
+        if _is_bare_english_word(surface):
+            return False
+        low = surface.lower()
+        if low in AMBIGUOUS_SHORT and not short_term_is_real(surface, text):
+            return False
+        if kind == "acronym" and not short_term_is_real(surface, text):
+            return False
+    return True
+
+
+def candidate_label_slugs(text: str) -> list[str]:
+    """Slugs that extract_nouns(text, existing_labels=...) could possibly
+    resolve against, computed with no DB access (issue #123). A caller fetches
+    only the `noun` rows whose slug is in this list -- via
+    ``Store.fetch_noun_labels_for_slugs`` -- instead of the whole table, and
+    gets an identical result from extract_nouns() either way (see
+    test_scoped_existing_labels_give_identical_results_to_full_table)."""
+    if not text:
+        return []
+    candidates = _collect_candidates(text)
+    slugs: list[str] = []
+    seen: set[str] = set()
+    for surface, _offset, kind in candidates:
+        if not _passes_candidate_filters(surface, kind, text):
+            continue
+        slug = _slug(surface)
+        if slug and slug not in seen:
+            seen.add(slug)
+            slugs.append(slug)
+    return slugs
+
+
 def extract_nouns(
     text: str,
     *,
@@ -336,24 +383,8 @@ def extract_nouns(
     mention_index = 0
 
     for surface, _offset, kind in candidates:
-        if len(surface) > 45:
+        if not _passes_candidate_filters(surface, kind, text):
             continue
-        if len(surface.split()) > 4:
-            continue
-        if _denylisted(surface):
-            continue
-        if is_junk_fragment_label(surface):
-            continue
-
-        words = surface.split()
-        if len(words) == 1:
-            if _is_bare_english_word(surface):
-                continue
-            low = surface.lower()
-            if low in AMBIGUOUS_SHORT and not short_term_is_real(surface, text):
-                continue
-            if kind == "acronym" and not short_term_is_real(surface, text):
-                continue
 
         label, _base_conf, is_alias = _resolve_label(surface, existing_by_slug)
 

@@ -109,6 +109,9 @@ async def test_awrite_turn_flower_failure_is_graph_degraded():
         async def fetch_noun_labels(self):
             return []
 
+        async def fetch_noun_labels_for_slugs(self, slugs):
+            return []
+
         async def write_noun_passports(self, *args, **kwargs):
             return []
 
