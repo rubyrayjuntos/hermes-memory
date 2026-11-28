@@ -1,0 +1,44 @@
+[
+  {
+    "query_from_question": "e47becba",
+    "run_under_identity_of": "118b2229",
+    "injected_chars": 3419,
+    "leaked_fragment_count": 0,
+    "injected_preview": "<memory>\n  <grounded>\n    <span id=\"770\" speaker=\"user\" when=\"2026-11-28 03:25\" uptake=\"unknown\">By the way, I&#x27;ve also been exploring other educational resources, such as online courses and podcasts. I recently finished listening to the entire &quot;How I Built This&quot; podcast series by Guy "
+  },
+  {
+    "query_from_question": "e47becba",
+    "run_under_identity_of": "51a45a95",
+    "injected_chars": 3558,
+    "leaked_fragment_count": 0,
+    "injected_preview": "<memory>\n  <grounded>\n    <span id=\"1378\" speaker=\"user\" when=\"2026-11-28 03:29\" uptake=\"unknown\">I&#x27;ll definitely check out these organizations and see which one aligns with my goals and interests. Thanks for the information! By the way, I&#x27;ve been thinking about my own education and career"
+  },
+  {
+    "query_from_question": "118b2229",
+    "run_under_identity_of": "e47becba",
+    "injected_chars": 3556,
+    "leaked_fragment_count": 0,
+    "injected_preview": "<memory>\n  <grounded>\n    <span id=\"212\" speaker=\"user\" when=\"2026-11-28 03:21\" uptake=\"unknown\">I need to leave for work at 8:45 am on regular days, and around 8:15 am on days with morning meetings. It usually takes me about 45 minutes to get ready. I&#x27;d like to spend about 30 minutes eating my"
+  },
+  {
+    "query_from_question": "118b2229",
+    "run_under_identity_of": "51a45a95",
+    "injected_chars": 3592,
+    "leaked_fragment_count": 0,
+    "injected_preview": "<memory>\n  <grounded>\n    <span id=\"1312\" speaker=\"user\" when=\"2026-11-28 03:29\" uptake=\"unknown\">I&#x27;ve been enjoying the Coursera courses so far. I&#x27;ve been working on them consistently, about 2-3 hours a week, and I&#x27;ve just completed the third module out of six. It&#x27;s been a lot o"
+  },
+  {
+    "query_from_question": "51a45a95",
+    "run_under_identity_of": "e47becba",
+    "injected_chars": 3734,
+    "leaked_fragment_count": 0,
+    "injected_preview": "<memory>\n  <grounded>\n    <span id=\"202\" speaker=\"user\" when=\"2026-11-28 03:21\" uptake=\"unknown\">I think I&#x27;ll try out Evernote for storing my digital coupons. I already use it for other notes, so it makes sense to keep everything in one place. By the way, I&#x27;ve been getting a lot of coupons"
+  },
+  {
+    "query_from_question": "51a45a95",
+    "run_under_identity_of": "118b2229",
+    "injected_chars": 2522,
+    "leaked_fragment_count": 0,
+    "injected_preview": "<memory>\n  <grounded>\n    <span id=\"901\" speaker=\"user\" when=\"2026-11-28 03:25\" uptake=\"unknown\">Write an follow-up email from a positive sales call that hits on self-care pain points listed below to get the user to sign up for the Soul Renewal Intensive Day. Include a hyperlink for the payment of $"
+  }
+]

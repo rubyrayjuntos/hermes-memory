@@ -1,0 +1,67 @@
+{
+  "run": "LongMemEval-S full run (500 questions, 4 conditions)",
+  "status": "IN PROGRESS at time of this commit -- see README.md for live status",
+  "hermes_memory_tag": "v1.0.1",
+  "hermes_memory_commit": "98cd4b5",
+  "longmemeval_repo_commit": "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+  "dataset_file": "data/longmemeval_s_cleaned.json",
+  "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "judge_script_source": "src/evaluation/evaluate_qa.py",
+  "judge_script_sha256": "ecce9c4c79dc89d99534ac17b383a5cbb5b9f0c69ee98adaf0684742e3d95251",
+  "judge_prompt_verified_byte_identical_to_official": true,
+  "answer_model": "anthropic/claude-sonnet-5",
+  "answer_model_provider": "OpenRouter",
+  "answer_temperature": 0.0,
+  "answer_max_tokens_per_question": 500,
+  "judge_model": "openai/gpt-4o-2024-08-06",
+  "judge_model_provider": "OpenRouter",
+  "judge_max_tokens_per_question": 10,
+  "conditions": {
+    "no_memory": {
+      "description": "official run_generation.py-equivalent no-retrieval template; question answered with zero context",
+      "scope": "all 500 questions",
+      "spend_cap_usd": 15.0,
+      "ledger_shared_with": ["tiered_off", "tiered_on"]
+    },
+    "tiered_off": {
+      "description": "hermes-memory v1.0.1 provider.prefetch(), config.tiered_injection=False",
+      "scope": "all 500 questions, gated on ingest completion per-question",
+      "spend_cap_usd": 15.0,
+      "ledger_shared_with": ["no_memory", "tiered_on"]
+    },
+    "tiered_on": {
+      "description": "hermes-memory v1.0.1 provider.prefetch(), config.tiered_injection=True",
+      "scope": "all 500 questions, gated on ingest completion per-question",
+      "spend_cap_usd": 15.0,
+      "ledger_shared_with": ["no_memory", "tiered_off"]
+    },
+    "full_context": {
+      "description": "entire raw haystack (no retrieval, no truncation -- fits Claude Sonnet 5's 1M context) straight into the prompt",
+      "scope": "fixed stratified 50-question subset only, NOT the full 500 (explicit budget gate)",
+      "subset_file": "lme_fullcontext_50_subset.json",
+      "subset_seed": 20261128,
+      "spend_cap_usd": 12.0,
+      "ledger_shared_with": []
+    }
+  },
+  "judge_spend_cap_usd": 3.0,
+  "total_budget_usd_user_stated": 20.0,
+  "eval_database": {
+    "name": "hermes_memory_eval_longmemeval_500",
+    "host": "docker hermes-memory-postgres-installed, port 5452",
+    "built_from": "scripts/migrate.py against v1.0.1 (fresh, no --reuse-dsn)",
+    "never_touches": "hermes_memory_installed (the live install) or port 5450 (dev)"
+  },
+  "resumability": "per-question-and-condition checkpoints: lme_full_ingest_checkpoint.json (ingest), lme_traces/<condition>.jsonl (generation, question_id already present = skip), lme_judged/<condition>.jsonl (judging, same skip rule). A crash or restart at any point loses nothing already written.",
+  "cross_question_leak_test": {
+    "description": "prefetch() question N's query under question M's agent_identity, confirm zero injected fragments from N's real haystack content",
+    "pairs_tested": 6,
+    "pairs_leaked": 0,
+    "result_file": "lme_leak_test_results.json"
+  },
+  "growth_check_prerequisite": {
+    "description": "20-question ingest-timing growth check performed before this run, confirming issue #123's fix holds as the noun table grows",
+    "result": "PASS -- flat curve, mean 301.6ms/turn steady-state, stdev 14.6ms, across a table that grew to 14,576 noun rows",
+    "note": "this growth check used a SEPARATE throwaway database (hermes_memory_eval_growth123), not the one used for this 500-question run"
+  }
+}
